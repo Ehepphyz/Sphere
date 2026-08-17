@@ -1,0 +1,59 @@
+# =========================================================================
+#                       SPHERE PLATFORM CONFIGURATION INTERFACE            
+# =========================================================================
+# This file governs the centralized runtime telemetry for cross-compilers,  
+# language servers (LSP), and scientific frameworks managed by Sphere.     
+#
+# RULES & SYNTAX SPECIFICATIONS:
+# 1. SECTIONS: Parameters are grouped under bracketed headers (e.g., [SYSTEM_PATH]).
+# 2. FORMAT:   Assign variables using standard 'KEY=VALUE' syntax expressions.
+# 3. ALIASES:  Values left completely blank (e.g., ROOT_DIR=) disable that specific 
+#              backend. Disabled targets will render in muted italics within menus.
+# 4. PATHS:    Cross-platform path mappings support native layouts, virtualized
+#              WSL mount nodes (/mnt/c/...), or MSYS2/Git Bash chains (/c/...).
+#
+# NOTE: Modified configurations will synchronize live upon platform initialization.
+# =========================================================================
+
+[SYSTEM_PATH]
+# Path to java.exe
+JAVA_EXEC=C:\Java\jdk\bin\java.exe
+# Path to python.exe
+PYTHON_EXEC=D:\Python314\python.exe
+# Path to node.exe
+NODE_DIR=D:\Engineering\nodejs\node.exe
+# Path to gcc, g++, clang, clang++
+GCC_DIR=C:\msys64\ucrt64\bin\gcc.exe
+GPP_DIR=C:\msys64\ucrt64\bin\g++.exe
+FORTRAN_DIR=C:\msys64\ucrt64\bin\gfortran.exe
+CLANG_DIR=C:\msys64\ucrt64\bin\clang.exe
+CLANGPP_DIR=C:\msys64\ucrt64\bin\clang++.exe
+# Path to Cmake
+CMAKE_DIR=C:\msys64\ucrt64\bin\cmake.exe
+# Path to juia
+JULIA_DIR=C:\Julia\bin\julia.exe
+
+[GENERAL]
+JAVA_ALTER=C:\Java\jdk\bin\java.exe
+ROOT_DIR=
+GEANT4_DIR=
+MG5_DIR=
+HERWIG_DIR=
+
+[TERMINAL_CONFIG]
+WIN_CMD=C:\Windows\system32\cmd.exe
+WIN_POWERSHELL=C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+WIN_PWSH=C:\Program Files\PowerShell\7\pwsh.exe
+WIN_GIT_BASH=C:\Windows\system32\bash.exe
+WIN_WSL=C:\Windows\system32\wsl.exe
+
+[CPP_TOOLCHAIN]
+CPP_DEFAULT_TOOLCHAIN=g++
+CPP_TOOLCHAIN_TYPE=native
+CPP_TOOLCHAINS=g++,clang++
+CPP_COMPILER_PATH=$GPP_DIR
+CPP_MSVC_INCLUDE=
+CPP_MSVC_LIB=
+
+[ENGINEERING]
+

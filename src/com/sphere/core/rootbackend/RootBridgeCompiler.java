@@ -1,0 +1,894 @@
+package com.sphere.core.rootbackend;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
+import java.net.URI;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import com.sphere.utils.AppLogger;
+import com.sphere.utils.SettingsManager;
+
+/**
+ * Manages automatic compilation, discovery, execution, and shared memory (SHM)
+ * initialization for the native C++ ROOT bridge component.
+ */
+public final class RootBridgeCompiler {
+
+    private static final String BINARY_NAME = System.getProperty("os.name").toLowerCase().contains("win")
+            ? "root-bridge.exe"
+            : "root-bridge";
+
+    private static final String SHM_FILE_NAME = "root_backend.shm";
+
+    private static final Set<String> RUNTIME_IGNORED_DIRS = Set.of(
+            "bin", "build", "out", "target"
+    );
+
+    // Directories that must be permanently kept inside rootbackend/
+    private static final Set<String> PROTECTED_RUNTIME_DIRS = Set.of(
+            "includes", "user_scripts"
+    );
+
+    private static boolean compilationAttempted = false;
+
+    private static final String FALLBACK_CPP_SOURCE = """
+        #include <iostream>
+        #include <string>
+        #include <cstdlib>
+        #include <TROOT.h>
+        
+        int main(int argc, char** argv) {
+            if (argc > 1 && std::string(argv[1]) == "config") {
+                std::string cmd = "root-config";
+                for (int i = 2; i < argc; ++i) { cmd += " "; cmd += argv[i]; }
+                return std::system(cmd.c_str());
+            }
+            gROOT->SetBatch(kTRUE);
+            std::cout << "READY" << std::endl;
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                if (line == "ping") std::cout << "pong" << std::endl;
+                else if (line == "exit" || line == "quit") break;
+                else if (line == "status") std::cout << "OK STATUS SafeMode=ON Handles=0" << std::endl;
+                else std::cout << "ERROR FallbackModeActive: " << line << std::endl;
+            }
+            return 0;
+        }
+        """;
+
+    public record RootEnvironment(String includeDir, String libDir) {}
+
+    private static Path getBackendDirectory() {
+        Path backendPath = Path.of(System.getProperty("user.dir"), "rootbackend");
+        try {
+            if (!Files.exists(backendPath)) {
+                Files.createDirectories(backendPath);
+            }
+            Path includesPath = backendPath.resolve("includes");
+            Path userScriptsPath = backendPath.resolve("user_scripts");
+
+            if (!Files.exists(includesPath)) Files.createDirectories(includesPath);
+            if (!Files.exists(userScriptsPath)) Files.createDirectories(userScriptsPath);
+
+        } catch (Exception e) {
+            AppLogger.warn("Could not verify or create 'rootbackend' directory structure: " + e.getMessage());
+        }
+        return backendPath;
+    }
+
+    public static synchronized String getOrCompileBridge(SettingsManager settings) {
+        String rootDir = settings != null ? settings.getProperty("ROOT_DIR") : null;
+
+        if ((rootDir == null || rootDir.isBlank()) && !isRootInstalled(settings)) {
+            return null;
+        }
+
+        Path backendDir = getBackendDirectory();
+        Path binaryPath = backendDir.resolve(BINARY_NAME);
+        Path shmPath = backendDir.resolve(SHM_FILE_NAME);
+
+        if (Files.exists(binaryPath)) {
+            ensureExecutablePermissions(binaryPath.toFile());
+            waitForFileRelease(binaryPath);
+            initializeSharedMemoryIfPossible(binaryPath, shmPath, settings);
+            return binaryPath.toAbsolutePath().toString();
+        }
+
+        if (compilationAttempted) {
+            AppLogger.warn("Previous compilation attempt failed. Skipping re-compilation for this session.");
+            return null;
+        }
+
+        compilationAttempted = true;
+        AppLogger.info("ROOT bridge binary missing. Initiating automatic system compilation.");
+        boolean compiled = compileBridge(settings, backendDir.toString());
+
+        if (compiled && Files.exists(binaryPath)) {
+            //AppLogger.success("ROOT bridge successfully compiled: " + binaryPath.toAbsolutePath());
+            ensureExecutablePermissions(binaryPath.toFile());
+            waitForFileRelease(binaryPath);
+
+            boolean shmOK = initializeSharedMemoryIfPossible(binaryPath, shmPath, settings);
+            if (!shmOK) {
+                AppLogger.warn("Bridge compiled, but SHM setup failed. Falling back to standard I/O mode.");
+            }
+
+            return binaryPath.toAbsolutePath().toString();
+        }
+
+        AppLogger.warn("Compilation of ROOT bridge failed. Continuing in non-ROOT mode (SHM bypassed).");
+        return null;
+    }
+
+    /**
+     * Waits until the Operating System Kernel completely unlocks and releases write handles
+     * for the freshly compiled binary file to eliminate Linux Errno 26 (Text file busy).
+     */
+    private static void waitForFileRelease(Path filePath) {
+        if (!Files.exists(filePath)) return;
+        
+        int maxRetries = 15;
+        for (int i = 0; i < maxRetries; i++) {
+            try (RandomAccessFile raf = new RandomAccessFile(filePath.toFile(), "rw")) {
+                // Successfully acquired write access handle; compiler has released the file
+                return;
+            } catch (Exception e) {
+                try {
+                    Thread.sleep(80L);
+                } catch (InterruptedException ignored) {}
+            }
+        }
+    }
+
+    private static boolean initializeSharedMemoryIfPossible(Path binaryPath, Path shmPath, SettingsManager settings) {
+        //AppLogger.info("Initializing Shared Memory (SHM) segment: " + shmPath.toAbsolutePath());
+        
+        int maxRetries = 5;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(binaryPath.toAbsolutePath().toString(), "--init-shm");
+                applyEnvironmentVariables(pb, settings);
+                Process process = pb.start();
+
+                int exitCode = process.waitFor();
+                if (exitCode == 0) {
+                    //AppLogger.info("Shared Memory segment successfully initialized.");
+                    return true;
+                } else {
+                    AppLogger.warn("SHM initialization process exited with code " + exitCode);
+                    return false;
+                }
+            } catch (IOException e) {
+                if (e.getMessage() != null && e.getMessage().contains("error=26")) {
+                    // ETXTBSY: File descriptor still held by system kernel
+                    try {
+                        Thread.sleep(120L * attempt);
+                    } catch (InterruptedException ignored) {}
+                    continue;
+                }
+                AppLogger.error("Failed to initialize Shared Memory segment: " + e.getMessage());
+                return false;
+            } catch (Exception e) {
+                AppLogger.error("Failed to initialize Shared Memory segment: " + e.getMessage());
+                return false;
+            }
+        }
+        
+        AppLogger.warn("SHM setup timed out waiting for binary file lock release.");
+        return false;
+    }
+
+    private static void applyEnvironmentVariables(ProcessBuilder pb, SettingsManager settings) {
+        if (pb == null) return;
+        Map<String, String> env = pb.environment();
+
+        if (settings != null) {
+            String path = settings.getProperty("SYSTEM_PATH", "PATH");
+            if (path != null && !path.isBlank()) {
+                env.put("PATH", path);
+            }
+            String ld = settings.getProperty("SYSTEM_PATH", "LD_LIBRARY_PATH");
+            if (ld != null && !ld.isBlank()) {
+                env.put("LD_LIBRARY_PATH", ld);
+            }
+        }
+    }
+
+    public static String getRootConfigOutput(String flag) {
+        return getRootConfigOutput(flag, null);
+    }
+
+    public static String getRootConfigOutput(String flag, SettingsManager settings) {
+        String rootDirRaw = settings != null ? settings.getProperty("ROOT_DIR") : null;
+
+        if (rootDirRaw != null && !rootDirRaw.isBlank()) {
+            Path rootConfigPath = Path.of(rootDirRaw, "bin", "root-config");
+            if (Files.exists(rootConfigPath) && Files.isExecutable(rootConfigPath)) {
+                String output = executeCommand(List.of(rootConfigPath.toAbsolutePath().toString(), flag), settings);
+                if (!output.isEmpty()) {
+                    return output;
+                }
+            }
+        }
+
+        String directOutput = executeCommand(List.of("root-config", flag), settings);
+        if (!directOutput.isEmpty()) {
+            return directOutput;
+        }
+
+        Path binaryPath = getBackendDirectory().resolve(BINARY_NAME);
+        if (Files.exists(binaryPath)) {
+            waitForFileRelease(binaryPath);
+            String bridgeConfigOutput = executeCommand(List.of(binaryPath.toAbsolutePath().toString(), "config", flag), settings);
+            if (!bridgeConfigOutput.isEmpty()) {
+                return bridgeConfigOutput;
+            }
+        }
+
+        return "";
+    }
+
+    private static String executeCommand(List<String> command, SettingsManager settings) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(command);
+            applyEnvironmentVariables(pb, settings);
+            Process p = pb.start();
+            String outputLine = "";
+
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String line = r.readLine();
+                if (line != null) {
+                    outputLine = line.trim();
+                }
+            }
+
+            if (p.waitFor() == 0) {
+                return outputLine;
+            }
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private static RootEnvironment resolveRootEnvironment(SettingsManager settings) {
+        String configuredRootDir = settings != null ? settings.getProperty("ROOT_DIR") : null;
+
+        if (configuredRootDir != null && !configuredRootDir.isBlank()) {
+            Path customPath = Path.of(configuredRootDir.trim());
+            if (Files.exists(customPath)) {
+                Path foundInc = locateHeaderDirectory(customPath.resolve("include"));
+                if (foundInc == null && Files.exists(customPath.resolve("TROOT.h"))) {
+                    foundInc = customPath;
+                }
+
+                Path foundLib = findLibFolderContaining(customPath, "libCore");
+
+                if (foundInc != null && foundLib != null) {
+                    return new RootEnvironment(foundInc.toAbsolutePath().toString(), foundLib.toAbsolutePath().toString());
+                }
+            } else {
+                AppLogger.warn("Configured ROOT_DIR path does not exist: " + configuredRootDir);
+            }
+        }
+
+        String incFromConfig = getRootConfigOutput("--incdir", settings);
+        String libFromConfig = getRootConfigOutput("--libdir", settings);
+        if (!incFromConfig.isEmpty() && !libFromConfig.isEmpty() && Files.exists(Path.of(incFromConfig, "TROOT.h"))) {
+            return new RootEnvironment(incFromConfig, libFromConfig);
+        }
+
+        String condaPrefix = System.getenv("CONDA_PREFIX");
+        if (condaPrefix != null && !condaPrefix.isEmpty()) {
+            Path condaInc = locateHeaderDirectory(Path.of(condaPrefix, "include"));
+            Path condaLib = findLibFolderContaining(Path.of(condaPrefix), "libCore");
+            if (condaInc != null && condaLib != null) {
+                return new RootEnvironment(condaInc.toAbsolutePath().toString(), condaLib.toAbsolutePath().toString());
+            }
+        }
+
+        String rootsys = System.getenv("ROOTSYS");
+        if (rootsys != null && !rootsys.isBlank()) {
+            Path basePath = Path.of(rootsys);
+            Path foundLibDir = findLibFolderContaining(basePath, "libCore");
+            Path foundIncDir = locateHeaderDirectory(basePath.resolve("include"));
+
+            if (foundLibDir != null && foundIncDir != null) {
+                return new RootEnvironment(foundIncDir.toAbsolutePath().toString(), foundLibDir.toAbsolutePath().toString());
+            }
+        }
+
+        Path defaultInc = locateHeaderDirectory(Path.of("/usr/local/include"));
+        if (defaultInc == null) defaultInc = locateHeaderDirectory(Path.of("/usr/include"));
+        String finalInc = (defaultInc != null) ? defaultInc.toAbsolutePath().toString() : "/usr/local/include";
+
+        Path defaultLib = findLibFolderContaining(Path.of("/usr/local"), "libCore");
+        if (defaultLib == null) defaultLib = findLibFolderContaining(Path.of("/usr"), "libCore");
+        String finalLib = (defaultLib != null) ? defaultLib.toAbsolutePath().toString() : "/usr/local/lib";
+
+        return new RootEnvironment(finalInc, finalLib);
+    }
+
+    private static Path locateHeaderDirectory(Path baseIncludePath) {
+        if (baseIncludePath == null || !Files.isDirectory(baseIncludePath)) {
+            return null;
+        }
+
+        if (Files.exists(baseIncludePath.resolve("TROOT.h"))) {
+            return baseIncludePath;
+        }
+
+        try (var stream = Files.list(baseIncludePath)) {
+            List<Path> subDirs = stream.filter(Files::isDirectory).toList();
+            for (Path subDir : subDirs) {
+                if (Files.exists(subDir.resolve("TROOT.h"))) {
+                    return subDir;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
+    private static Path findLibFolderContaining(Path basePath, String libraryName) {
+        String[] candidateDirs = {"lib", "lib64", "lib/root", "lib/x86_64-linux-gnu"};
+        for (String sub : candidateDirs) {
+            Path p = basePath.resolve(sub);
+            if (Files.isDirectory(p)) {
+                try (var stream = Files.list(p)) {
+                    boolean hasLib = stream.anyMatch(f -> f.getFileName().toString().contains(libraryName));
+                    if (hasLib) return p;
+                } catch (Exception ignored) {}
+            }
+        }
+        return basePath.resolve("lib");
+    }
+
+    private static String determineCppStandardFlag(String compiler) {
+        String[] candidateFlags = {"-std=c++20", "-std=c++17", "-std=c++2a"};
+        for (String flag : candidateFlags) {
+            if (testCompilerFlag(compiler, flag)) {
+                return flag;
+            }
+        }
+        return "-std=c++17";
+    }
+
+    private static boolean testCompilerFlag(String compiler, String flag) {
+        try {
+            List<String> cmd = List.of(
+                    compiler, flag, "-E", "-x", "c++",
+                    System.getProperty("os.name").toLowerCase().contains("win") ? "NUL" : "/dev/null"
+            );
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            return pb.start().waitFor() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean checkLibraryExists(String compiler, String headerFile, String libName) {
+        try {
+            List<String> cmd = List.of(
+                    compiler, "-E", "-x", "c++", "-",
+                    "-include", headerFile, "-l" + libName
+            );
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectInput(ProcessBuilder.Redirect.PIPE);
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+
+            Process p = pb.start();
+            p.getOutputStream().close();
+            return p.waitFor() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String resolveCompilerExecutable(SettingsManager settings, boolean isWin) {
+        String compiler = settings != null ? settings.getProperty("CPP_COMPILER_PATH") : null;
+
+        if (compiler != null && compiler.startsWith("$")) {
+            String keyRef = compiler.substring(1);
+            compiler = settings.getProperty("SYSTEM_PATH", keyRef);
+            if (compiler == null || compiler.isBlank()) {
+                compiler = settings.getProperty(keyRef);
+            }
+        }
+
+        if ((compiler == null || compiler.isBlank()) && settings != null) {
+            compiler = settings.resolvePath("GPP_DIR", "g++");
+        }
+
+        if (compiler == null || compiler.isBlank()) {
+            compiler = autoDiscoverGCompiler(isWin);
+        }
+
+        return compiler;
+    }
+
+    private static boolean compileBridge(SettingsManager settings, String outputDirStr) {
+        Path outputDir = Path.of(outputDirStr);
+        boolean isWin = System.getProperty("os.name").toLowerCase().contains("win");
+
+        extractAuxiliaryResources(outputDirStr);
+
+        String compiler = resolveCompilerExecutable(settings, isWin);
+
+        Set<String> cppFilesSet = new HashSet<>();
+        Set<String> includeDirectories = new HashSet<>();
+
+        includeDirectories.add(outputDir.toAbsolutePath().normalize().toString());
+
+        // Traverse output directory to discover C++ source and header files
+        try (var stream = Files.walk(outputDir)) {
+            stream.forEach(p -> {
+                if (Files.isRegularFile(p)) {
+                    Path relativePath = outputDir.relativize(p);
+                    String firstComponent = relativePath.getNameCount() > 0 ? relativePath.getName(0).toString().toLowerCase() : "";
+
+                    if ("build".equals(firstComponent) || "bin".equals(firstComponent)) {
+                        return;
+                    }
+
+                    String name = p.getFileName().toString().toLowerCase();
+                    if (name.endsWith(".cpp") || name.endsWith(".cc") || name.endsWith(".cxx")) {
+                        cppFilesSet.add(p.toAbsolutePath().normalize().toString());
+                    } else if (name.endsWith(".h") || name.endsWith(".hpp")) {
+                        if (p.getParent() != null) {
+                            includeDirectories.add(p.getParent().toAbsolutePath().normalize().toString());
+                        }
+                    }
+                }
+            });
+        } catch (Exception e) {
+            AppLogger.error("Failed to walk output directory tree: " + e.getMessage());
+        }
+
+        // Explicitly scan and include rootbackend/src directory
+        Path srcDir = outputDir.resolve("src");
+        if (Files.isDirectory(srcDir)) {
+            try (var stream = Files.walk(srcDir)) {
+                stream.forEach(p -> {
+                    if (Files.isRegularFile(p)) {
+                        String name = p.getFileName().toString().toLowerCase();
+                        if (name.endsWith(".cpp") || name.endsWith(".cc") || name.endsWith(".cxx")) {
+                            cppFilesSet.add(p.toAbsolutePath().normalize().toString());
+                        } else if (name.endsWith(".h") || name.endsWith(".hpp")) {
+                            if (p.getParent() != null) {
+                                includeDirectories.add(p.getParent().toAbsolutePath().normalize().toString());
+                            }
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                AppLogger.error("Failed to walk explicit src directory: " + e.getMessage());
+            }
+        }
+
+        List<String> cppFiles = new ArrayList<>(cppFilesSet);
+
+        if (cppFiles.isEmpty()) {
+            Path fallbackPath = outputDir.resolve("temp_main.cpp");
+            try {
+                Files.writeString(fallbackPath, FALLBACK_CPP_SOURCE, StandardCharsets.UTF_8);
+                cppFiles.add(fallbackPath.toAbsolutePath().toString());
+                AppLogger.warn("Resource files missing. Using embedded fallback C++ bridge.");
+            } catch (Exception e) {
+                AppLogger.error("Fatal: Unable to write runtime fallback source file: " + e.getMessage());
+                return false;
+            }
+        }
+
+        boolean hasNuma = !isWin && checkLibraryExists(compiler, "numa.h", "numa");
+        if (!hasNuma && !isWin) {
+            AppLogger.warn("Optional dependency 'libnuma-dev' is missing. Using CPU fallback mode.");
+        }
+
+        boolean hasUring = !isWin && checkLibraryExists(compiler, "liburing.h", "uring");
+        if (!hasUring && !isWin) {
+            AppLogger.warn("Optional dependency 'liburing-dev' is missing. Using standard I/O fallback mode.");
+        }
+
+        RootEnvironment rootEnv = resolveRootEnvironment(settings);
+
+        String cppStdFlag = determineCppStandardFlag(compiler);
+
+        List<String> objectFiles = new ArrayList<>();
+        List<String> commonFlags = new ArrayList<>();
+        commonFlags.add("-O3");
+        commonFlags.add("-s"); // Strip debug symbols to minimize final binary size (~1.8 MB)
+        commonFlags.add("-w");
+        commonFlags.add(cppStdFlag);
+        commonFlags.add("-fpermissive");
+        commonFlags.add("-march=native");
+        commonFlags.add("-fno-omit-frame-pointer");
+
+        if (hasNuma) commonFlags.add("-DHAVE_NUMA");
+        if (hasUring) commonFlags.add("-DHAVE_IO_URING");
+
+        for (String incDir : includeDirectories) {
+            commonFlags.add("-I" + incDir);
+        }
+        commonFlags.add("-I" + rootEnv.includeDir());
+
+        //AppLogger.info("Compiling ROOT bridge: " + cppFiles.size() + " source file(s) into object files...");
+        AppLogger.info("Compiling ROOT bridge...");
+
+        int objectIndex = 0;
+        for (String cppFile : cppFiles) {
+            String objPath = outputDir.resolve("obj_" + (objectIndex++) + ".o").toAbsolutePath().toString();
+            List<String> compileCmd = new ArrayList<>();
+            compileCmd.add(compiler);
+            compileCmd.addAll(commonFlags);
+            compileCmd.add("-c");
+            compileCmd.add(cppFile);
+            compileCmd.add("-o");
+            compileCmd.add(objPath);
+
+            ProcessBuilder pbCompile = new ProcessBuilder(compileCmd);
+            pbCompile.directory(outputDir.toFile());
+            pbCompile.redirectErrorStream(true);
+            applyEnvironmentVariables(pbCompile, settings);
+
+            try {
+                Process process = pbCompile.start();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        AppLogger.debug("[g++] " + line);
+                    }
+                }
+                if (process.waitFor() != 0) {
+                    AppLogger.error("Failed to compile source file: " + cppFile);
+                    cleanupBuildArtifacts(outputDirStr, false);
+                    return false;
+                }
+                objectFiles.add(objPath);
+            } catch (Exception e) {
+                AppLogger.error("Compilation error for " + cppFile + ": " + e.getMessage());
+                cleanupBuildArtifacts(outputDirStr, false);
+                return false;
+            }
+        }
+
+        List<String> linkCmd = new ArrayList<>();
+        linkCmd.add(compiler);
+        linkCmd.addAll(commonFlags);
+        linkCmd.addAll(objectFiles);
+        linkCmd.add("-o");
+        linkCmd.add(outputDir.resolve(BINARY_NAME).toAbsolutePath().toString());
+
+        linkCmd.add("-L" + rootEnv.libDir());
+        if (!isWin) {
+            linkCmd.add("-Wl,-rpath," + rootEnv.libDir());
+            linkCmd.add("-Wl,--no-as-needed");
+        }
+
+        String dynamicLibs = getRootConfigOutput("--libs", settings);
+        if (!dynamicLibs.isEmpty()) {
+            linkCmd.addAll(Arrays.asList(dynamicLibs.split("\\s+")));
+        } else {
+            linkCmd.addAll(List.of(
+                    "-lCore", "-lRIO", "-lHist", "-lGraf", "-lGpad",
+                    "-lTree", "-lTreePlayer", "-lROOTNTuple", "-lMathCore",
+                    "-lNet", "-lpthread", "-ldl", "-lrt", "-lz"
+            ));
+        }
+
+        if (hasNuma) linkCmd.add("-lnuma");
+        if (hasUring) linkCmd.add("-luring");
+
+        //AppLogger.info("Linking object files into binary...");
+
+        ProcessBuilder pbLink = new ProcessBuilder(linkCmd);
+        pbLink.directory(outputDir.toFile());
+        pbLink.redirectErrorStream(true);
+        applyEnvironmentVariables(pbLink, settings);
+
+        boolean compileSuccess = false;
+        try {
+            Process process = pbLink.start();
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    AppLogger.debug("[g++] " + line);
+                }
+            }
+            compileSuccess = (process.waitFor() == 0);
+        } catch (Exception e) {
+            AppLogger.error("Linking process interrupted: " + e.getMessage());
+        }
+
+        // Clean up temporary build artifacts upon completion
+        cleanupBuildArtifacts(outputDirStr, compileSuccess);
+
+        return compileSuccess;
+    }
+
+    private static void extractAuxiliaryResources(String outputDir) {
+        String resourceFolderPath = "/com/sphere/core/rootbackend/";
+        URL folderUrl = RootBridgeCompiler.class.getResource(resourceFolderPath);
+        boolean extractedAny = false;
+
+        if (folderUrl != null) {
+            try {
+                if ("jar".equals(folderUrl.getProtocol())) {
+                    String[] parts = folderUrl.toURI().toString().split("!");
+                    URI jarUri = URI.create(parts[0]);
+
+                    FileSystem fileSystem;
+                    boolean closeFs = false;
+                    try {
+                        fileSystem = FileSystems.getFileSystem(jarUri);
+                    } catch (FileSystemNotFoundException e) {
+                        fileSystem = FileSystems.newFileSystem(jarUri, Collections.emptyMap());
+                        closeFs = true;
+                    }
+
+                    try {
+                        Path jarPath = fileSystem.getPath(resourceFolderPath);
+                        if (Files.exists(jarPath)) {
+                            copyCppTreeOnly(jarPath, Path.of(outputDir));
+                            extractedAny = true;
+                        }
+                    } finally {
+                        if (closeFs) {
+                            fileSystem.close();
+                        }
+                    }
+                } else {
+                    Path fileSystemPath = Path.of(folderUrl.toURI());
+                    copyCppTreeOnly(fileSystemPath, Path.of(outputDir));
+                    extractedAny = true;
+                }
+            } catch (Exception e) {
+                AppLogger.warn("Resource tree extraction failed: " + e.getMessage());
+            }
+        }
+
+        if (!extractedAny) {
+            Path localSrcPath = Path.of(System.getProperty("user.dir"), "src", "com", "sphere", "core", "rootbackend");
+            if (Files.isDirectory(localSrcPath)) {
+                try {
+                    copyCppTreeOnly(localSrcPath, Path.of(outputDir));
+                    AppLogger.debug("Copied auxiliary source tree from local workspace: " + localSrcPath);
+                } catch (Exception e) {
+                    AppLogger.error("Failed copying local workspace resource tree: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    private static void copyCppTreeOnly(Path source, Path target) throws IOException {
+        Files.walkFileTree(source, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                String dirName = dir.getFileName() != null ? dir.getFileName().toString() : "";
+
+                if (RUNTIME_IGNORED_DIRS.contains(dirName)) {
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+
+                Path relative = source.relativize(dir);
+                Path targetDir = target.resolve(relative.toString());
+                if (!Files.exists(targetDir)) {
+                    Files.createDirectories(targetDir);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                String fileName = file.getFileName().toString().toLowerCase();
+
+                if (fileName.endsWith(".cpp") || fileName.endsWith(".cc") || fileName.endsWith(".cxx") ||
+                        fileName.endsWith(".c") || fileName.endsWith(".h") || fileName.endsWith(".hpp") ||
+                        fileName.equals("cmakelists.txt")) {
+
+                    Path relative = source.relativize(file);
+                    Path destination = target.resolve(relative.toString());
+
+                    if (destination.getParent() != null && !Files.exists(destination.getParent())) {
+                        Files.createDirectories(destination.getParent());
+                    }
+
+                    Files.copy(file, destination, StandardCopyOption.REPLACE_EXISTING);
+                }
+
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private static void cleanupBuildArtifacts(String outputDirStr, boolean compileSuccess) {
+        Path outputDir = Path.of(outputDirStr);
+        if (!Files.exists(outputDir)) return;
+
+        try (var stream = Files.list(outputDir)) {
+            List<Path> items = stream.toList();
+
+            for (Path path : items) {
+                String fileName = path.getFileName().toString().toLowerCase();
+
+                if (fileName.equalsIgnoreCase(BINARY_NAME) || 
+                    fileName.endsWith(".shm") || 
+                    fileName.contains("root_backend")) {
+                    continue;
+                }
+
+                if (Files.isDirectory(path)) {
+                    if (PROTECTED_RUNTIME_DIRS.contains(fileName) || RUNTIME_IGNORED_DIRS.contains(fileName)) {
+                        continue;
+                    }
+                    if (compileSuccess) {
+                        deleteDirectoryRecursively(path);
+                    } else if (fileName.startsWith("build_tmp") || fileName.startsWith(".tmp")) {
+                        deleteDirectoryRecursively(path);
+                    }
+                    continue;
+                }
+
+                if (compileSuccess) {
+                    if (fileName.endsWith(".o") || fileName.endsWith(".obj") || 
+                        fileName.endsWith(".cpp") || fileName.endsWith(".cc") || fileName.endsWith(".cxx") ||
+                        fileName.endsWith(".h") || fileName.endsWith(".hpp") ||
+                        fileName.equals("cmakelists.txt") || fileName.equals("temp_main.cpp")) {
+                        deleteFileSafely(path);
+                    }
+                } else {
+                    if (fileName.endsWith(".o") || fileName.endsWith(".obj")) {
+                        deleteFileSafely(path);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            AppLogger.warn("Failed to complete post-build cleanup: " + e.getMessage());
+        }
+    }
+
+    private static void deleteDirectoryRecursively(Path dir) {
+        try {
+            Files.walkFileTree(dir, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    deleteFileSafely(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path d, IOException exc) throws IOException {
+                    if (exc != null) {
+                        AppLogger.warn("Directory traversal error for: " + d + " -> " + exc.getMessage());
+                    }
+                    deleteFileSafely(d);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (Exception e) {
+            AppLogger.warn("Failed to delete directory recursively: " + dir + " -> " + e.getMessage());
+        }
+    }
+
+    private static void deleteFileSafely(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (Exception e) {
+            AppLogger.warn("Failed to delete file: " + file + " -> " + e.getMessage());
+        }
+    }
+
+    private static String autoDiscoverGCompiler(boolean isWin) {
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv == null || pathEnv.isBlank()) return "g++";
+
+        String[] dirs = pathEnv.split(File.pathSeparator);
+        String comp = "g++";
+        String[] winExtensions = {".exe", ".cmd", ".bat"};
+
+        for (String d : dirs) {
+            if (d == null || d.isBlank()) continue;
+            try {
+                Path dir = Path.of(d.trim());
+                if (!Files.isDirectory(dir)) continue;
+
+                if (isWin) {
+                    for (String ext : winExtensions) {
+                        Path candidate = dir.resolve(comp + ext);
+                        if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
+                            return candidate.toAbsolutePath().toString();
+                        }
+                    }
+                } else {
+                    Path candidate = dir.resolve(comp);
+                    if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
+                        return candidate.toAbsolutePath().toString();
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        return "g++";
+    }
+
+    private static boolean isRootInstalled(SettingsManager settings) {
+        String test = getRootConfigOutput("--version", settings);
+        return !test.isEmpty();
+    }
+
+    private static void ensureExecutablePermissions(File file) {
+        try {
+            boolean success = file.setExecutable(true, false);
+
+            Path path = file.toPath();
+            if (Files.getFileAttributeView(path, java.nio.file.attribute.PosixFileAttributeView.class) != null) {
+                Set<PosixFilePermission> perms = Files.getPosixFilePermissions(path);
+                perms.add(PosixFilePermission.OWNER_EXECUTE);
+                perms.add(PosixFilePermission.GROUP_EXECUTE);
+                perms.add(PosixFilePermission.OTHERS_EXECUTE);
+                Files.setPosixFilePermissions(path, perms);
+                success = true;
+            }
+
+            if (!success) {
+                AppLogger.warn("Failed to set executable permissions on: " + file.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            AppLogger.warn("Error while setting executable permissions: " + e.getMessage());
+        }
+    }
+
+    public static synchronized boolean forceRebuildBridge(SettingsManager settings) {
+        AppLogger.info("Initiating manual ROOT bridge rebuild...");
+
+        compilationAttempted = false;
+
+        Path backendDir = getBackendDirectory();
+        Path binaryPath = backendDir.resolve(BINARY_NAME);
+        Path shmPath = backendDir.resolve(SHM_FILE_NAME);
+
+        try {
+            if (Files.exists(binaryPath)) {
+                Files.delete(binaryPath);
+                AppLogger.info("Removed existing bridge binary to guarantee a clean build.");
+            }
+        } catch (Exception e) {
+            AppLogger.warn("Could not clear existing binary file: " + e.getMessage());
+        }
+
+        cleanupBuildArtifacts(backendDir.toString(), false);
+
+        boolean compiled = compileBridge(settings, backendDir.toString());
+
+        if (compiled && Files.exists(binaryPath)) {
+            AppLogger.success("ROOT bridge successfully rebuilt at: " + binaryPath.toAbsolutePath());
+            ensureExecutablePermissions(binaryPath.toFile());
+            waitForFileRelease(binaryPath);
+
+            boolean shmOK = initializeSharedMemoryIfPossible(binaryPath, shmPath, settings);
+            if (!shmOK) {
+                AppLogger.warn("Rebuilt bridge, but SHM setup failed. Falling back to standard I/O mode.");
+            }
+            return true;
+        } else {
+            AppLogger.error("Failed to rebuild ROOT bridge. Please verify your C++ compiler configuration.");
+            return false;
+        }
+    }
+}

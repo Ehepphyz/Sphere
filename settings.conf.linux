@@ -1,0 +1,51 @@
+# =========================================================================
+#                       SPHERE PLATFORM CONFIGURATION INTERFACE            
+# =========================================================================
+# This file governs the centralized runtime telemetry for cross-compilers,  
+# language servers (LSP), and scientific frameworks managed by Sphere.     
+#
+# RULES & SYNTAX SPECIFICATIONS:
+# 1. SECTIONS: Parameters are grouped under bracketed headers (e.g., [SYSTEM_PATH]).
+# 2. FORMAT:   Assign variables using standard 'KEY=VALUE' syntax expressions.
+# 3. ALIASES:  Values left completely blank (e.g., ROOT_DIR=) disable that specific 
+#              backend. Disabled targets will render in muted italics within menus.
+# 4. PATHS:    Cross-platform path mappings support native layouts, virtualized
+#              WSL mount nodes (/mnt/c/...), or MSYS2/Git Bash chains (/c/...).
+#
+# NOTE: Modified configurations will synchronize live upon platform initialization.
+# =========================================================================
+
+[SYSTEM_PATH]
+JAVA_EXEC=/usr/lib/jvm/java-17-openjdk-amd64/bin/java
+PYTHON_EXEC=/home/phylabs/pynode/pylhc/bin/python3.11
+NODE_DIR=/usr/bin/node
+GCC_DIR=/usr/bin/gcc-12
+GPP_DIR=/usr/bin/g++-12
+FORTRAN_DIR=/usr/bin/gfortran-12
+CLANG_DIR=/usr/bin/clang
+CLANGPP_DIR=/usr/bin/clang++
+CMAKE_DIR=/usr/bin/cmake
+JULIA_DIR=
+
+[GENERAL]
+JAVA_ALTER=/usr/lib/jvm/java-17-openjdk-amd64/bin/java
+ROOT_DIR=
+GEANT4_DIR=
+MG5_DIR=
+HERWIG_DIR=
+
+[TERMINAL_CONFIG]
+UNIX_BASH=/usr/bin/bash
+UNIX_BASH_SUP=/usr/bin/bash
+UNIX_SH=/usr/bin/sh
+
+[CPP_TOOLCHAIN]
+CPP_DEFAULT_TOOLCHAIN=g++
+CPP_TOOLCHAIN_TYPE=native
+CPP_TOOLCHAINS=g++,clang++
+CPP_COMPILER_PATH=$GPP_DIR
+CPP_MSVC_INCLUDE=
+CPP_MSVC_LIB=
+
+[ENGINEERING]
+

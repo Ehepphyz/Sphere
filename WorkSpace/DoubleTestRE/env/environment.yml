@@ -1,0 +1,7 @@
+name: hep-env
+dependencies:
+  - python=3.11
+  - root
+  - numpy
+  - matplotlib
+  - jupyterlab

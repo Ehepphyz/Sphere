@@ -1,0 +1,6 @@
+{
+  "projectName": "SingleTest",
+  "projectRoot": "D:\\CloudLHC\\LHCDevHub\\HepForge\\Sphere\\WorkSpace\\SingleTest",
+  "directories": ["analysis", "analysis/jupyter", "analysis/python", "analysis/root", "data", "data/input", "data/output", "docs", "docs/figures", "env", "externals", "include", "scripts", "sim", "sim/configs", "sim/geant4", "sim/herwig", "sim/madgraph", "src", "src/core", "src/detectors", "src/physics", "src/utils"],
+  "files": [".workflow", "CMakeLists.txt", "env/environment.yml", "README.md"]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "VSCode Dark+",
+  "background": "#1E1E1E",
+  "foreground": "#D4D4D4",
+  "cursor": "#D4D4D4",
+  "font": "",
+  "fontSize": 12,
+  "ansi": {
+    "30": "#000000",
+    "31": "#F44747",
+    "32": "#608B4E",
+    "33": "#DCDCAA",
+    "34": "#569CD6",
+    "35": "#C586C0",
+    "36": "#4EC9B0",
+    "37": "#D4D4D4"
+  },
+  "truecolor": true
+}
