@@ -40,7 +40,7 @@ jobs:
 
       - name: Install WiX Toolset (Windows Only)
         if: runner.os == 'Windows'
-        run: choco install wix -y
+        run: choco install wixtoolset -y
 
       - name: Build Native Installer
         run: ${{ matrix.run_cmd }}
