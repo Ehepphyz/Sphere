@@ -72,7 +72,6 @@ if exist rootbackend xcopy /E /I /Y rootbackend dist_input\rootbackend > nul
 if exist snippets xcopy /E /I /Y snippets dist_input\snippets > nul
 if exist themes xcopy /E /I /Y themes dist_input\themes > nul
 if exist WorkSpace xcopy /E /I /Y WorkSpace dist_input\WorkSpace > nul
-if exist images xcopy /E /I /Y images dist_input\images > nul
 
 :: Preserve empty directories
 powershell -Command "Get-ChildItem -Path dist_input -Recurse -Directory | Where-Object { (Get-ChildItem \$.FullName).Count -eq 0 } | ForEach-Object { New-Item -Path \"\$(\$_.FullName)\.gitkeep\" -ItemType File }" > nul

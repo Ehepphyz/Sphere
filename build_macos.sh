@@ -55,7 +55,6 @@ fi
 [ -d snippets ] && cp -r snippets dist_input/
 [ -d themes ] && cp -r themes dist_input/
 [ -d WorkSpace ] && cp -r WorkSpace dist_input/
-[ -d images ] && cp -r images dist_input/
 
 # Preserve empty directories
 find dist_input -type d -empty -exec touch {}/.gitkeep \;
