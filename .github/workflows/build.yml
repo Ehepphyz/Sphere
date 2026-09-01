@@ -1,0 +1,48 @@
+name: Build All Sphere Executables
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            script: build_windows.bat
+            artifact: Sphere-Windows-v2026.1.0
+          - os: ubuntu-latest
+            script: build_linux.sh
+            artifact: Sphere-Linux-v2026.1.0
+          - os: macos-latest
+            script: build_macos.sh
+            artifact: Sphere-macOS-v2026.1.0
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 26
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'oracle'
+          java-version: '26'
+
+      - name: Build Executable
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            cmd /c ${{ matrix.script }}
+          else
+            chmod +x ${{ matrix.script }}
+            ./${{ matrix.script }}
+          fi
+
+      - name: Upload Finished Executable (.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
