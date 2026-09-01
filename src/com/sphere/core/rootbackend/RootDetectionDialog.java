@@ -281,10 +281,6 @@ public class RootDetectionDialog implements RootDetectionCallback {
         }
     }
 
-    /**
-     * Reads the structure line by line, targets the [GENERAL] configuration token block,
-     * and updates the ROOT_DIR assignment field atomically.
-     */
     private void saveRootDirectoryToSettingsFile(String rootHomePath, Component parentComponent) {
         if (rootHomePath == null || rootHomePath.isEmpty()) return;
 

@@ -188,10 +188,9 @@ public class GenericEnvManagerDialog extends JDialog {
                 if (configuredArgs != null && !configuredArgs.isEmpty()) {
                     publish("[INFO] Active Compilation Switches: " + configuredArgs);
                 }
-
+                
                 // =============================================================
-                // ENCAPSULATED END-TO-END ROOT BRIDGE TELEMETRY (V2 COMPATIBLE)
-                // Safe lookup using dynamic reflection to prevent compilation halts
+                // ENCAPSULATED END-TO-END ROOT BRIDGE TELEMETRY
                 // =============================================================
                 boolean isRootBackend =
                         backend.name().toUpperCase().contains("ROOT") ||
@@ -199,278 +198,137 @@ public class GenericEnvManagerDialog extends JDialog {
 
                 if (isRootBackend) {
                     publish("\n----------------------------------------------------------------");
-                    publish("[INFO] RUNNING END-TO-END ROOT INTERACTIVE BRIDGE HANDSHAKE (v2)");
+                    publish("[INFO] RUNNING END-TO-END ROOT INTERACTIVE BRIDGE HANDSHAKE (v4 - SHM)");
                     publish("----------------------------------------------------------------");
-                    publish("[INFO] Locating active workspace RootBackend router context...");
+                    publish("[INFO] Locating active workspace RootBackend SHM instance...");
 
                     com.sphere.core.rootbackend.RootBackend rootBackendInstance = null;
+                    boolean weOwnTheInstance = false;
 
                     try {
-                        // Check Pathway A: Direct Singleton in RootBackend
+                        // 1. Reuse the application's live instance if there is one.
                         try {
                             java.lang.reflect.Method getInst =
                                     com.sphere.core.rootbackend.RootBackend.class.getMethod("getInstance");
                             rootBackendInstance =
                                     (com.sphere.core.rootbackend.RootBackend) getInst.invoke(null);
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                            // No singleton accessor: fall through to a standalone instance.
+                        }
 
-                        // Check Pathway B: Dynamic search on common Router structures
+                        // 2. Otherwise stand one up for the duration of the test.
                         if (rootBackendInstance == null) {
-                            String[] potentialRouterClasses = {
-                                    "com.sphere.core.WorkspaceRouter",
-                                    "com.sphere.core.rootbackend.RootBackendRouter",
-                                    "com.sphere.core.EngineRouter"
-                            };
+                            publish("[WARN] Active RootBackend SHM instance not found. Attempting standalone initialization...");
 
-                            for (String className : potentialRouterClasses) {
-                                try {
-                                    Class<?> routerClass = Class.forName(className);
-
-                                    java.lang.reflect.Method getInst =
-                                            routerClass.getMethod("getInstance");
-                                    Object routerObj = getInst.invoke(null);
-
-                                    if (routerObj != null) {
-                                        java.lang.reflect.Method getBackend =
-                                                routerObj.getClass().getMethod("getRootBackend");
-                                        Object backendObj = getBackend.invoke(routerObj);
-
-                                        if (backendObj instanceof com.sphere.core.rootbackend.RootBackend rb) {
-                                            rootBackendInstance = rb;
-                                            break;
-                                        }
-                                    }
-                                } catch (Exception ignored) {}
+                            try {
+                                rootBackendInstance =
+                                        new com.sphere.core.rootbackend.RootBackend(
+                                                (java.nio.file.Path) null, 0L);
+                                weOwnTheInstance = true;
+                                publish("[SUCCESS] Standalone SHM RootBackend bridge instantiated.");
+                            } catch (Exception ex) {
+                                publish("[WARN] RootBackend could not be initialized: " + ex.getMessage());
                             }
                         }
 
                     } catch (Exception e) {
-                        publish("[WARN] Telemetry pipeline encountered an error traversing core routers: " + e.getMessage());
+                        publish("[WARN] Telemetry pipeline encountered an error initializing RootBackend: " + e.getMessage());
                     }
 
-                    // Standalone Instantiation Fallback
                     if (rootBackendInstance == null) {
-                        publish("[WARN] Active workspace router is offline. Attempting to initialize a temporary bridge stream...");
-
-                        try {
-                            try {
-                                java.lang.reflect.Constructor<com.sphere.core.rootbackend.RootBackend> constructor =
-                                        com.sphere.core.rootbackend.RootBackend.class.getDeclaredConstructor(String.class);
-
-                                if (!constructor.canAccess(null)) {
-                                    constructor.setAccessible(true);
-                                }
-
-                                rootBackendInstance = constructor.newInstance(verifiedPath);
-                                publish("[SUCCESS] Temporary ROOT interactive bridge instantiated.");
-
-                            } catch (NoSuchMethodException e) {
-
-                                try {
-                                    java.lang.reflect.Method factoryMethod =
-                                            com.sphere.core.rootbackend.RootBackend.class.getMethod("createInstance", String.class);
-
-                                    rootBackendInstance =
-                                            (com.sphere.core.rootbackend.RootBackend) factoryMethod.invoke(null, verifiedPath);
-
-                                    publish("[SUCCESS] Temporary ROOT interactive bridge instantiated via factory.");
-
-                                } catch (NoSuchMethodException ex) {
-
-                                    java.lang.reflect.Constructor<com.sphere.core.rootbackend.RootBackend> constructor =
-                                            com.sphere.core.rootbackend.RootBackend.class.getDeclaredConstructor();
-
-                                    if (!constructor.canAccess(null)) {
-                                        constructor.setAccessible(true);
-                                    }
-
-                                    rootBackendInstance = constructor.newInstance();
-                                    publish("[SUCCESS] Temporary ROOT interactive bridge instantiated.");
-                                }
-                            }
-
-                        } catch (Exception ex) {
-                            publish("[WARN] RootBackend cannot be instantiated standalone (Private Singleton constraint).");
-                            publish("[PROMPT] To test this bridge, please open a ROOT session from the main Sphere workspace first.");
-                            return "ERROR";
-                        }
+                        publish("[ERROR] Failed to obtain or instantiate a valid RootBackend instance.");
+                        return "ERROR";
                     }
 
-                    // Configure and Start Native Process
-                    if (rootBackendInstance != null) {
+                    final com.sphere.core.rootbackend.RootBackend rb = rootBackendInstance;
+                    final boolean closeWhenDone = weOwnTheInstance;
 
-                        boolean configured = false;
-                        boolean started = false;
-
-                        String binaryPath = verifiedPath;
-
-                        java.io.File binDir = new java.io.File(verifiedPath, "bin");
-                        java.io.File rootBinary = new java.io.File(binDir, "root");
-
-                        if (rootBinary.exists() && rootBinary.isFile()) {
-                            binaryPath = rootBinary.getAbsolutePath();
+                    try {
+                        // 3. Availability: compiled binary plus a mapped, verified region.
+                        if (!rb.isAvailable()) {
+                            publish("[WARN] RootBackend is NOT available (C++ bridge binary missing or SHM allocation failed).");
+                            publish("[PROMPT] Ensure ROOT environment is configured and root-bridge binary is compiled.");
+                            return "ERROR";
                         }
 
-                        String[] configMethods = {"initialize", "init", "setup", "configure"};
+                        publish("[INFO] RootBackend memory layout & SHM segments verified successfully.");
 
-                        for (String methodName : configMethods) {
-                            try {
-                                java.lang.reflect.Method method =
-                                        rootBackendInstance.getClass().getMethod(methodName, String.class);
-
-                                method.invoke(rootBackendInstance, binaryPath);
-                                configured = true;
-
-                                publish("[SUCCESS] Configured bridge execution path via: " + methodName + "(\"" + binaryPath + "\")");
-                                break;
-
-                            } catch (NoSuchMethodException ignored) {
-                            } catch (Exception ex) {
-                                publish("[WARN] Exception during configuration method '" + methodName + "': " + ex.getMessage());
-                            }
-                        }
-
-                        if (!configured) {
-                            for (String methodName : configMethods) {
-                                try {
-                                    java.lang.reflect.Method method =
-                                            rootBackendInstance.getClass().getMethod(methodName);
-
-                                    method.invoke(rootBackendInstance);
-                                    configured = true;
-
-                                    publish("[SUCCESS] Invoked fallback parameterless config: " + methodName + "()");
-                                    break;
-
-                                } catch (NoSuchMethodException ignored) {
-                                } catch (Exception ex) {
-                                    publish("[WARN] Exception during fallback config '" + methodName + "': " + ex.getMessage());
-                                }
-                            }
-                        }
-
-                        String[] startupMethods = {"start", "startBridge", "launch", "connect", "run"};
-
-                        for (String methodName : startupMethods) {
-                            try {
-                                java.lang.reflect.Method method =
-                                        rootBackendInstance.getClass().getMethod(methodName);
-
-                                method.invoke(rootBackendInstance);
-                                started = true;
-
-                                publish("[SUCCESS] Executed process startup hook: " + methodName + "()");
-                                break;
-
-                            } catch (NoSuchMethodException ignored) {
-                            } catch (Exception ex) {
-                                publish("[WARN] Exception during startup method '" + methodName + "': " + ex.getMessage());
-                            }
-                        }
-
-                        if (!configured && !started) {
-                            publish("[WARN] Could not resolve a dynamic config or startup lifecycle method.");
-                        } else {
-                            publish("[INFO] Warming up native environment streams...");
-
-                            try {
-                                Thread.sleep(1200);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                publish("[WARN] Warmup interrupted.");
-                            }
-                        }
-
-                        publish("[INFO] Dispatching interactive ping to non-blocking command ring...");
-
-                        final var rb = rootBackendInstance;
-
-                        // 1. Version Dispatch via RootBackend v2 executeCling API
-                        CompletableFuture<Boolean> versionFuture = CompletableFuture.supplyAsync(() -> {
-                            try {
-                                return rb.executeCling("gROOT->GetVersion()");
-                            } catch (Exception ex) {
-                                return false;
-                            }
-                        });
-
-                        boolean versionSent;
-
+                        // 4. Lifecycle hooks.
                         try {
-                            versionSent = versionFuture.orTimeout(3, TimeUnit.SECONDS).get();
-                        } catch (CompletionException te) {
-                            versionFuture.cancel(true);
-                            publish("[ERROR] Telemetry handshake timed out after 3.0 seconds.");
-                            publish("[PROMPT] The native SHM bridge process is alive but unresponsive.");
-                            return "ERROR";
+                            rb.initialize();
+                            rb.activate();
+                            publish("[SUCCESS] RootBackend lifecycle hooks (initialize/activate) executed.");
                         } catch (Exception ex) {
-                            publish("[ERROR] Encountered execution exception during handshake: " + ex.getMessage());
+                            publish("[WARN] Non-fatal issue during backend activation: " + ex.getMessage());
+                        }
+
+                        // 5. Liveness before anything else
+                        publish("[INFO] Probing the engine for liveness (CMD_PING)...");
+
+                        if (!rb.pingAwait(3000L)) {
+                            publish("[ERROR] No EVT_PONG within 3.0 s: nothing is draining the command ring.");
+                            publish("[PROMPT] Check that root-bridge started with --serve, and read");
+                            publish("         rootbackend/rootbackend_error.log for why it exited.");
+                            return "ERROR";
+                        }
+                        publish("  > EVT_PONG received. The engine is draining the ring.");
+
+                        // 6. Interpreter round trip. Separated from the ping so a working
+                        // ring with a broken interpreter is distinguishable.
+                        publish("[INFO] Dispatching interactive telemetry to the SHM command ring...");
+
+                        String version = rb.executeClingAwait("gROOT->GetVersion()", 3000L);
+                        if (version == null) {
+                            publish("[ERROR] The engine answers CMD_PING but not CMD_CLING_EXEC.");
+                            publish("[PROMPT] The ring is sound; the interpreter path is not.");
                             return "ERROR";
                         }
 
-                        if (versionSent) {
-                            publish("  > Command 'gROOT->GetVersion()' dispatched successfully to SHM Ring Buffer.");
+                        publish("  > ROOT version reported by the engine: " + version);
+                        publish("  > Round trip verified: queued, executed inside ROOT, answer returned.");
 
-                            // 2. System Ping Dispatch
-                            publish("[INFO] Verifying gSystem platform telemetry interface...");
+                        // 7. System telemetry.
+                        publish("[INFO] Verifying gSystem platform telemetry interface...");
 
-                            CompletableFuture<Boolean> sysFuture = CompletableFuture.supplyAsync(() -> {
-                                try {
-                                    return rb.executeCling("gSystem->Getenv(\"PATH\")");
-                                } catch (Exception ex) {
-                                    return false;
-                                }
-                            });
-
-                            try {
-                                boolean sysSent = sysFuture.orTimeout(1500, TimeUnit.MILLISECONDS).get();
-                                publish("  > System Health Token Dispatch: " + (sysSent ? "[SUCCESS]" : "[FAILED]"));
-                            } catch (Exception ignored) {
-                                publish("  > System Health Token: [Timeout / Unavailable]");
-                            }
-
-                            // 3. Diagnostics Suite Dispatch
-                            publish("[INFO] Running ROOT C++ bridge diagnostic suite...");
-
-                            long startTimeNs = System.nanoTime();
-
-                            CompletableFuture<Boolean> diagFuture = CompletableFuture.supplyAsync(() -> {
-                                try {
-                                    return rb.executeCling("gROOT->GetListOfGlobals()->Print()");
-                                } catch (Exception ex) {
-                                    return false;
-                                }
-                            });
-
-                            try {
-                                boolean diagSent = diagFuture.orTimeout(2500, TimeUnit.MILLISECONDS).get();
-                                long roundTripMs = (System.nanoTime() - startTimeNs) / 1_000_000;
-
-                                if (diagSent) {
-                                    publish("  > SHM Ring Buffer Latency: " + roundTripMs + " ms");
-                                    publish("  > Diagnostics query queued for execution.");
-                                } else {
-                                    publish("  [WARN] Diagnostic suite returned false (Command ring full or uninitialized).");
-                                }
-                            } catch (ExecutionException ee) {
-                                if (ee.getCause() instanceof TimeoutException) {
-                                    publish("  [WARN] Diagnostic suite check timed out after 2500 ms.");
-                                } else {
-                                    publish("  [ERROR] Diagnostic suite execution error: " + ee.getCause().getMessage());
-                                }
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                publish("  [WARN] Diagnostic suite execution was interrupted.");
-                            } catch (Exception ex) {
-                                publish("  [ERROR] Diagnostic suite unexpected failure: " + ex.getMessage());
-                            }
-
-                            publish("[SUCCESS] ROOT interactive scientific backend is fully functional!");
-                            return "ONLINE";
-
+                        String pathValue = rb.executeClingAwait("gSystem->Getenv(\"PATH\")", 1500L);
+                        if (pathValue != null) {
+                            String shown = pathValue.length() > 60
+                                    ? pathValue.substring(0, 60) + "..."
+                                    : pathValue;
+                            publish("  > System Health Token Dispatch: [SUCCESS] " + shown);
                         } else {
-                            publish("[ERROR] Handshake failed. Non-blocking SHM pipeline rejected execution dispatch.");
-                            return "ERROR";
+                            publish("  > System Health Token: [Timeout / Unavailable]");
+                        }
+
+                        // 8. Diagnostic suite, timed
+                        publish("[INFO] Running ROOT C++ bridge diagnostic suite...");
+                        long startTimeNs = System.nanoTime();
+
+                        String diagnostics = rb.executeClingAwait("gROOT->GetListOfGlobals()->Print()", 2500L);
+                        long roundTripMs = (System.nanoTime() - startTimeNs) / 1_000_000L;
+
+                        if (diagnostics != null) {
+                            publish("  > SHM round-trip latency: " + roundTripMs + " ms");
+                            publish("  > Diagnostics executed; engine returned: " + diagnostics);
+                        } else {
+                            publish("  [WARN] Diagnostic suite timed out after 2500 ms.");
+                            publish("  [PROMPT] The engine answered the first probes, so the ring is sound;");
+                            publish("           this command is the one taking too long inside ROOT.");
+                        }
+
+                        publish("[SUCCESS] ROOT interactive scientific SHM backend is fully functional!");
+                        return "ONLINE";
+
+                    } finally {
+                        // Release the engine process and the mapping if this block
+                        // started them.
+                        if (closeWhenDone) {
+                            try {
+                                rb.close();
+                                publish("[INFO] Standalone RootBackend instance released.");
+                            } catch (Exception ex) {
+                                publish("[WARN] Could not release the standalone instance: " + ex.getMessage());
+                            }
                         }
                     }
                 }

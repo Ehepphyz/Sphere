@@ -22,7 +22,17 @@ public final class RootShmCanvasRenderer extends JPanel {
         this.targetPixelArray = ((DataBufferByte) bufferedImage.getRaster().getDataBuffer()).getData();
     }
 
+    public int expectedByteCount() {
+        return targetPixelArray.length;
+    }
+
     public void updatePixelsFromShm(MemorySegment shmPixelBuffer) {
+        final long available = shmPixelBuffer.byteSize();
+        if (available < targetPixelArray.length) {
+            throw new IllegalArgumentException(
+                "frame is " + available + " bytes, expected " + targetPixelArray.length
+                + " (" + width + "x" + height + "x4)");
+        }
         MemorySegment targetSegment = MemorySegment.ofArray(targetPixelArray);
         MemorySegment.copy(shmPixelBuffer, ValueLayout.JAVA_BYTE, 0L, targetSegment, ValueLayout.JAVA_BYTE, 0L, targetPixelArray.length);
         

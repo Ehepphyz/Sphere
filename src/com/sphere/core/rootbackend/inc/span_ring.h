@@ -1,6 +1,9 @@
 // span_ring.h
+
+// Lock-free MPMC ring of latency spans
 #pragma once
 
+#include "common_config.h"
 #include "span_record.h"
 
 #include <atomic>
@@ -10,84 +13,95 @@
 
 namespace Sphere::log {
 
-// Standard CPU Cache-Line Size
-constexpr std::size_t CACHE_LINE_SIZE = 64;
+using Sphere::CACHE_LINE_SIZE;
 
 /**
- * Cache-line aligned Ring Buffer slot wrapping a SpanRecord with sequence
- * tracking. Required for multi-producer multi-consumer (MPMC) lock-free
- * synchronization.
- */
+ * One ring slot
+*/
 struct alignas(CACHE_LINE_SIZE) SpanCell {
-  SpanRecord record{};               // Offsets 0..31  (32 bytes, alignas 32)
-  std::atomic<std::uint64_t> seq{0}; // Offsets 32..39 (8 bytes)
-  std::uint8_t pad[24]{};            // Offsets 40..63 (24 bytes padding)
+  SpanRecord record{};               // offsets 0..31
+  std::atomic<std::uint64_t> seq{0}; // offsets 32..39
+  std::uint8_t pad[24]{};            // offsets 40..63
 };
 
-static_assert(
-    sizeof(SpanCell) == CACHE_LINE_SIZE,
-    "SpanCell must be exactly 64 bytes to align with CPU cache lines!");
+static_assert(sizeof(SpanCell) == CACHE_LINE_SIZE,
+              "ABI: SpanCell must be exactly one 64-byte cache line.");
 
 /**
- * Shared memory layout header for low-latency tracing ring buffers.
- * Explicitly padded to isolate producer/consumer atomics onto separate cache
- * lines.
+ * Header preceding the slot array.
  */
 struct alignas(CACHE_LINE_SIZE) SpanRingHeader {
-  // ---- Cache Line 0: Producer Hot Path ----
+  // ---- Cache line 0: producer ----
   std::atomic<std::uint64_t> write_index{0};
-  std::uint8_t pad0[56]{}; // Padding to 64 bytes
+  std::uint8_t pad0[56]{};
 
-  // ---- Cache Line 1: Consumer Hot Path ----
+  // ---- Cache line 1: consumer ----
   std::atomic<std::uint64_t> read_index{0};
-  std::uint8_t pad1[56]{}; // Padding to 128 bytes
+  std::uint8_t pad1[56]{};
 
-  // ---- Cache Line 2: Read-Only Metadata & Telemetry ----
-  std::uint64_t capacity{0}; // Must be a power of two
+  // ---- Cache line 2: geometry and telemetry ----
+  std::uint64_t capacity{0}; // power of two
   std::atomic<std::uint64_t> dropped_count{0};
-  std::uint8_t pad2[48]{}; // Padding to 192 bytes
+  std::atomic<std::uint64_t> init_magic{0};
+  std::uint8_t pad2[40]{};
 };
 
-// Compile-time layout verification
 static_assert(offsetof(SpanRingHeader, write_index) == 0,
-              "write_index offset drift!");
+              "ABI: write_index offset drift.");
 static_assert(offsetof(SpanRingHeader, read_index) == 64,
-              "read_index offset drift!");
+              "ABI: read_index offset drift.");
 static_assert(offsetof(SpanRingHeader, capacity) == 128,
-              "capacity offset drift!");
+              "ABI: capacity offset drift.");
 static_assert(sizeof(SpanRingHeader) == 192,
-              "SpanRingHeader size must be exactly 192 bytes!");
+              "ABI: SpanRingHeader must be exactly 192 bytes.");
+
+/// Magic stamped by span_ring_init().
+inline constexpr std::uint64_t SPAN_RING_MAGIC = 0x5350414E52494E47ULL; // SPANRING
 
 /**
- * Shared memory view descriptor referencing mapped headers and buffer slots
+ * Bytes required for a span ring of `capacity` slots
+ */
+[[nodiscard]] constexpr std::size_t
+span_ring_bytes(std::uint64_t capacity) noexcept {
+  return sizeof(SpanRingHeader) +
+         static_cast<std::size_t>(capacity) * sizeof(SpanCell);
+}
+
+/**
+ * Process-local view of a span ring living in shared memory
  */
 struct SpanRing {
   SpanRingHeader *hdr{nullptr};
   SpanCell *slots{nullptr};
+
+  [[nodiscard]] bool is_valid() const noexcept {
+    return hdr != nullptr && slots != nullptr;
+  }
 };
 
+[[nodiscard]] SpanRing span_ring_view(void *base, std::size_t bytes,
+                                      std::uint64_t capacity) noexcept;
+
 /**
- * One-time initialization of the shared memory sequence slots.
- * Must be invoked by the primary SHM owner process prior to queue activity.
+ * One-time initialization of the sequence numbers
  */
 void span_ring_init(SpanRing &ring, std::uint64_t capacity) noexcept;
 
-/**
- * Lock-free, non-blocking MPMC push into the shared memory Span Ring Buffer
- */
+/// True once span_ring_init() has run on this region.
+[[nodiscard]] bool span_ring_is_initialized(const SpanRing &ring) noexcept;
+
+/// Non-blocking MPMC push. Returns false when the ring is full.
 bool span_ring_push(SpanRing &ring, std::uint8_t level, std::uint16_t module,
                     std::uint32_t job_id, std::uint32_t req_id,
                     std::uint64_t tsc_start, std::uint64_t tsc_end) noexcept;
 
-/**
- * Overload for pushing an already constructed SpanRecord directly into the
- * ring.
- */
+/// Non-blocking MPMC push of a prebuilt record.
 bool span_ring_push_record(SpanRing &ring, const SpanRecord &record) noexcept;
 
-/**
- * Non-blocking MPMC pop from the shared memory Span Ring Buffer
- */
+/// Non-blocking MPMC pop. Returns false when the ring is empty.
 bool span_ring_pop(SpanRing &ring, SpanRecord &out_record) noexcept;
+
+/// Number of spans dropped because the ring was full.
+[[nodiscard]] std::uint64_t span_ring_dropped(const SpanRing &ring) noexcept;
 
 } // namespace Sphere::log

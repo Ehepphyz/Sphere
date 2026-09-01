@@ -17,12 +17,12 @@ namespace Sphere::cmd::ttree {
 // ============================================================================
 // Inspection: TTree Metadata Query
 // ============================================================================
-void handle_inspect(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdTTree] Inspecting target TTree metadata structure...\n";
+void handle_inspect(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   TTree *tree = get_tree(pkt.job_id);
   if (!tree) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;
   }
@@ -42,7 +42,7 @@ void handle_inspect(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::size_t size = json.size();
   std::uint64_t payload_off = shm_heap_alloc_schema(shm, size);
   if (payload_off == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
@@ -50,19 +50,20 @@ void handle_inspect(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::memcpy(shm.base + payload_off, json.data(), size);
   shm_chunk_commit(shm, payload_off);
 
-  send_response(shm, pkt, Platform::PacketType::EVT_OK, 0,
-                static_cast<std::uint32_t>(size), ResponseStatus::OK);
+  send_response(shm, pkt, Proto::PacketType::EVT_OK, 0,
+                static_cast<std::uint32_t>(size), ResponseStatus::OK,
+                payload_off, ShmDType::UInt8);
 }
 
 // ============================================================================
 // Schema Scan: Branch & Leaf Structural Hierarchy
 // ============================================================================
-void handle_scan_branches(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdTTree] Scanning TTree branch and leaf hierarchy...\n";
+void handle_scan_branches(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   TTree *tree = get_tree(pkt.job_id);
   if (!tree) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;
   }
@@ -110,7 +111,7 @@ void handle_scan_branches(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::size_t size = json.size();
   std::uint64_t payload_off = shm_heap_alloc_schema(shm, size);
   if (payload_off == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
@@ -118,19 +119,20 @@ void handle_scan_branches(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::memcpy(shm.base + payload_off, json.data(), size);
   shm_chunk_commit(shm, payload_off);
 
-  send_response(shm, pkt, Platform::PacketType::EVT_OK, 0,
-                static_cast<std::uint32_t>(size), ResponseStatus::OK);
+  send_response(shm, pkt, Proto::PacketType::EVT_OK, 0,
+                static_cast<std::uint32_t>(size), ResponseStatus::OK,
+                payload_off, ShmDType::UInt8);
 }
 
 // ============================================================================
 // Query: Fast Total Entry Count Retrieval
 // ============================================================================
-void handle_query_entries(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdTTree] Querying total TTree entry count...\n";
+void handle_query_entries(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   TTree *tree = get_tree(pkt.job_id);
   if (!tree) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;
   }
@@ -142,7 +144,7 @@ void handle_query_entries(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::size_t size = json.size();
   std::uint64_t payload_off = shm_heap_alloc_tx(shm, size);
   if (payload_off == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
@@ -150,26 +152,40 @@ void handle_query_entries(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::memcpy(shm.base + payload_off, json.data(), size);
   shm_chunk_commit(shm, payload_off);
 
-  send_response(shm, pkt, Platform::PacketType::EVT_OK, 0,
-                static_cast<std::uint32_t>(size), ResponseStatus::OK);
+  send_response(shm, pkt, Proto::PacketType::EVT_OK, 0,
+                static_cast<std::uint32_t>(size), ResponseStatus::OK,
+                payload_off, ShmDType::UInt8);
 }
 
 // ============================================================================
 // Data Extraction: Single Event Entry Inspection
 // ============================================================================
-void handle_get_entry(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdTTree] Reading single TTree event entry...\n";
+void handle_get_entry(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   TTree *tree = get_tree(pkt.job_id);
   if (!tree) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;
   }
 
   std::uint64_t index = pkt.flags;
+  if (pkt.payload_size >= 8 && shm.base != nullptr && shm.header != nullptr) {
+    const std::uint64_t total = shm.header->total_size;
+    if (pkt.payload_offset < total && 8U <= total - pkt.payload_offset) {
+      const auto *bytes =
+          reinterpret_cast<const unsigned char *>(shm.base + pkt.payload_offset);
+      std::uint64_t value = 0;
+      for (int b = 7; b >= 0; --b) {
+        value = (value << 8) | static_cast<std::uint64_t>(bytes[b]);
+      }
+      index = value;
+    }
+  }
+
   if (index >= static_cast<std::uint64_t>(tree->GetEntries())) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_INVALID_ARG);
     return;
   }
@@ -220,7 +236,7 @@ void handle_get_entry(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::size_t size = json.size();
   std::uint64_t payload_off = shm_heap_alloc_data(shm, size);
   if (payload_off == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
@@ -228,8 +244,9 @@ void handle_get_entry(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::memcpy(shm.base + payload_off, json.data(), size);
   shm_chunk_commit(shm, payload_off);
 
-  send_response(shm, pkt, Platform::PacketType::EVT_OK, 0,
-                static_cast<std::uint32_t>(size), ResponseStatus::OK);
+  send_response(shm, pkt, Proto::PacketType::EVT_OK, 0,
+                static_cast<std::uint32_t>(size), ResponseStatus::OK,
+                payload_off, ShmDType::UInt8);
 }
 
 } // namespace Sphere::cmd::ttree

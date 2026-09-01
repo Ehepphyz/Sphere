@@ -3,16 +3,17 @@ package com.sphere.core.rootbackend;
 import com.sphere.utils.AppLogger;
 
 import java.io.File;
+import java.io.RandomAccessFile;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.lang.invoke.VarHandle;
 import java.nio.charset.StandardCharsets;
+import java.lang.invoke.VarHandle;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * RootProcessBridge v2: Low-Latency Native Process & SHM Command Producer Engine.
+ * RootProcessBridge: Low-Latency Native Process & SHM Command Producer Engine.
  * Operates strictly via asynchronous lock-free off-heap MPMC/SPSC shared memory rings
  * using Java 22+ Foreign Function & Memory (FFM) Panama API.
  */
@@ -28,16 +29,44 @@ public final class RootProcessBridge implements AutoCloseable {
     private MemorySegment commandSegment;
     private static final VarHandle LONG_HANDLE = ValueLayout.JAVA_LONG.varHandle();
 
-    // Cache-Line Aligned Ring Buffer Offsets (64-byte aligned for CPU L1 Cache)
-    private static final long HEAD_OFFSET = 0L;
-    private static final long TAIL_OFFSET = 8L;
-    private static final long CAPACITY_OFFSET = 16L;
-    private static final long PAYLOAD_START_OFFSET = 64L;
-    private static final long SLOT_SIZE = 256L;
+    private int cmdRingCapacityPow2 = 10;
+    private final java.util.concurrent.atomic.AtomicInteger nextReqId =
+        new java.util.concurrent.atomic.AtomicInteger(0);
 
     public RootProcessBridge(String binaryPath, Map<String, String> environment) {
         this.binaryPath = binaryPath;
         this.environment = environment;
+    }
+
+    private static final long STARTUP_TIMEOUT_MS = 15_000L;
+
+    // Blocks until `file` carries the region magic, or the timeout expires.
+    private static void waitForFormattedRegion(File file, long timeoutMillis)
+            throws InterruptedException {
+        final long deadline = System.currentTimeMillis() + timeoutMillis;
+        long pollMillis = 5L;
+
+        while (System.currentTimeMillis() < deadline) {
+            if (file.length() >= 4L) {
+                try (RandomAccessFile probe = new RandomAccessFile(file, "r")) {
+                    byte[] four = new byte[4];
+                    probe.seek(RootBackend.HDR_MAGIC);
+                    probe.readFully(four);
+                    int magic = (four[0] & 0xFF) | ((four[1] & 0xFF) << 8)
+                              | ((four[2] & 0xFF) << 16) | ((four[3] & 0xFF) << 24);
+                    if (magic == RootBackend.SHM_MAGIC) {
+                        return;
+                    }
+                } catch (Exception ignored) {
+                    // Not readable yet; keep waiting.
+                }
+            }
+            Thread.sleep(pollMillis);
+            pollMillis = Math.min(pollMillis * 2L, 250L);
+        }
+
+        AppLogger.warn("The shared region did not become readable within "
+            + timeoutMillis + " ms; the mapping below will report what it finds.");
     }
 
     /**
@@ -58,65 +87,83 @@ public final class RootProcessBridge implements AutoCloseable {
 
             File errorLog = new File(backendDir, "rootbackend_error.log");
 
-            ProcessBuilder pb = new ProcessBuilder(binaryFile.getAbsolutePath(), "--shm-mode");
+            ProcessBuilder pb = new ProcessBuilder(
+                    binaryFile.getAbsolutePath(),
+                    "--serve",
+                    "--shm", commandShmFile.getAbsolutePath(),
+                    "--parent-pid", Long.toString(ProcessHandle.current().pid()));
             pb.directory(backendDir);
             if (this.environment != null && !this.environment.isEmpty()) {
                 pb.environment().putAll(this.environment);
             }
-            pb.redirectError(ProcessBuilder.Redirect.appendTo(errorLog));
+            pb.redirectErrorStream(true);
+            pb.redirectOutput(ProcessBuilder.Redirect.appendTo(errorLog));
 
             this.process = pb.start();
 
-            // Brief pause for native process setup and SHM segment creation
-            TimeUnit.MILLISECONDS.sleep(200);
+            waitForFormattedRegion(commandShmFile, STARTUP_TIMEOUT_MS);
+
+            // A formatted region does not mean OUR engine is alive: it may have
+            // been formatted by an earlier run while this process died at once.
+            if (!this.process.isAlive()) {
+                throw new IllegalStateException(
+                    "root-bridge --serve exited immediately with code "
+                    + this.process.exitValue()
+                    + ". See rootbackend/rootbackend_error.log.");
+            }
+
+            File target = commandShmFile;
+            long actualSize = target.length() > 0 ? target.length() : commandShmSize;
 
             // Zero-Copy Memory Mapping via Java FFM API
-            this.commandShmSegment = RootShmSegment.openSharedMemory(commandShmFile, commandShmSize);
-            this.commandSegment = commandShmSegment.segment();
+            this.commandShmSegment = RootShmSegment.openSharedMemory(target, actualSize);
+            MemorySegment base = commandShmSegment.segment();
 
-            AppLogger.info("RootProcessBridge v2: Native daemon spawned and bound to MPMC SHM Command Ring.");
+            int magic = base.get(ValueLayout.JAVA_INT, RootBackend.HDR_MAGIC);
+            if (magic != RootBackend.SHM_MAGIC) {
+                throw new IllegalStateException(String.format(
+                    "Shared region %s has magic 0x%08X, expected 0x%08X.",
+                    target, magic, RootBackend.SHM_MAGIC));
+            }
+
+            long cmdOffset = base.get(ValueLayout.JAVA_LONG, RootBackend.HDR_OFF_CMD_RING);
+            long cmdSize = base.get(ValueLayout.JAVA_LONG, RootBackend.HDR_SIZE_CMD_RING);
+            long cmdCapacity = base.get(ValueLayout.JAVA_LONG, RootBackend.HDR_CMD_RING_CAPACITY);
+
+            if (cmdOffset <= 0 || cmdSize <= 0 || cmdOffset > actualSize
+                || cmdSize > actualSize - cmdOffset) {
+                throw new IllegalStateException(
+                    "Command ring partition is out of range: offset=" + cmdOffset
+                    + " size=" + cmdSize + " in a " + actualSize + " byte region.");
+            }
+            if (cmdCapacity <= 0 || Long.bitCount(cmdCapacity) != 1) {
+                throw new IllegalStateException(
+                    "Command ring capacity " + cmdCapacity + " is not a power of two.");
+            }
+
+            // Off-heap direct memory copy
+            this.commandSegment = base.asSlice(cmdOffset, cmdSize);
+            this.cmdRingCapacityPow2 = Long.numberOfTrailingZeros(cmdCapacity);
+
         } finally {
             lock.unlock();
         }
     }
 
-    /**
-     * Non-blocking Lock-Free MPMC Producer.
-     * Pushes an instruction payload directly into the shared memory command ring.
-     *
-     * @param command Command payload string to execute on C++ Engine Scheduler.
-     * @return {@code true} if payload was queued successfully; {@code false} on ring overflow or offline backend.
-     */
     public boolean pushCommand(String command) {
+        if (command == null || command.isBlank()) {
+            return false;
+        }
+        byte[] payload = command.getBytes(StandardCharsets.UTF_8);        return pushCommand(RootBackend.CMD_CLING_EXEC, 0, nextReqId.incrementAndGet(), payload);
+    }
+
+    public boolean pushCommand(short opcode, int jobId, int reqId, byte[] payload) {
         if (!isAlive() || commandSegment == null) {
-            AppLogger.error("Cannot push command: Native process or command SHM segment is inactive.");
+            AppLogger.error("Cannot push command: the engine or the command ring is inactive.");
             return false;
         }
-
-        long capacity = commandSegment.get(ValueLayout.JAVA_LONG, CAPACITY_OFFSET);
-        long currentHead = (long) LONG_HANDLE.getAcquire(commandSegment, HEAD_OFFSET);
-        long currentTail = (long) LONG_HANDLE.getAcquire(commandSegment, TAIL_OFFSET);
-
-        // Ring Buffer Overflow check
-        if ((currentTail - currentHead) >= capacity) {
-            AppLogger.error("Command Ring Buffer overflow. Target slot is locked by C++ scheduler.");
-            return false;
-        }
-
-        long slotIndex = currentTail % capacity;
-        long slotOffset = PAYLOAD_START_OFFSET + (slotIndex * SLOT_SIZE);
-
-        byte[] bytes = command.getBytes(StandardCharsets.UTF_8);
-        long copyLength = Math.min(bytes.length, SLOT_SIZE - 1);
-
-        // Off-heap direct memory copy
-        MemorySegment slotSegment = commandSegment.asSlice(slotOffset, SLOT_SIZE);
-        slotSegment.fill((byte) 0);
-        MemorySegment.copy(MemorySegment.ofArray(bytes), 0L, slotSegment, 0L, copyLength);
-
-        // Memory Release barrier to publish updated sequence index to C++ Engine Scheduler
-        LONG_HANDLE.setRelease(commandSegment, TAIL_OFFSET, currentTail + 1);
-        return true;
+        return RootBackend.pushCommandMessage(commandSegment, cmdRingCapacityPow2,
+                                             opcode, jobId, reqId, payload);
     }
 
     /**

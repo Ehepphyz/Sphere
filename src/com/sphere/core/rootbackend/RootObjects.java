@@ -11,27 +11,51 @@ public final class RootObjects {
     public static final class RootFile implements AutoCloseable {
         private final RootProcessBridge bridge;
         private final String handleId;
+        private final int fileId;
         private final boolean valid;
         private final String errorMessage;
 
+        private static final java.util.concurrent.atomic.AtomicInteger NEXT_FILE_ID =
+            new java.util.concurrent.atomic.AtomicInteger(1);
+
+        // Requests an open on the engine.
         public RootFile(RootProcessBridge bridge, String handleId, String path, String mode) {
             this.bridge = bridge;
             this.handleId = handleId;
-            
+            this.fileId = NEXT_FILE_ID.getAndIncrement();
+
             if (bridge == null || !bridge.isAlive()) {
                 this.valid = false;
                 this.errorMessage = "RootProcessBridge daemon is offline or uninitialized.";
                 return;
             }
+            if (path == null || path.isBlank()) {
+                this.valid = false;
+                this.errorMessage = "No file path given.";
+                return;
+            }
 
-            boolean pushed = bridge.pushCommand("OPEN_FILE " + handleId + " " + path + " " + mode);
+            byte[] payload = path.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (payload.length > RootBackend.BRIDGE_INLINE_CAPACITY) {
+                this.valid = false;
+                this.errorMessage = "File path exceeds the "
+                    + RootBackend.BRIDGE_INLINE_CAPACITY + " byte inline payload.";
+                return;
+            }
+
+            boolean pushed = bridge.pushCommand(RootBackend.CMD_OPEN_FILE,
+                                                fileId, fileId, payload);
             if (pushed) {
                 this.valid = true;
                 this.errorMessage = "";
             } else {
                 this.valid = false;
-                this.errorMessage = "Failed to push OPEN_FILE command into the MPMC Command Ring.";
+                this.errorMessage = "Command ring is full; the open was not queued.";
             }
+        }
+
+        public int getFileId() {
+            return fileId;
         }
 
         /**
@@ -50,12 +74,7 @@ public final class RootObjects {
         }
 
         /**
-         * Dispatches an asynchronous request over SHM to load a histogram handle.
-         *
-         * @param name Name of the histogram within the ROOT file.
-         * @param histHandleId Generated unique handle ID for tracking in event ring callbacks.
-         * @return Instantiated RootHistogram representation for the given handle.
-         * @throws IOException If the parent file resource is invalid or bridge fails to enqueue.
+         * Dispatches an asynchronous request over SHM to load a histogram handle
          */
         public RootHistogram getHistogram(String name, String histHandleId) throws IOException {
             if (!valid) {
@@ -73,7 +92,7 @@ public final class RootObjects {
         @Override
         public void close() {
             if (valid && bridge != null && handleId != null && !handleId.isEmpty()) {
-                bridge.pushCommand("CLOSE " + this.handleId);
+                bridge.pushCommand(RootBackend.CMD_CLOSE_FILE, fileId, fileId, null);
             }
         }
     }
@@ -114,7 +133,7 @@ public final class RootObjects {
         @Override
         public void close() {
             if (bridge != null && handleId != null && !handleId.isEmpty()) {
-                bridge.pushCommand("CLOSE " + this.handleId);
+                bridge.pushCommand("CLOSE " + this.handleId); // no opcode for this yet
             }
         }
 

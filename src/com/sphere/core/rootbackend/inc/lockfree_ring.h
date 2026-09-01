@@ -1,10 +1,12 @@
 // lockfree_ring.h
 
+// Bounded lock-free MPMC queue (Vyukov) plus the hybrid message type carried
+// across the C++/Java shared-memory bridge.
+
 #pragma once
 
 #include "common_config.h"
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -15,126 +17,171 @@
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) ||              \
     defined(__i386__)
 #include <immintrin.h>
-#define CPU_PAUSE() _mm_pause()
+#define SPHERE_CPU_PAUSE() _mm_pause()
 #elif defined(__aarch64__) || defined(__arm__)
-#define CPU_PAUSE() asm volatile("yield" ::: "memory")
+#define SPHERE_CPU_PAUSE() asm volatile("yield" ::: "memory")
 #else
-#define CPU_PAUSE() ((void)0)
+#define SPHERE_CPU_PAUSE() ((void)0)
 #endif
 
 namespace Sphere {
 
-// Supported data types for PyTorch / Deep Learning Tensor interop
+/**
+ * Scalar types supported by the tensor interop path
+ */
 enum class ShmDType : std::uint8_t {
-  Float32 = 0, // 32-bit Single-precision Floating Point (float / Float_t)
-  Float16 = 1, // 16-bit Half-precision Floating Point (std::float16_t / __fp16)
-  Int32 = 2,   // 32-bit Signed Integer (std::int32_t / Int_t)
-  Int64 = 3,   // 64-bit Signed Integer (std::int64_t / Long64_t)
-  Uint8 = 4,   // 8-bit Unsigned Integer (std::uint8_t / UChar_t) - Backward
-               // compatibility
-  UInt8 = 4, // 8-bit Unsigned Integer (std::uint8_t / UChar_t) - Standard alias
-  BFloat16 = 5, // 16-bit Brain Floating Point (PyTorch torch.bfloat16)
-
-  // Extended Data Types for Full ROOT & Native C++ Interoperability
-  Float64 = 6, // 64-bit Double-precision Floating Point (double / Double_t)
-  UInt32 = 7,  // 32-bit Unsigned Integer (std::uint32_t / UInt_t)
-  UInt64 = 8,  // 64-bit Unsigned Integer (std::uint64_t / ULong64_t)
-  Int16 = 9,   // 16-bit Signed Integer (std::int16_t / Short_t)
-  UInt16 = 10, // 16-bit Unsigned Integer (std::uint16_t / UShort_t)
-  Int8 = 11    // 8-bit Signed Integer (std::int8_t / Char_t)
+  Float32 = 0,  // float / Float_t
+  Float16 = 1,  // half precision
+  Int32 = 2,    // std::int32_t / Int_t
+  Int64 = 3,    // std::int64_t / Long64_t
+  UInt8 = 4,    // std::uint8_t / UChar_t
+  BFloat16 = 5, // torch.bfloat16
+  Float64 = 6,  // double / Double_t
+  UInt32 = 7,   // std::uint32_t / UInt_t
+  UInt64 = 8,   // std::uint64_t / ULong64_t
+  Int16 = 9,    // std::int16_t / Short_t
+  UInt16 = 10,  // std::uint16_t / UShort_t
+  Int8 = 11     // std::int8_t / Char_t
 };
 
-// Message type indicator discriminating fast-path inline data from large SHM
-// references
+inline constexpr ShmDType Uint8 = ShmDType::UInt8;
+
+/**
+ * Transport discriminator: how the payload of a BridgeMessage is carried
+ */
 enum class MsgType : std::uint8_t {
   EMPTY = 0,
-  INLINE_DATA = 1, // Fast-Path: Small payloads, control signals, pings (<= 48B)
-  SHM_REF = 2 // Large-Path: Offset reference to ML/CNN Tensors in the SHM heap
+  INLINE_DATA = 1, // small payload carried inside the message itself
+  SHM_REF = 2      // offset reference into the shared-memory data heap
 };
 
-/// High-performance, zero-copy descriptor for external SHM heap allocations
+/// Maximum tensor rank describable by ShmRef.
+inline constexpr std::size_t SHM_REF_MAX_DIMS = 6;
+
+/// Zero-copy descriptor for an allocation in the shared-memory data heap.
 struct ShmRef {
-  std::uint32_t offset;      // Relative byte offset in the SHM data heap
-  std::uint32_t total_bytes; // Total byte allocation size
-  ShmDType dtype;            // Tensor scalar type
-  std::uint8_t ndim;      // Tensor rank/dimensions (e.g., 4 for [N, C, H, W])
-  std::uint32_t shape[6]; // Tensor shape array
+  std::uint32_t offset{0};      // byte offset from the SHM base
+  std::uint32_t total_bytes{0}; // total allocation size
+  ShmDType dtype{ShmDType::Float32};
+  std::uint8_t ndim{0};
+  std::uint16_t reserved{0};
+  std::uint32_t shape[SHM_REF_MAX_DIMS]{};
 };
 
-// 64-byte Cache-line aligned hybrid payload (POD / Trivially Copyable for SHM
-// IPC)
+/// Number of inline payload bytes available in a BridgeMessage.
+inline constexpr std::size_t BRIDGE_INLINE_CAPACITY = 44;
+
+/**
+ * 64-byte hybrid message exchanged over the command and event rings
+ */
 struct alignas(CACHE_LINE_SIZE) BridgeMessage {
-  MsgType type{MsgType::EMPTY};
-  std::uint8_t payload_size{0}; // Active byte size when using INLINE_DATA
-  std::uint16_t flags{0};       // System flags / routing priorities
-  std::uint32_t job_id{0};
-  std::uint32_t req_id{0};
-  std::uint32_t journal_seq{0};
+  MsgType type{MsgType::EMPTY};  // offset  0: transport discriminator
+  std::uint8_t payload_size{0};  // offset  1: valid bytes in inline_bytes
+  std::uint16_t cmd{0};          // offset  2: Proto::PacketType opcode
+  std::uint16_t flags{0};        // offset  4: Proto::PacketFlags
+  std::uint16_t reserved{0};     // offset  6: must be zero
+  std::uint32_t job_id{0};       // offset  8
+  std::uint32_t req_id{0};       // offset 12
+  std::uint32_t journal_seq{0};  // offset 16
 
-  union {
-    // FAST-PATH: Micro-commands, pings, low-latency control messages
-    std::uint8_t inline_bytes[48];
-
-    // LARGE-PATH: Zero-copy descriptors for PyTorch tensors and CNN feature
-    // maps
+  union {                        // offset 20
+    std::uint8_t inline_bytes[BRIDGE_INLINE_CAPACITY];
     ShmRef shm_ref;
   };
 };
 
-// Compile-time sanity checks (evaluated once BridgeMessage is fully defined)
 static_assert(std::is_trivially_copyable_v<BridgeMessage>,
-              "BridgeMessage must be Trivially Copyable for IPC!");
+              "ABI: BridgeMessage must be trivially copyable for IPC.");
+static_assert(std::is_standard_layout_v<BridgeMessage>,
+              "ABI: BridgeMessage must be standard layout.");
 static_assert(sizeof(BridgeMessage) == 64,
-              "BridgeMessage must be exactly 64 bytes (1 cache line)!");
+              "ABI: BridgeMessage must be exactly 64 bytes.");
+static_assert(alignof(BridgeMessage) == CACHE_LINE_SIZE,
+              "ABI: BridgeMessage must be cache-line aligned.");
+static_assert(offsetof(BridgeMessage, type) == 0, "ABI: type offset drift.");
+static_assert(offsetof(BridgeMessage, payload_size) == 1,
+              "ABI: payload_size offset drift.");
+static_assert(offsetof(BridgeMessage, cmd) == 2, "ABI: cmd offset drift.");
+static_assert(offsetof(BridgeMessage, flags) == 4, "ABI: flags offset drift.");
+static_assert(offsetof(BridgeMessage, job_id) == 8, "ABI: job_id offset drift.");
+static_assert(offsetof(BridgeMessage, req_id) == 12,
+              "ABI: req_id offset drift.");
+static_assert(offsetof(BridgeMessage, journal_seq) == 16,
+              "ABI: journal_seq offset drift.");
+static_assert(offsetof(BridgeMessage, inline_bytes) == 20,
+              "ABI: inline payload offset drift.");
+static_assert(offsetof(BridgeMessage, shm_ref) == 20,
+              "ABI: shm_ref offset drift.");
+static_assert(sizeof(ShmRef) <= BRIDGE_INLINE_CAPACITY,
+              "ABI: ShmRef no longer fits in the message union.");
+
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+              "ABI: 64-bit atomics must be lock-free for cross-process use.");
+static_assert(sizeof(std::atomic<std::uint64_t>) == sizeof(std::uint64_t),
+              "ABI: atomic<uint64_t> must not add storage.");
+static_assert(alignof(std::atomic<std::uint64_t>) == alignof(std::uint64_t),
+              "ABI: atomic<uint64_t> must not change alignment.");
+static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
+              "ABI: 32-bit atomics must be lock-free for cross-process use.");
+static_assert(sizeof(std::atomic<std::uint32_t>) == sizeof(std::uint32_t),
+              "ABI: atomic<uint32_t> must not add storage.");
+
+inline constexpr std::uint64_t RING_INIT_MAGIC = 0x52494E47494E4954ULL; // RINGINIT
 
 /**
- * Lock-Free Bounded MPMC Queue engineered for Shared Memory (SHM) placement
+ * Bounded lock-free MPMC queue laid out for direct placement in shared memory
  */
 template <typename T, std::size_t CapacityPow2> class ShmMpmcRing {
 public:
-  static constexpr std::size_t CAPACITY = 1ull << CapacityPow2;
-  static constexpr std::size_t MASK = CAPACITY - 1;
+  static constexpr std::uint64_t CAPACITY = 1ULL << CapacityPow2;
+  static constexpr std::uint64_t MASK = CAPACITY - 1;
 
   static_assert(std::is_trivially_copyable_v<T>,
-                "T must be Trivially Copyable for Shared Memory safety!");
+                "T must be trivially copyable for shared-memory safety.");
+  static_assert(CapacityPow2 > 0 && CapacityPow2 < 32,
+                "Capacity exponent out of range.");
 
   ShmMpmcRing() noexcept = default;
   ~ShmMpmcRing() noexcept = default;
 
-  // Prevent copying and moving across process virtual address boundaries
+  // Copying or moving would carry indices across address spaces.
   ShmMpmcRing(const ShmMpmcRing &) = delete;
   ShmMpmcRing &operator=(const ShmMpmcRing &) = delete;
 
   /**
-   * Initialization of sequence indices, must be invoked by the primary SHM
-   * creator process before runtime queue activity
+   * Initializes the per-cell sequence numbers
    */
   void init() noexcept {
-    for (std::size_t i = 0; i < CAPACITY; ++i) {
+    for (std::uint64_t i = 0; i < CAPACITY; ++i) {
       buffer_[i].seq.store(i, std::memory_order_relaxed);
     }
     enqueue_pos_.store(0, std::memory_order_relaxed);
     dequeue_pos_.store(0, std::memory_order_relaxed);
+    init_magic_.store(RING_INIT_MAGIC, std::memory_order_release);
   }
 
-  // Push value by const reference
-  bool push(const T &data) noexcept { return emplace(data); }
+  /**
+   * Returns true once init() has run on this region
+   */
+  [[nodiscard]] bool is_initialized() const noexcept {
+    return init_magic_.load(std::memory_order_acquire) == RING_INIT_MAGIC;
+  }
 
-  // Push value by rvalue reference
+  bool push(const T &data) noexcept { return emplace(data); }
   bool push(T &&data) noexcept { return emplace(std::move(data)); }
 
   /**
-   * Emplaces an item into the ring buffer slot without blocking.
+   * Emplaces an item without blocking. Returns false when the ring is full.
    */
   template <typename... Args> bool emplace(Args &&...args) noexcept {
-    Cell *cell;
-    std::size_t pos = enqueue_pos_.load(std::memory_order_relaxed);
+    Cell *cell = nullptr;
+    std::uint64_t pos = enqueue_pos_.load(std::memory_order_relaxed);
 
     for (;;) {
       cell = &buffer_[pos & MASK];
-      std::size_t seq = cell->seq.load(std::memory_order_acquire);
-      auto dif =
-          static_cast<std::intptr_t>(seq) - static_cast<std::intptr_t>(pos);
+      const std::uint64_t seq = cell->seq.load(std::memory_order_acquire);
+      const auto dif =
+          static_cast<std::int64_t>(seq) - static_cast<std::int64_t>(pos);
 
       if (dif == 0) {
         if (enqueue_pos_.compare_exchange_weak(pos, pos + 1,
@@ -143,11 +190,11 @@ public:
           break;
         }
       } else if (dif < 0) {
-        return false; // Queue is full
+        return false; // full
       } else {
         pos = enqueue_pos_.load(std::memory_order_relaxed);
       }
-      CPU_PAUSE();
+      SPHERE_CPU_PAUSE();
     }
 
     cell->data = T(std::forward<Args>(args)...);
@@ -156,17 +203,17 @@ public:
   }
 
   /**
-   * Pops an item out of the ring buffer without blocking.
+   * Pops an item without blocking. Returns false when the ring is empty.
    */
   bool pop(T &data) noexcept {
-    Cell *cell;
-    std::size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
+    Cell *cell = nullptr;
+    std::uint64_t pos = dequeue_pos_.load(std::memory_order_relaxed);
 
     for (;;) {
       cell = &buffer_[pos & MASK];
-      std::size_t seq = cell->seq.load(std::memory_order_acquire);
-      auto dif =
-          static_cast<std::intptr_t>(seq) - static_cast<std::intptr_t>(pos + 1);
+      const std::uint64_t seq = cell->seq.load(std::memory_order_acquire);
+      const auto dif =
+          static_cast<std::int64_t>(seq) - static_cast<std::int64_t>(pos + 1);
 
       if (dif == 0) {
         if (dequeue_pos_.compare_exchange_weak(pos, pos + 1,
@@ -175,11 +222,11 @@ public:
           break;
         }
       } else if (dif < 0) {
-        return false; // Queue is empty
+        return false; // empty
       } else {
         pos = dequeue_pos_.load(std::memory_order_relaxed);
       }
-      CPU_PAUSE();
+      SPHERE_CPU_PAUSE();
     }
 
     data = cell->data;
@@ -195,54 +242,60 @@ public:
     return count;
   }
 
-  /**
-   * Retrieves the current dequeue/head sequence index.
-   */
-  [[nodiscard]] std::size_t head_sequence() const noexcept {
+  /// Consumer-side sequence index (number of items dequeued so far).
+  [[nodiscard]] std::uint64_t head_sequence() const noexcept {
     return dequeue_pos_.load(std::memory_order_relaxed);
   }
 
-  /**
-   * Retrieves the current enqueue/tail sequence index.
-   */
-  [[nodiscard]] std::size_t tail_sequence() const noexcept {
+  /// Producer-side sequence index (number of items enqueued so far).
+  [[nodiscard]] std::uint64_t tail_sequence() const noexcept {
     return enqueue_pos_.load(std::memory_order_relaxed);
   }
 
-  /**
-   * Retrieves the direct read-only pointer to the element slot at index.
-   */
-  [[nodiscard]] const void *element_at(std::size_t index) const noexcept {
-    const std::size_t slot = index & MASK;
-    return static_cast<const void *>(&buffer_[slot].data);
+  /// Read-only pointer to a slot's payload, for prefetching.
+  [[nodiscard]] const void *element_at(std::uint64_t index) const noexcept {
+    return static_cast<const void *>(&buffer_[index & MASK].data);
   }
 
-  [[nodiscard]] constexpr std::size_t capacity() const noexcept {
+  [[nodiscard]] constexpr std::uint64_t capacity() const noexcept {
     return CAPACITY;
   }
 
-  std::size_t size_approx() const noexcept {
-    std::size_t enq = enqueue_pos_.load(std::memory_order_relaxed);
-    std::size_t deq = dequeue_pos_.load(std::memory_order_relaxed);
+  /**
+   * Approximate number of queued items
+   */
+  [[nodiscard]] std::uint64_t size_approx() const noexcept {
+    const std::uint64_t enq = enqueue_pos_.load(std::memory_order_relaxed);
+    const std::uint64_t deq = dequeue_pos_.load(std::memory_order_relaxed);
     return (enq >= deq) ? (enq - deq) : 0;
   }
 
-  bool is_above_watermark(std::size_t watermark) const noexcept {
+  /// Occupancy as a fraction of capacity, clamped to [0, 1].
+  [[nodiscard]] float occupancy() const noexcept {
+    const float ratio =
+        static_cast<float>(size_approx()) / static_cast<float>(CAPACITY);
+    return (ratio > 1.0f) ? 1.0f : ratio;
+  }
+
+  [[nodiscard]] bool is_above_watermark(std::uint64_t watermark) const noexcept {
     return size_approx() >= watermark;
   }
 
 private:
+
   struct alignas(CACHE_LINE_SIZE) Cell {
-    std::atomic<std::size_t> seq;
-    T data;
+    std::atomic<std::uint64_t> seq{0};
+    T data{};
   };
 
-  // Cache-line alignment to isolate producer and consumer contention
-  alignas(CACHE_LINE_SIZE) std::atomic<std::size_t> enqueue_pos_{0};
-  alignas(CACHE_LINE_SIZE) std::atomic<std::size_t> dequeue_pos_{0};
-
-  // Flat inline array layout for direct SHM mapping
+  alignas(CACHE_LINE_SIZE) std::atomic<std::uint64_t> enqueue_pos_{0};
+  alignas(CACHE_LINE_SIZE) std::atomic<std::uint64_t> dequeue_pos_{0};
+  alignas(CACHE_LINE_SIZE) std::atomic<std::uint64_t> init_magic_{0};
   alignas(CACHE_LINE_SIZE) Cell buffer_[CAPACITY];
 };
+
+// Convenience alias.
+template <typename T, std::size_t CapacityPow2 = 10>
+using LockFreeRing = ShmMpmcRing<T, CapacityPow2>;
 
 } // namespace Sphere

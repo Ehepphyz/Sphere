@@ -1,6 +1,8 @@
 // cmd_system.cpp
 
 #include "commands/cmd_system.h"
+#include "command_registry.h"
+#include "lockfree_ring.h"
 #include "engine.h"
 #include "packets.h"
 #include "shm_layout.h"
@@ -8,6 +10,7 @@
 #include <ROOT/RConfig.hxx>
 #include <RVersion.h>
 #include <TROOT.h>
+#include <TInterpreter.h>
 #include <TSystem.h>
 
 #include <array>
@@ -18,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -31,8 +35,7 @@ namespace {
 const auto g_engine_start_time = std::chrono::steady_clock::now();
 } // namespace
 
-// Opcode enumeration representing system commands (aligned with Java IPC layer
-// protocol)
+// Opcode enumeration representing system commands (aligned with Java IPC layer protocol)
 enum class SystemOpCode : std::uint16_t {
   Ping = 0,
   GetRootVersion = 1,
@@ -80,8 +83,7 @@ inline SystemTelemetry &get_telemetry() {
   return metrics;
 }
 
-// Thread-safe runtime configuration cache populated ONCE at startup via CERN
-// ROOT C++ API
+// Thread-safe runtime configuration cache populated ONCE at startup via CERN ROOT C++ API
 class AdvancedRootConfigCache {
 public:
   static AdvancedRootConfigCache &instance() {
@@ -89,8 +91,7 @@ public:
     return cache;
   }
 
-  // Zero-allocation lookup returning string_view for instant SIMD payload
-  // serialization
+  // Zero-allocation lookup returning string_view for instant SIMD payload serialization
   std::string_view get(SystemOpCode code) const {
     const auto index = static_cast<std::size_t>(code);
     if (index < cache_.size() && !cache_[index].empty()) {
@@ -201,7 +202,7 @@ private:
   static std::string resolve_features() {
     static constexpr std::array<const char *, 8> known_features = {
         "cxx17", "root7",    "webgui", "http",
-        "imd",   "mathmore", "thread", "shared"};
+        "imt",   "mathmore", "thread", "shared"};
 
     std::string result;
 
@@ -219,8 +220,6 @@ private:
       }
     }
 
-    // Fallback default features if configuration string parsing yields no
-    // matches
     return result.empty() ? "core io hist graf tree mathcore thread ntuple"
                           : result;
   }
@@ -322,31 +321,47 @@ static void send_response(ShmLayout &shm, std::uint64_t job_id,
   std::memcpy(writer.data(), payload.data(), payload_len);
   reinterpret_cast<char *>(writer.data())[payload_len] = '\0';
 
+  writer.commit();
+
   BridgeMessage msg{};
-  msg.type = static_cast<decltype(msg.type)>(Platform::PacketType::EVT_OK);
+  msg.type = MsgType::SHM_REF;
+  msg.cmd = static_cast<std::uint16_t>(Proto::PacketType::EVT_OK);
 
   msg.job_id = static_cast<std::uint32_t>(job_id);
   msg.req_id = static_cast<std::uint32_t>(req_id);
-  msg.shm_ref.offset = writer.offset();
+  if (writer.offset() > 0xFFFFFFFFULL || payload_len + 1 > 0xFFFFFFFFULL) {
+    get_telemetry().shm_allocation_failures.fetch_add(1,
+                                                      std::memory_order_relaxed);
+    return;
+  }
+  msg.shm_ref.offset = static_cast<std::uint32_t>(writer.offset());
   msg.shm_ref.total_bytes = static_cast<std::uint32_t>(payload_len + 1);
+  msg.shm_ref.dtype = ShmDType::UInt8;
+  msg.shm_ref.ndim = 1;
+  msg.shm_ref.shape[0] = static_cast<std::uint32_t>(payload_len + 1);
 
-  shm.evt_ring->push(msg);
+  if (!shm.evt_ring->push(msg)) {
+    std::cerr << "[cmd_system] Warning: event ring full, response dropped for "
+                 "job_id "
+              << job_id << ".\n";
+    return;
+  }
   get_telemetry().requests_processed.fetch_add(1, std::memory_order_relaxed);
 }
 
 // Function pointer signature for system command dispatchers
 using SystemCommandHandler = void (*)(ShmLayout &,
-                                      const ::Platform::PacketHeader &);
+                                      const Proto::PacketHeader &);
 
 template <SystemOpCode OpCode>
-void handle_cached_config(ShmLayout &shm, const ::Platform::PacketHeader &pkt) {
+void handle_cached_config(ShmLayout &shm, const Proto::PacketHeader &pkt) {
   send_response(shm, pkt.job_id, pkt.req_id,
                 AdvancedRootConfigCache::instance().get(OpCode));
 }
 
 // Runtime Telemetry Status Reporter
 inline void handle_metrics(ShmLayout &shm,
-                           const ::Platform::PacketHeader &pkt) {
+                           const Proto::PacketHeader &pkt) {
   auto &tel = get_telemetry();
   std::string report =
       "processed=" + std::to_string(tel.requests_processed.load()) +
@@ -363,7 +378,7 @@ public:
     return dispatcher;
   }
 
-  void dispatch(ShmLayout &shm, const ::Platform::PacketHeader &pkt) const {
+  void dispatch(ShmLayout &shm, const Proto::PacketHeader &pkt) const {
     const auto opcode = static_cast<std::uint16_t>(pkt.flags & 0xFFFF);
 
     if (opcode >= static_cast<std::uint16_t>(SystemOpCode::Count)) {
@@ -443,7 +458,7 @@ private:
   }
 
   static void handle_unsupported(ShmLayout &shm,
-                                 const ::Platform::PacketHeader &pkt) {
+                                 const Proto::PacketHeader &pkt) {
     get_telemetry().invalid_opcodes.fetch_add(1, std::memory_order_relaxed);
     send_response(shm, pkt.job_id, pkt.req_id,
                   "ERROR: Unsupported system opcode");
@@ -454,18 +469,157 @@ private:
       table_;
 };
 
-// Standalone functions declared in cmd_system.h
-void handle_noop(ShmLayout &shm, const ::Platform::PacketHeader &pkt) {
+// Reads a request payload out of the region, bounds-checked.
+static std::string read_payload(const ShmLayout &shm,
+                                const Proto::PacketHeader &pkt) {
+  constexpr std::size_t kMaxCommand = 64 * 1024;
+  if (shm.base == nullptr || shm.header == nullptr || pkt.payload_size == 0 ||
+      pkt.payload_size > kMaxCommand) {
+    return {};
+  }
+  const std::uint64_t total = shm.header->total_size;
+  if (pkt.payload_offset == 0 || pkt.payload_offset >= total ||
+      pkt.payload_size > total - pkt.payload_offset) {
+    return {};
+  }
+  const auto *bytes =
+      reinterpret_cast<const char *>(shm.base + pkt.payload_offset);
+  std::size_t length = 0;
+  while (length < pkt.payload_size && bytes[length] != '\0') {
+    ++length;
+  }
+  return std::string(bytes, length);
+}
+
+// A std::string inside the interpreter that handlers can read directly.
+std::mutex &interpreter_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::string *interpreter_result_slot() {
+  static std::string *const slot = []() -> std::string * {
+  if (gInterpreter == nullptr) {
+    return nullptr;
+  }
+
+  const bool declared = gInterpreter->Declare(
+      "#include <string>\n"
+      "#include <sstream>\n"
+      "#include <type_traits>\n"
+      "namespace SphereBridge {\n"
+      "  inline std::string last_result;\n"
+      "  template <typename T> std::string ToText(const T &value) {\n"
+      "    std::ostringstream out; out << value; return out.str();\n"
+      "  }\n"
+      "  inline std::string ToText(const char *value) {\n"
+      "    return (value != nullptr) ? std::string(value) : std::string();\n"
+      "  }\n"
+      // Run() accepts void calls too, so Print()/Draw() no longer need a
+      // failed ToText() compilation before the statement fallback.
+      "  template <typename F> std::string Run(F &&f) {\n"
+      "    if constexpr (std::is_void_v<decltype(f())>) { f(); return \"OK\"; }\n"
+      "    else { return ToText(f()); }\n"
+      "  }\n"
+      "}\n");
+  if (!declared) {
+    return nullptr;
+  }
+
+  TInterpreter::EErrorCode error = TInterpreter::kNoError;
+  const Long_t address =
+      gInterpreter->ProcessLine("(void*)&SphereBridge::last_result", &error);
+  if (error != TInterpreter::kNoError || address == 0) {
+    return nullptr;
+  }
+
+  return reinterpret_cast<std::string *>(address);
+  }();
+  return slot;
+}
+
+// Runs one line through the ROOT interpreter and answers with its result.
+void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                       void *context) {
+  (void)context;
+
+  const std::string command = read_payload(shm, pkt);
+  if (command.empty()) {
+    get_telemetry().invalid_opcodes.fetch_add(1, std::memory_order_relaxed);
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  "ERROR: empty or unreadable interpreter command");
+    return;
+  }
+
+  if (gInterpreter == nullptr) {
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  "ERROR: the ROOT interpreter is not available");
+    return;
+  }
+
+  const std::lock_guard<std::mutex> interpreter_lock(interpreter_mutex());
+
+  std::string *slot = interpreter_result_slot();
+  if (slot == nullptr) {
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  "ERROR: could not prepare the interpreter result slot");
+    return;
+  }
+
+  slot->clear();
+  const std::string statement =
+      "SphereBridge::last_result = SphereBridge::Run([&]{ return (" + command +
+      "); });";
+
+  TInterpreter::EErrorCode error = TInterpreter::kNoError;
+  try {
+    (void)gInterpreter->ProcessLine(statement.c_str(), &error);
+  } catch (const std::exception &ex) {
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  std::string("ERROR: interpreter threw: ") + ex.what());
+    return;
+  } catch (...) {
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  "ERROR: interpreter threw an unknown exception");
+    return;
+  }
+
+  if (error != TInterpreter::kNoError) {
+    TInterpreter::EErrorCode bare_error = TInterpreter::kNoError;
+    try {
+      (void)gInterpreter->ProcessLine((command + ";").c_str(), &bare_error);
+    } catch (...) {
+      bare_error = TInterpreter::kFatal;
+    }
+
+    if (bare_error != TInterpreter::kNoError) {
+      send_response(shm, pkt.job_id, pkt.req_id,
+                    "ERROR: interpreter refused: " + command);
+      return;
+    }
+    send_response(shm, pkt.job_id, pkt.req_id, "OK");
+    return;
+  }
+
+  // Fallback default features
+  const std::string answer = slot->empty() ? std::string("OK") : *slot;
+  send_response(shm, pkt.job_id, pkt.req_id, answer);
+}
+
+void handle_noop(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
   send_response(shm, pkt.job_id, pkt.req_id, "PONG");
 }
 
-void handle_version(ShmLayout &shm, const ::Platform::PacketHeader &pkt) {
+void handle_version(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
   send_response(
       shm, pkt.job_id, pkt.req_id,
       AdvancedRootConfigCache::instance().get(SystemOpCode::GetRootVersion));
 }
 
-void handle_uptime(ShmLayout &shm, const ::Platform::PacketHeader &pkt) {
+void handle_uptime(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
   const auto now = std::chrono::steady_clock::now();
   const auto uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(
                               now - g_engine_start_time)
@@ -474,8 +628,33 @@ void handle_uptime(ShmLayout &shm, const ::Platform::PacketHeader &pkt) {
                 "uptime_seconds=" + std::to_string(uptime_sec));
 }
 
-void handle_system(ShmLayout &shm, const ::Platform::PacketHeader &pkt) {
+void handle_system(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
   SystemCommandDispatcher::instance().dispatch(shm, pkt);
+}
+
+// Installs the handlers above into the process-wide CommandRegistry.
+void warm_up() {
+  (void)AdvancedRootConfigCache::instance();
+  // Instantiating Run()/ToText() here costs the autoparse once, on the main
+  // thread, instead of on the first client command.
+  if (interpreter_result_slot() != nullptr && gInterpreter != nullptr) {
+    TInterpreter::EErrorCode error = TInterpreter::kNoError;
+    (void)gInterpreter->ProcessLine(
+        "SphereBridge::last_result = "
+        "SphereBridge::Run([&]{ return (gROOT->GetVersion()); });",
+        &error);
+  }
+}
+
+void register_all() {
+  auto &registry = CommandRegistry::instance();
+  registry.register_command(Proto::PacketType::CMD_PING, &handle_noop);
+  registry.register_command(Proto::PacketType::CMD_SYS_NOOP, &handle_noop);
+  registry.register_command(Proto::PacketType::CMD_SYS_VERSION, &handle_version);
+  registry.register_command(Proto::PacketType::CMD_SYS_UPTIME, &handle_uptime);
+  registry.register_command(Proto::PacketType::CMD_SYS_CONFIG, &handle_system);
+  registry.register_command(Proto::PacketType::CMD_CLING_EXEC, &handle_cling_exec);
 }
 
 } // namespace sys

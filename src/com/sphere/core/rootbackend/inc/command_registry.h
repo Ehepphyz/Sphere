@@ -1,83 +1,141 @@
 // command_registry.h
 
-#ifndef COMMAND_REGISTRY_H
-#define COMMAND_REGISTRY_H
+// Dispatch table mapping packet opcodes to handlers.
+
+
+#pragma once
 
 #include "packets.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
-#include <functional>
-#include <utility>
 
 namespace Sphere {
 
-// Forward declare ShmLayout to avoid circular dependencies with shm_layout.h
 struct ShmLayout;
 
 /**
- * Handler function signature for incoming packet commands.
- * Accepts a reference to the shared memory layout and the packet header.
+ * Handler signature
  */
-using CommandHandler =
-    std::function<void(ShmLayout &shm, const Platform::PacketHeader &pkt)>;
+using CommandHandler = void (*)(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                                void *context);
 
 /**
- * Task priority levels for scheduler queues.
+ * Scheduling tier for a command
  */
-enum class TaskPriority : std::uint8_t { Low = 0, Normal = 1, High = 2 };
+enum class TaskPriority : std::uint8_t { LOW = 0, NORMAL = 1, HIGH = 2 };
 
 /**
- * Structure holding command metadata and its associated execution
- * callback
+ * Number of opcodes the table can hold
+ */
+inline constexpr std::size_t COMMAND_TABLE_SIZE = 512;
+
+/**
+ * One table entry.
  */
 struct CommandEntry {
   CommandHandler handler{nullptr};
-  TaskPriority priority{TaskPriority::Normal};
+  void *context{nullptr};
+  TaskPriority priority{TaskPriority::NORMAL};
 };
 
 /**
- * Thread-safe Singleton Registry mapping packet command types to
- * handlers
+ * Process-wide command table
  */
 class CommandRegistry {
 public:
-  /**
-   * Access the global static instance of the CommandRegistry
-   */
   static CommandRegistry &instance() noexcept {
-    static CommandRegistry reg;
-    return reg;
+    static CommandRegistry registry;
+    return registry;
   }
 
   /**
-   * Registers a command handler for a given packet type ID
+   * Registers a handler
    */
-  void register_command(std::uint8_t type, CommandHandler handler,
-                        TaskPriority priority = TaskPriority::Normal) {
-    registry_[type] = CommandEntry{std::move(handler), priority};
+  bool register_command(Proto::PacketType type, CommandHandler handler,
+                        void *context = nullptr,
+                        TaskPriority priority = TaskPriority::NORMAL) noexcept {
+    const std::size_t index = static_cast<std::size_t>(type);
+    if (index >= COMMAND_TABLE_SIZE) {
+      return false;
+    }
+    contexts_[index].store(context, std::memory_order_relaxed);
+    priorities_[index].store(priority, std::memory_order_relaxed);
+    handlers_[index].store(handler, std::memory_order_release);
+    return true;
+  }
+
+  /// Removes any handler registered for `type`.
+  void unregister_command(Proto::PacketType type) noexcept {
+    const std::size_t index = static_cast<std::size_t>(type);
+    if (index < COMMAND_TABLE_SIZE) {
+      handlers_[index].store(nullptr, std::memory_order_release);
+    }
+  }
+
+  /// Snapshot of the entry for `type`; handler is null when none is registered.
+  [[nodiscard]] CommandEntry get(Proto::PacketType type) const noexcept {
+    const std::size_t index = static_cast<std::size_t>(type);
+    if (index >= COMMAND_TABLE_SIZE) {
+      return CommandEntry{};
+    }
+    CommandEntry entry{};
+    entry.handler = handlers_[index].load(std::memory_order_acquire);
+    entry.context = contexts_[index].load(std::memory_order_relaxed);
+    entry.priority = priorities_[index].load(std::memory_order_relaxed);
+    return entry;
+  }
+
+  /// Priority for `type`, or NORMAL when nothing is registered.
+  [[nodiscard]] TaskPriority priority_of(Proto::PacketType type) const noexcept {
+    const std::size_t index = static_cast<std::size_t>(type);
+    if (index >= COMMAND_TABLE_SIZE) {
+      return TaskPriority::NORMAL;
+    }
+    return priorities_[index].load(std::memory_order_relaxed);
   }
 
   /**
-   * Retrieves the command entry registered for a specific type ID
+   * Invokes the handler for pkt
    */
-  [[nodiscard]] const CommandEntry &get(std::uint8_t type) const noexcept {
-    return registry_[type];
+  bool dispatch(ShmLayout &shm, const Proto::PacketHeader &pkt) const noexcept {
+    const std::size_t index = static_cast<std::size_t>(pkt.type);
+    if (index >= COMMAND_TABLE_SIZE) {
+      return false;
+    }
+    const CommandHandler handler =
+        handlers_[index].load(std::memory_order_acquire);
+    if (handler == nullptr) {
+      return false;
+    }
+    handler(shm, pkt, contexts_[index].load(std::memory_order_relaxed));
+    return true;
+  }
+
+  /// Number of registered handlers, for startup diagnostics.
+  [[nodiscard]] std::size_t registered_count() const noexcept {
+    std::size_t count = 0;
+    for (const auto &slot : handlers_) {
+      if (slot.load(std::memory_order_relaxed) != nullptr) {
+        ++count;
+      }
+    }
+    return count;
   }
 
 private:
   CommandRegistry() = default;
   ~CommandRegistry() = default;
 
-  // Non-copyable and non-movable singleton interface
   CommandRegistry(const CommandRegistry &) = delete;
   CommandRegistry &operator=(const CommandRegistry &) = delete;
   CommandRegistry(CommandRegistry &&) = delete;
   CommandRegistry &operator=(CommandRegistry &&) = delete;
 
-  std::array<CommandEntry, 256> registry_{};
+  std::array<std::atomic<CommandHandler>, COMMAND_TABLE_SIZE> handlers_{};
+  std::array<std::atomic<void *>, COMMAND_TABLE_SIZE> contexts_{};
+  std::array<std::atomic<TaskPriority>, COMMAND_TABLE_SIZE> priorities_{};
 };
 
 } // namespace Sphere
-
-#endif // COMMAND_REGISTRY_H

@@ -1,6 +1,7 @@
 // commands/cmd_ttree.cpp
 
 #include "cmd_ttree.h"
+#include "command_registry.h"
 #include "TTreehandlers/ttree_common.h"
 #include "lockfree_ring.h"
 
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -142,14 +144,12 @@ static std::shared_mutex g_trees_mutex;
 static std::once_flag g_imt_init_flag;
 
 /**
- * Initializes global ROOT Implicit Multi-Threading once across the process
- * lifetime.
- */
+* Initializes global ROOT Implicit Multi-Threading once across the process lifetime.
+*/
 void ensure_root_imt_enabled() {
   std::call_once(g_imt_init_flag, []() {
+    ROOT::EnableThreadSafety();
     ROOT::EnableImplicitMT();
-    std::cout << "[CmdTTree] ROOT Implicit Multi-Threading (IMT) successfully "
-                 "enabled.\n";
   });
 }
 
@@ -158,7 +158,6 @@ void ensure_root_imt_enabled() {
 // ============================================================================
 // 3. Apache Arrow C Data Interface Exposer & Zero-Copy Helpers
 // ============================================================================
-
 struct ArrowSchemaBridge {
   const char *format;
   const char *name;
@@ -198,9 +197,7 @@ static void release_arrow_array(ArrowArrayBridge *array) {
   array->release = nullptr;
 }
 
-/**
- * Generic scalar column exporter to Apache Arrow layout.
- */
+// Generic scalar column exporter to Apache Arrow layout.
 template <typename T>
 void export_numeric_column_to_arrow(void *shm_buffer, const T *data_ptr,
                                     std::size_t count, const char *column_name,
@@ -253,6 +250,7 @@ void export_zero_copy_branch_to_arrow(void *shm_buffer, TBranch *branch,
   if (!branch) {
     return;
   }
+  // Touch entry to populate memory basket
   branch->GetEntry(entry);
   const float *raw_basket_ptr =
       reinterpret_cast<const float *>(branch->GetAddress());
@@ -304,7 +302,6 @@ void export_vector_branch_to_arrow(void *shm_buffer,
 // ============================================================================
 // 4. Lifecycle Management & Registration
 // ============================================================================
-
 void register_tree(std::uint32_t job_id, TTree *tree) {
   register_tree_handle(job_id, tree);
 }
@@ -313,12 +310,12 @@ void register_tree_handle(std::uint32_t job_id, TTree *tree) {
   std::unique_lock<std::shared_mutex> lock(g_trees_mutex);
 
   if (g_trees.find(job_id) != g_trees.end()) {
-    std::cout << "[CmdTTree] Warning: job_id already registered: " << job_id
+    std::cerr << "[CmdTTree] Warning: job_id already registered: " << job_id
               << "\n";
   }
 
   if (!tree) {
-    std::cout << "[CmdTTree] Error: null TTree pointer for job_id: " << job_id
+    std::cerr << "[CmdTTree] Error: null TTree pointer for job_id: " << job_id
               << "\n";
     return;
   }
@@ -333,8 +330,6 @@ void register_tree_handle(std::uint32_t job_id, TTree *tree) {
   constexpr std::int64_t kMaxMemoryBuffer =
       100 * 1024 * 1024; // 100 MB max buffer
   tree->OptimizeBaskets(kMaxMemoryBuffer, 1.1, "d");
-  std::cout << "[CmdTTree] Optimized tree basket layout for L3/CPU cache "
-               "alignment.\n";
 
   // Level 2 Optimization: Asynchronous Double-Buffered Prefetching
   constexpr std::int64_t kCacheSizeBytes =
@@ -348,8 +343,6 @@ void register_tree_handle(std::uint32_t job_id, TTree *tree) {
         dynamic_cast<TTreeCache *>(tree->GetReadCache(parent_file, true));
     if (ctx->native_cache) {
       ctx->native_cache->SetLearnEntries(10);
-      std::cout << "[CmdTTree] Async TTreeCache prefetching activated on "
-                   "parent file.\n";
     }
   }
 
@@ -357,9 +350,6 @@ void register_tree_handle(std::uint32_t job_id, TTree *tree) {
   ctx->reader = std::make_unique<TTreeReader>(tree);
 
   g_trees[job_id] = ctx;
-  std::cout << "[CmdTTree] Registered TTree context with advanced features for "
-               "job_id: "
-            << job_id << "\n";
 }
 
 void unregister_tree(std::uint32_t job_id) { unregister_tree_handle(job_id); }
@@ -373,8 +363,6 @@ void unregister_tree_handle(std::uint32_t job_id) {
     }
     g_trees.erase(it);
   }
-  std::cout << "[CmdTTree] Unregistered TTree context for job_id: " << job_id
-            << "\n";
 }
 
 bool has_tree(std::uint32_t job_id) {
@@ -396,7 +384,6 @@ void shutdown_thread_pool() { g_thread_pool.shutdown(); }
 // ============================================================================
 // 5. Speculative Branch Prefetching & Hit Tracking
 // ============================================================================
-
 void record_and_prefetch_access(std::uint32_t job_id,
                                 std::string_view branch_name) {
   const std::string b_name(branch_name);
@@ -486,9 +473,6 @@ void record_and_prefetch_access(std::uint32_t job_id,
           ctx->native_cache->AddBranch(branch, kTRUE);
         }
 
-        // Touch entry to populate memory basket
-        branch->GetEntry(0);
-
         {
           std::unique_lock<std::shared_mutex> cache_lock(ctx->cache_mutex);
           ctx->active_cached_branches.insert(prefetch_candidate);
@@ -501,7 +485,6 @@ void record_and_prefetch_access(std::uint32_t job_id,
 // ============================================================================
 // 6. Zero-Copy Memory Access via TTreeReaderArray
 // ============================================================================
-
 void export_branch_zero_copy(std::uint32_t job_id, std::string_view branch_name,
                              std::int64_t entry, void *shm_buffer) {
   const std::string b_name(branch_name);
@@ -543,7 +526,6 @@ void export_branch_zero_copy(std::uint32_t job_id, std::string_view branch_name,
 // ============================================================================
 // 7. Dynamic JIT Compilation & Execution (Cling / gInterpreter)
 // ============================================================================
-
 bool register_and_compile_jit_filter(std::string_view function_name,
                                      std::string_view cpp_code) {
   const std::string fn_name(function_name);
@@ -551,13 +533,11 @@ bool register_and_compile_jit_filter(std::string_view function_name,
 
   bool success = gInterpreter->Declare(code.c_str());
   if (!success) {
-    std::cout << "[CmdTTree JIT] Error: Failed to compile JIT function: "
+    std::cerr << "[CmdTTree JIT] Error: Failed to compile JIT function: "
               << fn_name << "\n";
     return false;
   }
 
-  std::cout << "[CmdTTree JIT] Successfully JIT-compiled C++ function: "
-            << fn_name << "\n";
   return true;
 }
 
@@ -608,7 +588,6 @@ void execute_jit_filter_on_tree(std::uint32_t job_id,
 // ============================================================================
 // 8. Cluster-Aware Parallel Tree Processing
 // ============================================================================
-
 void process_tree_by_clusters(
     std::uint32_t job_id,
     const std::function<void(std::int64_t start_entry, std::int64_t end_entry)>
@@ -643,8 +622,6 @@ void process_tree_by_clusters(
     std::int64_t end_entry =
         (next_start > start_entry) ? next_start : total_entries;
 
-    // Fallback: Ensure forward progress if cluster boundaries cannot be
-    // resolved
     if (end_entry <= start_entry) {
       end_entry = std::min<std::int64_t>(start_entry + 10000, total_entries);
     }
@@ -661,7 +638,6 @@ void process_tree_by_clusters(
 // ============================================================================
 // 9. JSON Utilities
 // ============================================================================
-
 std::string escape_json(const char *s) {
   std::string out;
   if (!s) {
@@ -700,27 +676,70 @@ std::string escape_json(const char *s) {
   return out;
 }
 
+std::string read_payload_text(const ShmLayout &shm,
+                              const Proto::PacketHeader &pkt) {
+  constexpr std::size_t kMaxPayloadText = 64 * 1024;
+  if (shm.base == nullptr || shm.header == nullptr || pkt.payload_size == 0 ||
+      pkt.payload_size > kMaxPayloadText) {
+    return {};
+  }
+
+  const std::uint64_t total = shm.header->total_size;
+  if (pkt.payload_offset >= total ||
+      pkt.payload_size > total - pkt.payload_offset) {
+    return {};
+  }
+
+  const auto *bytes =
+      reinterpret_cast<const char *>(shm.base + pkt.payload_offset);
+  std::size_t length = 0;
+  while (length < pkt.payload_size && bytes[length] != '\0') {
+    ++length;
+  }
+  return std::string(bytes, length);
+}
+
 // ============================================================================
 // 10. Resilient Response Sender
 // ============================================================================
-
-void send_response(ShmLayout &shm, const Platform::PacketHeader &req,
-                   Platform::PacketType type, std::uint16_t flags,
-                   std::uint32_t payload_size, ResponseStatus status) {
+void send_response(ShmLayout &shm, const Proto::PacketHeader &req,
+                   Proto::PacketType type, std::uint16_t flags,
+                   std::uint32_t payload_size, ResponseStatus status,
+                   std::uint64_t payload_offset, ShmDType dtype) {
   if (!shm.evt_ring) {
     return;
   }
 
   BridgeMessage msg{};
-  msg.type = MsgType::INLINE_DATA;
   msg.flags = flags;
-  msg.payload_size = static_cast<std::uint8_t>(
-      std::min<std::uint32_t>(payload_size, sizeof(msg.inline_bytes)));
   msg.job_id = req.job_id;
   msg.req_id = req.req_id;
+  msg.cmd = static_cast<std::uint16_t>(type);
 
-  msg.inline_bytes[0] = static_cast<std::uint8_t>(type);
-  msg.inline_bytes[1] = static_cast<std::uint8_t>(status);
+  if (payload_offset != 0) {
+    // A committed heap chunk: publish where it is, not just how big it is.
+    if (payload_offset > 0xFFFFFFFFULL || payload_size > 0xFFFFFFFFU) {
+      msg.type = MsgType::INLINE_DATA;
+      msg.cmd = static_cast<std::uint16_t>(Proto::PacketType::EVT_ERROR);
+      msg.payload_size = 2;
+      msg.inline_bytes[0] =
+          static_cast<std::uint8_t>(ResponseStatus::ERROR_GENERIC);
+      msg.inline_bytes[1] = 0;
+    } else {
+      msg.type = MsgType::SHM_REF;
+      msg.shm_ref.offset = static_cast<std::uint32_t>(payload_offset);
+      msg.shm_ref.total_bytes = payload_size;
+      msg.shm_ref.dtype = dtype;
+      msg.shm_ref.ndim = 1;
+      msg.shm_ref.shape[0] = payload_size;
+    }
+  } else {
+    msg.type = MsgType::INLINE_DATA;
+    const auto code = static_cast<std::uint16_t>(status);
+    msg.inline_bytes[0] = static_cast<std::uint8_t>(code & 0xFFu);
+    msg.inline_bytes[1] = static_cast<std::uint8_t>((code >> 8) & 0xFFu);
+    msg.payload_size = 2;
+  }
 
   constexpr int max_retries = 100;
   bool pushed = false;
@@ -734,11 +753,31 @@ void send_response(ShmLayout &shm, const Platform::PacketHeader &req,
   }
 
   if (!pushed) {
-    std::cout
+    std::cerr
         << "[CmdTTree] Error: Event ring buffer full after maximum retries. "
            "Dropped response packet for job_id: "
         << req.job_id << "\n";
   }
+}
+
+void register_all() {
+  auto &registry = CommandRegistry::instance();
+  registry.register_command(Proto::PacketType::CMD_TTREE_INSPECT, &handle_inspect);
+  registry.register_command(Proto::PacketType::CMD_TTREE_QUERY_ENTRIES,
+                            &handle_query_entries);
+  registry.register_command(Proto::PacketType::CMD_TTREE_SCAN_BRANCHES,
+                            &handle_scan_branches);
+  registry.register_command(Proto::PacketType::CMD_TTREE_GET_ENTRY,
+                            &handle_get_entry);
+  registry.register_command(Proto::PacketType::CMD_TTREE_READ_COLUMN,
+                            &handle_read_column);
+  registry.register_command(Proto::PacketType::CMD_TTREE_COMPUTE_STATS,
+                            &handle_compute_stats);
+  registry.register_command(Proto::PacketType::CMD_TTREE_APPLY_FILTER,
+                            &handle_apply_filter, nullptr, TaskPriority::HIGH);
+  // Schema discovery has always meant "describe this tree".
+  registry.register_command(Proto::PacketType::CMD_SCHEMA_DISCOVER,
+                            &handle_scan_branches);
 }
 
 } // namespace Sphere::cmd::ttree

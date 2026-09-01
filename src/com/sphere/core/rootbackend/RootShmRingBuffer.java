@@ -5,53 +5,77 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.VarHandle;
 
 /**
- * Low-latency Shared Memory (SHM) Ring Buffer implementation for inter-process communications.
- * Uses explicit FFM memory ordering barriers for zero-copy lock-free polling.
- */
+* Low-latency Shared Memory (SHM) Ring Buffer implementation for inter-process communications.
+* Uses explicit FFM memory ordering barriers for zero-copy lock-free polling.
+*/
 public final class RootShmRingBuffer {
-    private static final long HEAD_OFFSET = 0L;
-    private static final long TAIL_OFFSET = 8L;
-    private static final long CAPACITY_OFFSET = 16L;
-    private static final long PAYLOAD_START_OFFSET = 64L; // Cache-line aligned (64 bytes)
-    private static final long SLOT_SIZE = 256L;
 
     // Direct VarHandle for atomic off-heap memory ordering access
     private static final VarHandle LONG_HANDLE = ValueLayout.JAVA_LONG.varHandle();
 
-    private final MemorySegment shmSegment;
+    private final MemorySegment ring;
     private final long capacity;
+    private final long mask;
 
-    public RootShmRingBuffer(MemorySegment shmSegment) {
-        this.shmSegment = shmSegment;
-        this.capacity = shmSegment.get(ValueLayout.JAVA_LONG, CAPACITY_OFFSET);
+    public RootShmRingBuffer(MemorySegment ringSegment, long capacity) {
+        if (capacity <= 0 || Long.bitCount(capacity) != 1) {
+            throw new IllegalArgumentException(
+                "Ring capacity must be a power of two, got " + capacity
+                + ". The partition table stores a slot COUNT, not an exponent.");
+        }
+        this.ring = ringSegment;
+        this.capacity = capacity;
+        this.mask = capacity - 1L;
     }
 
-    /**
-     * Polls the next available response from the ring buffer in a lock-free manner
-     */
-    public boolean tryPollResponse(ResponseConsumer consumer) {
+    public boolean isInitialized() {
+        return (long) LONG_HANDLE.getAcquire(ring, RootBackend.RING_INIT_MAGIC_OFFSET)
+               == RootBackend.RING_INIT_MAGIC;
+    }
+
+    public long capacity() {
+        return capacity;
+    }
+
+    public long sizeApprox() {
         // Acquire memory semantics for volatile atomic read across processes
-        long currentHead = (long) LONG_HANDLE.getAcquire(shmSegment, HEAD_OFFSET);
-        long currentTail = (long) LONG_HANDLE.getAcquire(shmSegment, TAIL_OFFSET);
+        long enq = (long) LONG_HANDLE.getAcquire(ring, RootBackend.RING_ENQUEUE_POS_OFFSET);
+        long deq = (long) LONG_HANDLE.getAcquire(ring, RootBackend.RING_DEQUEUE_POS_OFFSET);
+        return Math.max(0L, enq - deq);
+    }
 
-        if (currentHead == currentTail) {
-            return false;
+    public boolean tryPollResponse(ResponseConsumer consumer) {
+        long pos = (long) LONG_HANDLE.getVolatile(ring, RootBackend.RING_DEQUEUE_POS_OFFSET);
+
+        for (;;) {
+            long cellOffset = RootBackend.RING_BUFFER_BASE_OFFSET + ((pos & mask) * RootBackend.CELL_SIZE);
+            long seqOffset = cellOffset + RootBackend.CELL_SEQ_OFFSET;
+            long dataOffset = cellOffset + RootBackend.CELL_DATA_OFFSET;
+
+            long seq = (long) LONG_HANDLE.getVolatile(ring, seqOffset);
+            long dif = seq - (pos + 1L);
+
+            if (dif == 0) {
+                long witness = (long) LONG_HANDLE.compareAndExchange(
+                    ring, RootBackend.RING_DEQUEUE_POS_OFFSET, pos, pos + 1L);
+
+                if (witness == pos) {
+                    consumer.accept(ring.asSlice(dataOffset, RootBackend.BRIDGE_MESSAGE_SIZE));
+                    LONG_HANDLE.setRelease(ring, seqOffset, pos + mask + 1L);
+                    return true;
+                }
+                pos = witness;
+            } else if (dif < 0) {
+                return false; // empty
+            } else {
+                pos = (long) LONG_HANDLE.getVolatile(ring, RootBackend.RING_DEQUEUE_POS_OFFSET);
+            }
+            Thread.onSpinWait();
         }
-
-        long slotIndex = currentHead % capacity;
-        long slotOffset = PAYLOAD_START_OFFSET + (slotIndex * SLOT_SIZE);
-
-        MemorySegment slotSegment = shmSegment.asSlice(slotOffset, SLOT_SIZE);
-
-        consumer.accept(slotSegment);
-
-        // Release memory semantics to update head sequence index safely
-        LONG_HANDLE.setRelease(shmSegment, HEAD_OFFSET, currentHead + 1);
-        return true;
     }
 
     @FunctionalInterface
     public interface ResponseConsumer {
-        void accept(MemorySegment payload);
+        void accept(MemorySegment message);
     }
 }

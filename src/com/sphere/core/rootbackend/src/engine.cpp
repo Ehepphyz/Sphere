@@ -1,50 +1,33 @@
 // engine.cpp
 
 #include "engine.h"
-#include "cmd_system.h"
 #include "command_registry.h"
-#include "lockfree_ring.h"
+#include "logger.h"
 #include "span_scope.h"
+#include "utils.h"
 
 #include <algorithm>
-#include <array>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <iostream>
-#include <thread>
-#include <utility>
+#include <optional>
+#include <string>
 
-// -----------------------------------------------------------------------------
-// Cross-Platform SIMD & Platform Headers
-// -----------------------------------------------------------------------------
-#if defined(__AVX2__) || defined(__AVX512F__)
-#include <immintrin.h>
-#endif
-
-#if defined(__aarch64__)
-#include <arm_sve.h>
+#if defined(HAVE_NUMA) && defined(__linux__)
+#include <numa.h>
+#define SPHERE_HAVE_NUMA 1
+#else
+#define SPHERE_HAVE_NUMA 0
 #endif
 
 #if defined(__linux__)
-#include <numa.h>
 #include <pthread.h>
 #include <sched.h>
 #elif defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__)
-#include <mach/mach_types.h>
 #include <mach/thread_act.h>
 #include <mach/thread_policy.h>
 #include <pthread.h>
-#endif
-
-#if defined(__GNUC__) || defined(__clang__)
-#define TARGET_AVX2 __attribute__((target("avx2")))
-#define TARGET_AVX512 __attribute__((target("avx512f,avx512bw")))
-#else
-#define TARGET_AVX2
-#define TARGET_AVX512
 #endif
 
 namespace Sphere {
@@ -53,146 +36,131 @@ namespace {
 
 constexpr std::size_t WORKER_BATCH_MAX = ENGINE_WORKER_BATCH_MAX;
 constexpr std::size_t WORK_STEAL_THRESHOLD = 4;
-
-// Default telemetry ring buffer capacity in slots
-constexpr std::uint64_t SPAN_RING_CAPACITY = 4096;
-
-// Capacity exponent (2^10 = 1024 elements) to prevent bit-shift overflow
 constexpr std::size_t PRIORITY_QUEUE_POW2 = 10;
+constexpr auto TASK_DEADLINE = std::chrono::milliseconds(500);
 
-/**
- * Custom deleter implementation for NUMA-allocated priority queues.
- */
-void free_numa_queue(void *ptr, [[maybe_unused]] std::size_t size) noexcept {
-  if (ptr == nullptr) {
-    return;
-  }
-#if defined(__linux__)
-  if (numa_available() >= 0) {
-    numa_free(ptr, size);
-    return;
-  }
-#endif
-  std::free(ptr);
-}
-
-/**
- * Automatically detects hardware NUMA nodes available on the host system.
- */
+/// Detects the NUMA node count, honouring a NUMA_NODES override.
 int detect_numa_nodes() noexcept {
-  const char *env = std::getenv("NUMA_NODES");
-  if (env != nullptr) {
-    int v = std::atoi(env);
-    if (v > 0) {
-      return v;
+  if (const char *env = std::getenv("NUMA_NODES"); env != nullptr) {
+    const int value = std::atoi(env);
+    if (value > 0) {
+      return value;
     }
   }
 
-#if defined(__linux__)
-  if (numa_available() >= 0) {
-    int max_node = numa_max_node();
+#if SPHERE_HAVE_NUMA
+  if (::numa_available() >= 0) {
+    const int max_node = ::numa_max_node();
     if (max_node >= 0) {
       return max_node + 1;
     }
   }
 #endif
 
-  const int hardware_threads =
-      static_cast<int>(std::thread::hardware_concurrency());
-  if (hardware_threads <= 0) {
-    return 1;
-  }
-  if (hardware_threads >= 64) {
-    return 4;
-  }
-  if (hardware_threads >= 32) {
-    return 2;
-  }
   return 1;
 }
 
-/**
- * L1/L2 cache prefetching helper function.
- */
-inline void prefetch_memory(const void *ptr) noexcept {
-#if defined(__GNUC__) || defined(__clang__)
-  __builtin_prefetch(ptr, 0, 3);
-#elif defined(_M_X64) || defined(_M_IX86)
-  _mm_prefetch(reinterpret_cast<const char *>(ptr), _MM_HINT_T0);
-#else
-  (void)ptr;
-#endif
+/// Exponential idle backoff, bounded by IDLE_BACKOFF_MAX_US.
+std::uint32_t next_backoff(std::uint32_t current) noexcept {
+  const std::uint32_t doubled = current * 2;
+  return (doubled > IDLE_BACKOFF_MAX_US) ? IDLE_BACKOFF_MAX_US : doubled;
 }
 
 } // namespace
 
+// ============================================================================
+// NumaDeleter
+// ============================================================================
+
 void NumaDeleter::operator()(void *ptr) const noexcept {
-  if (ptr != nullptr) {
-    using PriorityQueue = ShmMpmcRing<ScheduledTask, PRIORITY_QUEUE_POW2>;
-    reinterpret_cast<PriorityQueue *>(ptr)->~PriorityQueue();
-    free_numa_queue(ptr, size);
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Global Runtime Free Functions
-// -----------------------------------------------------------------------------
-
-void Engine::rebalance_numa_queues() {
-  // Free function invoked by RootRuntime to rebalance work across NUMA nodes
-}
-
-void Engine::attach_runtime(ShmLayout &layout) {
-  if (layout.header != nullptr) {
-    layout.header->heartbeat_cpp.fetch_add(1, std::memory_order_relaxed);
-  }
-}
-
-void Engine::detach_runtime(ShmLayout &layout) { (void)layout; }
-
-bool Engine::replay_next_journal_entry(BridgeMessage &msg) {
-  (void)msg;
-  return false;
-}
-
-void Engine::heap_defragment_tick() {
-  // Routine tick called during runtime loop for memory maintenance
-}
-
-// -----------------------------------------------------------------------------
-// Engine Constructors & Destructor
-// -----------------------------------------------------------------------------
-
-Engine::Engine(bool create_shm)
-    : shm_(init_shm(create_shm)), numa_nodes_(detect_numa_nodes()) {
-  if (create_shm && shm_.header != nullptr) {
-    if (shm_.cmd_ring != nullptr)
-      shm_.cmd_ring->init();
-    if (shm_.evt_ring != nullptr)
-      shm_.evt_ring->init();
-
-    // Initialize lock-free MPMC telemetry Span Ring in Shared Memory
-    log::span_ring_init(span_ring_, SPAN_RING_CAPACITY);
+  if (ptr == nullptr) {
+    return;
   }
 
-  init_priority_queues();
-  init_memory_pools();
+  using PriorityQueue = ShmMpmcRing<ScheduledTask, PRIORITY_QUEUE_POW2>;
+  reinterpret_cast<PriorityQueue *>(ptr)->~PriorityQueue();
+
+#if SPHERE_HAVE_NUMA
+  if (from_numa) {
+    ::numa_free(ptr, size);
+    return;
+  }
+#endif
+  ::operator delete(ptr, std::align_val_t{alignof(PriorityQueue)});
 }
+
+// ============================================================================
+// Construction
+// ============================================================================
 
 Engine::Engine(ShmLayout &layout)
-    : shm_(layout), numa_nodes_(detect_numa_nodes()) {
+    : shm_(&layout), numa_nodes_(detect_numa_nodes()) {
+  init_numa_topology();
   init_priority_queues();
-  init_memory_pools();
+
+  if (shm_->span_ring != nullptr && shm_->header != nullptr) {
+    span_ring_ = log::span_ring_view(shm_->span_ring,
+                                     shm_->header->size_span_ring,
+                                     shm_->header->span_ring_capacity);
+  }
 }
 
-Engine::~Engine() {
-  shutdown_memory_pools();
-  stop();
+Engine::~Engine() { stop(); }
+
+void Engine::init_numa_topology() {
+#if SPHERE_HAVE_NUMA
+  using_numa_ = (::numa_available() >= 0);
+#else
+  using_numa_ = false;
+#endif
+  node_hotness_ = std::vector<AlignedAtomicCounter>(
+      static_cast<std::size_t>(std::max(1, numa_nodes_)));
 }
 
-// -----------------------------------------------------------------------------
-// Execution & Lifecycle Control
-// -----------------------------------------------------------------------------
+void Engine::init_priority_queues() {
+  queues_per_node_high_.clear();
+  queues_per_node_normal_.clear();
+  queues_per_node_low_.clear();
+
+  using PQ = ShmMpmcRing<ScheduledTask, PRIORITY_QUEUE_POW2>;
+
+  auto make_queue = [this](int node) -> NumaPriorityQueuePtr {
+
+    (void)this;
+
+    PQ *queue = nullptr;
+    bool from_numa = false;
+
+#if SPHERE_HAVE_NUMA
+    if (using_numa_) {
+      if (void *raw = ::numa_alloc_onnode(sizeof(PQ), node); raw != nullptr) {
+        queue = ::new (raw) PQ();
+        from_numa = true;
+      }
+    }
+#else
+    (void)node;
+#endif
+
+    if (queue == nullptr) {
+      void *raw = ::operator new(sizeof(PQ), std::align_val_t{alignof(PQ)});
+      queue = ::new (raw) PQ();
+    }
+
+    queue->init();
+    return NumaPriorityQueuePtr(queue, NumaDeleter{sizeof(PQ), from_numa});
+  };
+
+  for (int node = 0; node < numa_nodes_; ++node) {
+    queues_per_node_high_.push_back(make_queue(node));
+    queues_per_node_normal_.push_back(make_queue(node));
+    queues_per_node_low_.push_back(make_queue(node));
+  }
+}
+
+// ============================================================================
+// Lifecycle
+// ============================================================================
 
 void Engine::run() {
   if (running_.exchange(true, std::memory_order_acq_rel)) {
@@ -200,22 +168,21 @@ void Engine::run() {
   }
 
   const int hardware_threads =
-      std::max(2u, std::thread::hardware_concurrency());
+      std::max(2, static_cast<int>(std::thread::hardware_concurrency()));
   const int workers_per_node =
       std::max(1, hardware_threads / std::max(1, numa_nodes_));
 
-  for (int n = 0; n < numa_nodes_; ++n) {
+  for (int node = 0; node < numa_nodes_; ++node) {
     for (int i = 0; i < workers_per_node; ++i) {
-      int global_worker_id = i + (n * workers_per_node);
-      workers_.emplace_back(
-          [this, global_worker_id, n](std::stop_token stop_token) {
-            this->worker_loop(stop_token, global_worker_id, n);
-          });
+      const int worker_id = i + (node * workers_per_node);
+      workers_.emplace_back([this, worker_id, node](std::stop_token token) {
+        worker_loop(std::move(token), worker_id, node);
+      });
     }
   }
 
   scheduler_thread_ = std::jthread(
-      [this](std::stop_token stop_token) { this->scheduler_loop(stop_token); });
+      [this](std::stop_token token) { scheduler_loop(std::move(token)); });
 }
 
 void Engine::stop() {
@@ -227,7 +194,6 @@ void Engine::stop() {
     scheduler_thread_.request_stop();
     scheduler_thread_.join();
   }
-
   for (auto &worker : workers_) {
     if (worker.joinable()) {
       worker.request_stop();
@@ -237,152 +203,70 @@ void Engine::stop() {
   workers_.clear();
 }
 
-// -----------------------------------------------------------------------------
-// Scheduler & Worker Event Loops
-// -----------------------------------------------------------------------------
+// ============================================================================
+// Scheduler
+// ============================================================================
 
 void Engine::scheduler_loop(std::stop_token stop_token) {
   BridgeMessage msg{};
+  std::uint32_t backoff_us = IDLE_BACKOFF_MIN_US;
 
   while (running_.load(std::memory_order_acquire) &&
          !stop_token.stop_requested()) {
-    if (shm_.header != nullptr) {
-      shm_.header->heartbeat_cpp.fetch_add(1, std::memory_order_relaxed);
+    if (shm_->header != nullptr) {
+      shm_->header->heartbeat_cpp.fetch_add(1, std::memory_order_relaxed);
     }
 
-    // Dynamic defragmentation & soft-barrier evaluation
-    auto *stats = shm_engine_stats(shm_);
-    if (stats != nullptr) {
-      std::uint64_t frag =
-          stats->heap_fragmentation_score.load(std::memory_order_relaxed);
-      if (frag > 8) {
-        shm_heap_soft_barrier(shm_);
-        shm_heap_compact_logical(shm_);
-      }
-    }
-
-    // Ring journaling and command ingestion
-    if (shm_.cmd_ring != nullptr && shm_.cmd_ring->pop(msg)) {
-      // Prefetch payload from Shared Memory if an offset is present
-      if (msg.shm_ref.offset != 0 && shm_.base != nullptr) {
-        const auto *target_ptr =
-            static_cast<const std::byte *>(shm_.base) + msg.shm_ref.offset;
-        prefetch_memory(target_ptr);
+    if (shm_->cmd_ring != nullptr && shm_->cmd_ring->pop(msg)) {
+      if (msg.type == MsgType::SHM_REF && msg.shm_ref.offset != 0 &&
+          shm_->base != nullptr) {
+        utils::prefetch_read(shm_->base + msg.shm_ref.offset);
       }
 
       enqueue_message(msg);
-
       busy_loops_.fetch_add(1, std::memory_order_relaxed);
-      idle_loops_.store(0, std::memory_order_relaxed);
+      backoff_us = IDLE_BACKOFF_MIN_US;
 
-      auto now_ns = std::chrono::steady_clock::now().time_since_epoch();
+      const auto now = std::chrono::steady_clock::now().time_since_epoch();
       last_activity_ns_.store(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(now_ns).count(),
+          static_cast<std::uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()),
           std::memory_order_relaxed);
     } else {
       idle_loops_.fetch_add(1, std::memory_order_relaxed);
-      busy_loops_.store(0, std::memory_order_relaxed);
-
-      if (idle_loops_.load(std::memory_order_relaxed) > 1000) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
-        idle_loops_.store(0, std::memory_order_relaxed);
-      }
+      std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
+      backoff_us = next_backoff(backoff_us);
     }
   }
 }
 
+// ============================================================================
+// Workers
+// ============================================================================
+
 void Engine::worker_loop(std::stop_token stop_token, int id, int node) {
-  alignas(32) std::array<ScheduledTask, WORKER_BATCH_MAX> batch{};
+  alignas(64) std::array<ScheduledTask, WORKER_BATCH_MAX> batch{};
   std::size_t batch_size = 0;
+  std::uint32_t backoff_us = IDLE_BACKOFF_MIN_US;
 
   const int total_cpus =
       std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
-  const int target_cpu = id % total_cpus;
-
-  // Pin worker thread natively to target hardware core
-  pin_thread_to_cpu(target_cpu);
+  pin_thread_to_cpu(id % total_cpus);
 
   while (running_.load(std::memory_order_acquire) &&
          !stop_token.stop_requested()) {
     batch_size = 0;
-    if (!try_dequeue_batch_simd(node, batch, batch_size, WORKER_BATCH_MAX)) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
+    if (!try_dequeue_batch(node, batch, batch_size, WORKER_BATCH_MAX)) {
+      std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
+      backoff_us = next_backoff(backoff_us);
       continue;
     }
 
-    process_batch_simd(node, batch, batch_size);
-  }
-}
+    backoff_us = IDLE_BACKOFF_MIN_US;
 
-// -----------------------------------------------------------------------------
-// Message Ingestion & Queue Dispatch
-// -----------------------------------------------------------------------------
-
-int Engine::choose_node_for_message(const BridgeMessage &msg) const noexcept {
-  std::uint64_t key = static_cast<std::uint64_t>(msg.job_id) ^
-                      static_cast<std::uint64_t>(msg.req_id);
-
-  int base_node = static_cast<int>(
-      key % static_cast<std::uint64_t>(std::max(1, numa_nodes_)));
-
-  if (shm_.header != nullptr) {
-    std::uint64_t last_cycles =
-        shm_engine_stats(shm_)->last_job_latency_ns.load(
-            std::memory_order_relaxed);
-    if (last_cycles > 5000000 && numa_nodes_ > 1) {
-      base_node = (base_node + 1) % numa_nodes_;
-    }
-  }
-
-  return base_node;
-}
-
-void Engine::enqueue_message(const BridgeMessage &msg, PriorityTier priority) {
-  ScheduledTask task;
-  task.msg = msg;
-  task.deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-
-  const auto &cmd =
-      CommandRegistry::instance().get(static_cast<std::uint8_t>(msg.type));
-
-  task.priority = (priority != PriorityTier::NORMAL)
-                      ? priority
-                      : static_cast<PriorityTier>(cmd.priority);
-
-  const int node = choose_node_for_message(msg);
-  task.source_node_id = static_cast<std::uint16_t>(node);
-
-  bool inserted = false;
-  const int priority_val = static_cast<int>(task.priority);
-
-  if (priority_val >= 2) {
-    inserted = queues_per_node_high_[node]->push(task);
-    if (!inserted) {
-      inserted = queues_per_node_normal_[node]->push(task);
-    }
-  } else if (priority_val == 1) {
-    inserted = queues_per_node_normal_[node]->push(task);
-    if (!inserted) {
-      inserted = queues_per_node_low_[node]->push(task);
-    }
-  } else {
-    inserted = queues_per_node_low_[node]->push(task);
-  }
-
-  // Adaptive backpressure: Immediate response on event ring without I/O
-  // blocking
-  if (!inserted) {
-    BridgeMessage err_resp{};
-    err_resp.type =
-        static_cast<decltype(err_resp.type)>(Platform::PacketType::EVT_OK);
-    err_resp.flags = 0x03; // Backpressure / Queue Full Flag
-    err_resp.job_id = msg.job_id;
-    err_resp.req_id = msg.req_id;
-
-    if (shm_.evt_ring != nullptr) {
-      shm_.evt_ring->push(err_resp);
-    }
+    const std::uint64_t start = utils::rdtsc();
+    process_batch(batch, batch_size);
+    log::worker_on_job(static_cast<std::size_t>(id), utils::rdtsc() - start);
   }
 }
 
@@ -390,13 +274,17 @@ bool Engine::try_dequeue_batch(
     int node, std::array<ScheduledTask, WORKER_BATCH_MAX> &batch,
     std::size_t &out_batch_size, std::size_t max_batch) {
   out_batch_size = 0;
-  ScheduledTask task;
+  if (node < 0 || static_cast<std::size_t>(node) >= queues_per_node_high_.size()) {
+    return false;
+  }
 
-  auto drain_node = [&](int target_node) {
+  ScheduledTask task{};
+
+  auto drain = [&](int target) {
     while (out_batch_size < max_batch) {
-      if (queues_per_node_high_[target_node]->pop(task) ||
-          queues_per_node_normal_[target_node]->pop(task) ||
-          queues_per_node_low_[target_node]->pop(task)) {
+      if (queues_per_node_high_[target]->pop(task) ||
+          queues_per_node_normal_[target]->pop(task) ||
+          queues_per_node_low_[target]->pop(task)) {
         batch[out_batch_size++] = task;
       } else {
         break;
@@ -404,20 +292,18 @@ bool Engine::try_dequeue_batch(
     }
   };
 
-  drain_node(node);
+  drain(node);
 
   if (out_batch_size == 0 && numa_nodes_ > 1) {
-    for (int victim_node = 0; victim_node < numa_nodes_; ++victim_node) {
-      if (victim_node == node) {
+    for (int victim = 0; victim < numa_nodes_; ++victim) {
+      if (victim == node) {
         continue;
       }
-
-      std::size_t victim_size =
-          queues_per_node_high_[victim_node]->size_approx() +
-          queues_per_node_normal_[victim_node]->size_approx();
-
-      if (victim_size >= WORK_STEAL_THRESHOLD) {
-        drain_node(victim_node);
+      const std::uint64_t depth =
+          queues_per_node_high_[victim]->size_approx() +
+          queues_per_node_normal_[victim]->size_approx();
+      if (depth >= WORK_STEAL_THRESHOLD) {
+        drain(victim);
         if (out_batch_size > 0) {
           break;
         }
@@ -428,139 +314,201 @@ bool Engine::try_dequeue_batch(
   return out_batch_size > 0;
 }
 
-bool Engine::try_dequeue_batch(
-    int node, std::array<ScheduledTask, WORKER_BATCH_MAX> &batch,
-    std::size_t max_batch) {
-  std::size_t dummy_size = 0;
-  return try_dequeue_batch(node, batch, dummy_size, max_batch);
+// ============================================================================
+// Dispatch
+// ============================================================================
+
+int Engine::choose_node_for_message(const BridgeMessage &msg) const noexcept {
+  const std::uint64_t key = (static_cast<std::uint64_t>(msg.job_id) << 32) ^
+                            static_cast<std::uint64_t>(msg.req_id);
+  return static_cast<int>(
+      utils::numa_hash(key, static_cast<std::size_t>(std::max(1, numa_nodes_))));
 }
 
-// -----------------------------------------------------------------------------
-// Command Handlers & Zero-Copy Tensor Processing
-// -----------------------------------------------------------------------------
+void Engine::enqueue_message(const BridgeMessage &msg, PriorityTier priority) {
+  ScheduledTask task{};
+  task.msg = msg;
+  task.deadline = std::chrono::steady_clock::now() + TASK_DEADLINE;
+
+  const auto opcode = static_cast<Proto::PacketType>(msg.cmd);
+
+  task.priority = (priority != PriorityTier::NORMAL)
+                      ? priority
+                      : CommandRegistry::instance().priority_of(opcode);
+
+  // An explicitly urgent packet outranks whatever the table says.
+  if ((msg.flags & Proto::PKT_FLAG_URGENT) != 0) {
+    task.priority = PriorityTier::HIGH;
+  }
+
+  const int node = choose_node_for_message(msg);
+  task.source_node_id = static_cast<std::uint16_t>(node);
+  node_hotness_[static_cast<std::size_t>(node)].value.fetch_add(
+      1, std::memory_order_relaxed);
+
+  bool inserted = false;
+  switch (task.priority) {
+  case PriorityTier::HIGH:
+    inserted = queues_per_node_high_[node]->push(task) ||
+               queues_per_node_normal_[node]->push(task);
+    break;
+  case PriorityTier::NORMAL:
+    inserted = queues_per_node_normal_[node]->push(task) ||
+               queues_per_node_low_[node]->push(task);
+    break;
+  case PriorityTier::LOW:
+  default:
+    inserted = queues_per_node_low_[node]->push(task);
+    break;
+  }
+
+  if (!inserted) {
+    tasks_rejected_.fetch_add(1, std::memory_order_relaxed);
+    log::metrics().cmd_ring_drops.fetch_add(1, std::memory_order_relaxed);
+    emit_event(Proto::PacketType::EVT_BACKPRESSURE, msg);
+  }
+}
+
+void Engine::emit_event(Proto::PacketType type, const BridgeMessage &source,
+                        std::uint16_t flags) {
+  if (shm_->evt_ring == nullptr) {
+    return;
+  }
+  BridgeMessage response{};
+  response.type = MsgType::INLINE_DATA;
+  response.cmd = static_cast<std::uint16_t>(type);
+  response.flags = flags;
+  response.job_id = source.job_id;
+  response.req_id = source.req_id;
+
+  if (!shm_->evt_ring->push(response)) {
+    log::metrics().evt_ring_drops.fetch_add(1, std::memory_order_relaxed);
+  }
+}
 
 void Engine::handle_message(const BridgeMessage &msg) {
-  const auto packet_type = static_cast<Platform::PacketType>(msg.type);
+  const auto opcode = static_cast<Proto::PacketType>(msg.cmd);
 
-  switch (packet_type) {
-  case Platform::PacketType::CMD_PING: {
+  // Fast paths the engine owns itself.
+  if (opcode == Proto::PacketType::CMD_PING) {
     handle_cmd_ping(msg);
-    break;
+    return;
+  }
+  if (msg.type == MsgType::SHM_REF) {
+    handle_shm_tensor_ref(msg);
   }
 
-  case Platform::PacketType::EVT_FILE_OPENED:
-    handle_cmd_open_file(msg);
-    break;
+  Proto::PacketHeader header{};
+  header.type = opcode;
+  header.flags = msg.flags;
+  // msg.payload_size is a uint8_t: a heap payload carries its real length
+  // in shm_ref.total_bytes.
+  header.payload_size = (msg.type == MsgType::SHM_REF)
+                            ? msg.shm_ref.total_bytes
+                            : msg.payload_size;
+  header.payload_offset =
+      (msg.type == MsgType::SHM_REF) ? msg.shm_ref.offset : 0;
+  header.job_id = msg.job_id;
+  header.req_id = msg.req_id;
 
-  default: {
-    const auto &cmd =
-        CommandRegistry::instance().get(static_cast<std::uint8_t>(msg.type));
-    if (cmd.handler) {
-      Platform::PacketHeader hdr{};
-      hdr.type = static_cast<Platform::PacketType>(msg.type);
-      hdr.flags = msg.flags;
-      hdr.payload_size = msg.payload_size;
-      hdr.payload_offset = msg.shm_ref.offset;
-      hdr.job_id = msg.job_id;
-      hdr.req_id = msg.req_id;
-
-      cmd.handler(shm_, hdr);
+  // An INLINE_DATA message carries its payload inside the 64-byte message,
+  std::optional<ScopedChunkWriter> inline_staging;
+  if (msg.type == MsgType::INLINE_DATA && msg.payload_size > 0) {
+    inline_staging.emplace(*shm_, msg.payload_size);
+    if (*inline_staging) {
+      std::memcpy(inline_staging->data(), msg.inline_bytes, msg.payload_size);
+      inline_staging->commit();
+      header.payload_offset = inline_staging->offset();
+    } else {
+      header.payload_size = 0;
+      log::metrics().evt_ring_drops.fetch_add(1, std::memory_order_relaxed);
     }
-    break;
   }
+
+  if (!CommandRegistry::instance().dispatch(*shm_, header)) {
+    if (Proto::is_command(opcode)) {
+      emit_event(Proto::PacketType::EVT_ERROR, msg);
+    }
+    return;
+  }
+
+  if (shm_->header != nullptr) {
+    shm_->header->jobs_completed.fetch_add(1, std::memory_order_relaxed);
   }
 }
 
 void Engine::handle_cmd_ping(const BridgeMessage &msg) {
-  BridgeMessage resp{};
-  resp.type = static_cast<decltype(resp.type)>(Platform::PacketType::EVT_OK);
-  resp.flags = 0;
-  resp.payload_size = 0;
-  resp.job_id = msg.job_id;
-  resp.req_id = msg.req_id;
-
-  if (shm_.evt_ring != nullptr) {
-    shm_.evt_ring->push(resp);
-  }
+  emit_event(Proto::PacketType::EVT_PONG, msg);
 }
 
-void Engine::handle_cmd_open_file(const BridgeMessage &msg) { (void)msg; }
-
-void Engine::handle_cmd_schema_discover(const BridgeMessage &msg) { (void)msg; }
-
-TARGET_AVX512
 void Engine::handle_shm_tensor_ref(const BridgeMessage &msg) {
-  if (shm_.base == nullptr || msg.shm_ref.offset == 0) {
+  if (shm_->base == nullptr || msg.shm_ref.offset == 0) {
+    return;
+  }
+  if (!shm_chunk_is_valid(*shm_, msg.shm_ref.offset)) {
     return;
   }
 
-  if (!shm_chunk_is_valid(shm_, msg.shm_ref.offset)) {
+  void *tensor = nullptr;
+  std::size_t bytes = 0;
+  shm_extract_tensor_meta(*shm_, msg, tensor, bytes);
+  if (tensor == nullptr || bytes < sizeof(float)) {
     return;
   }
 
-  void *tensor_raw_ptr =
-      static_cast<std::byte *>(shm_.base) + msg.shm_ref.offset;
+  utils::prefetch_read(tensor);
 
-  [[maybe_unused]] std::size_t elem_count = 0;
-  if (msg.payload_size >= sizeof(float)) {
-    elem_count = msg.payload_size / sizeof(float);
-  }
+  // Runtime dispatch on the widest vector unit the CPU actually has.
 
-  prefetch_memory(tensor_raw_ptr);
-
-#if defined(__AVX512F__)
-  if (elem_count >= 16) {
-    float *fptr = static_cast<float *>(tensor_raw_ptr);
-    std::size_t i = 0;
-    __m512 scale = _mm512_set1_ps(1.0f);
-    for (; i + 16 <= elem_count; i += 16) {
-      __m512 v = _mm512_loadu_ps(fptr + i);
-      __m512 r = _mm512_mul_ps(v, scale);
-      _mm512_storeu_ps(fptr + i, r);
-    }
-  }
-#elif defined(__aarch64__)
-  if (elem_count > 0) {
-    float *fptr = static_cast<float *>(tensor_raw_ptr);
-    std::size_t i = 0;
-    while (i < elem_count) {
-      svbool_t pg = svwhilelt_b32(i, elem_count);
-      svfloat32_t v = svld1(pg, fptr + i);
-      svfloat32_t r = svmul_f32_z(pg, v, svdup_f32(1.0f));
-      svst1(pg, fptr + i, r);
-      i += svcntw();
-    }
-  }
-#endif
-
-  (void)tensor_raw_ptr;
+  utils::tensor_scale(tensor, bytes, 1.0f);
 }
 
-void Engine::process_tensor_pipeline_avx512_sve(const BridgeMessage &msg) {
-  handle_shm_tensor_ref(msg);
+void Engine::process_batch(
+    std::array<ScheduledTask, WORKER_BATCH_MAX> &batch,
+    std::size_t batch_size) {
+  const auto now = std::chrono::steady_clock::now();
+
+  for (std::size_t i = 0; i < batch_size; ++i) {
+    ScheduledTask &task = batch[i];
+
+    if (task.deadline < now) {
+      tasks_expired_.fetch_add(1, std::memory_order_relaxed);
+      if (shm_->header != nullptr) {
+        shm_->header->jobs_failed.fetch_add(1, std::memory_order_relaxed);
+      }
+      emit_event(Proto::PacketType::EVT_DEADLINE_EXCEEDED, task.msg);
+      continue;
+    }
+
+    {
+      log::SpanScope scope(span_ring_, log::MODULE_WORKER, task.msg.job_id,
+                           task.msg.req_id);
+      handle_message(task.msg);
+    }
+    tasks_dispatched_.fetch_add(1, std::memory_order_relaxed);
+  }
 }
 
-// -----------------------------------------------------------------------------
-// Cross-Platform Thread Affinity
-// -----------------------------------------------------------------------------
+// ============================================================================
+// Thread affinity
+// ============================================================================
 
 void Engine::pin_thread_to_cpu(std::thread::native_handle_type handle,
                                int cpu) {
 #if defined(__linux__)
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
-  CPU_SET(cpu, &cpuset);
-  pthread_setaffinity_np(handle, sizeof(cpu_set_t), &cpuset);
-
+  CPU_SET(static_cast<std::size_t>(cpu), &cpuset);
+  (void)::pthread_setaffinity_np(handle, sizeof(cpu_set_t), &cpuset);
 #elif defined(_WIN32)
-  DWORD_PTR mask = (1ULL << cpu);
-  SetThreadAffinityMask(reinterpret_cast<HANDLE>(handle), mask);
-
+  const DWORD_PTR mask = (static_cast<DWORD_PTR>(1) << cpu);
+  ::SetThreadAffinityMask(reinterpret_cast<HANDLE>(handle), mask);
 #elif defined(__APPLE__)
+  // macOS has no hard affinity; this is only an advisory grouping tag.
   thread_affinity_policy_data_t policy = {cpu};
-  thread_policy_set(pthread_mach_thread_np(handle), THREAD_AFFINITY_POLICY,
-                    reinterpret_cast<thread_policy_t>(&policy),
-                    THREAD_AFFINITY_POLICY_COUNT);
+  ::thread_policy_set(::pthread_mach_thread_np(handle), THREAD_AFFINITY_POLICY,
+                      reinterpret_cast<thread_policy_t>(&policy),
+                      THREAD_AFFINITY_POLICY_COUNT);
 #else
   (void)handle;
   (void)cpu;
@@ -568,168 +516,96 @@ void Engine::pin_thread_to_cpu(std::thread::native_handle_type handle,
 }
 
 void Engine::pin_thread_to_cpu(int cpu) {
-#if defined(__linux__)
-  pin_thread_to_cpu(pthread_self(), cpu);
+#if defined(__linux__) || defined(__APPLE__)
+  pin_thread_to_cpu(::pthread_self(), cpu);
 #elif defined(_WIN32)
   pin_thread_to_cpu(
-      reinterpret_cast<std::thread::native_handle_type>(GetCurrentThread()),
+      reinterpret_cast<std::thread::native_handle_type>(::GetCurrentThread()),
       cpu);
-#elif defined(__APPLE__)
-  pin_thread_to_cpu(pthread_self(), cpu);
 #else
   (void)cpu;
 #endif
 }
 
-// -----------------------------------------------------------------------------
-// NUMA Memory Allocation & Pipeline Processing
-// -----------------------------------------------------------------------------
+// ============================================================================
+// Cluster and maintenance
+// ============================================================================
 
-void Engine::init_priority_queues() {
-  queues_per_node_high_.clear();
-  queues_per_node_normal_.clear();
-  queues_per_node_low_.clear();
-
-  using PQType = ShmMpmcRing<ScheduledTask, PRIORITY_QUEUE_POW2>;
-
-  for (int n = 0; n < numa_nodes_; ++n) {
-    PQType *q_high = nullptr;
-    PQType *q_norm = nullptr;
-    PQType *q_low = nullptr;
-
-#if defined(__linux__)
-    if (numa_available() >= 0) {
-      q_high = static_cast<PQType *>(numa_alloc_onnode(sizeof(PQType), n));
-      q_norm = static_cast<PQType *>(numa_alloc_onnode(sizeof(PQType), n));
-      q_low = static_cast<PQType *>(numa_alloc_onnode(sizeof(PQType), n));
-
-      if (q_high) {
-        ::new (q_high) PQType();
-      }
-      if (q_norm) {
-        ::new (q_norm) PQType();
-      }
-      if (q_low) {
-        ::new (q_low) PQType();
-      }
-    }
-#endif
-
-    if (!q_high) {
-      q_high = new PQType();
-    }
-    if (!q_norm) {
-      q_norm = new PQType();
-    }
-    if (!q_low) {
-      q_low = new PQType();
-    }
-
-    queues_per_node_high_.push_back(
-        NumaPriorityQueuePtr(q_high, NumaDeleter{sizeof(PQType)}));
-    queues_per_node_normal_.push_back(
-        NumaPriorityQueuePtr(q_norm, NumaDeleter{sizeof(PQType)}));
-    queues_per_node_low_.push_back(
-        NumaPriorityQueuePtr(q_low, NumaDeleter{sizeof(PQType)}));
+void Engine::attach_runtime(ShmLayout &layout) {
+  if (layout.header != nullptr) {
+    layout.header->heartbeat_cpp.fetch_add(1, std::memory_order_relaxed);
   }
 }
 
-void Engine::init_memory_pools() {
-  message_pool_ = nullptr;
-  tensor_pool_ = nullptr;
+void Engine::detach_runtime(ShmLayout &layout) {
+  if (layout.header != nullptr) {
+    layout.header->engine_flags.fetch_and(~0x1u, std::memory_order_relaxed);
+  }
 }
 
-void Engine::shutdown_memory_pools() {
-  message_pool_ = nullptr;
-  tensor_pool_ = nullptr;
-}
+std::size_t Engine::rebalance_numa_queues() {
+  // Move work from the deepest node's normal queue to the shallowest one
+  if (numa_nodes_ < 2) {
+    return 0;
+  }
 
-bool Engine::try_dequeue_batch_simd(
-    int node, std::array<ScheduledTask, WORKER_BATCH_MAX> &batch,
-    std::size_t &out_batch_size, std::size_t max_batch) {
-  return try_dequeue_batch(node, batch, out_batch_size, max_batch);
-}
+  int deepest = 0;
+  int shallowest = 0;
+  std::uint64_t max_depth = 0;
+  std::uint64_t min_depth = ~std::uint64_t{0};
 
-TARGET_AVX2
-void Engine::process_batch_simd(
-    int node, std::array<ScheduledTask, WORKER_BATCH_MAX> &batch,
-    std::size_t batch_size) {
-  (void)node;
-  const auto now = std::chrono::steady_clock::now();
-  [[maybe_unused]] const std::int64_t now_ns =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          now.time_since_epoch())
-          .count();
-
-  std::size_t i = 0;
-
-#if defined(__AVX2__)
-  for (; i + 4 <= batch_size; i += 4) {
-    alignas(32) std::int64_t deadlines[4];
-    for (int k = 0; k < 4; ++k) {
-      deadlines[k] = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         batch[i + k].deadline.time_since_epoch())
-                         .count();
+  for (int node = 0; node < numa_nodes_; ++node) {
+    const std::uint64_t depth =
+        queues_per_node_high_[node]->size_approx() +
+        queues_per_node_normal_[node]->size_approx() +
+        queues_per_node_low_[node]->size_approx();
+    if (depth > max_depth) {
+      max_depth = depth;
+      deepest = node;
     }
-
-    __m256i vec_deadlines =
-        _mm256_load_si256(reinterpret_cast<const __m256i *>(deadlines));
-    __m256i vec_now = _mm256_set1_epi64x(now_ns);
-
-    __m256i mask = _mm256_cmpgt_epi64(vec_now, vec_deadlines);
-    int expired_mask = _mm256_movemask_pd(_mm256_castsi256_pd(mask));
-
-    for (int k = 0; k < 4; ++k) {
-      auto &task = batch[i + k];
-      if ((expired_mask & (1 << k)) != 0) {
-        BridgeMessage resp{};
-        resp.type =
-            static_cast<decltype(resp.type)>(Platform::PacketType::EVT_OK);
-        resp.flags = 0x02; // Timeout / Deadline Exceeded Flag
-        resp.job_id = task.msg.job_id;
-        resp.req_id = task.msg.req_id;
-
-        if (shm_.evt_ring != nullptr) {
-          shm_.evt_ring->push(resp);
-        }
-      } else {
-        // Zero-copy telemetry span recording via RAII
-        {
-          log::SpanScope scope(span_ring_, 1 /* MODULE_WORKER */,
-                               static_cast<std::uint32_t>(task.msg.job_id),
-                               static_cast<std::uint32_t>(task.msg.req_id));
-          handle_message(task.msg);
-        }
-      }
+    if (depth < min_depth) {
+      min_depth = depth;
+      shallowest = node;
     }
   }
-#endif
 
-  for (; i < batch_size; ++i) {
-    auto &task = batch[i];
-
-    if (task.deadline < now) {
-      BridgeMessage resp{};
-      resp.type =
-          static_cast<decltype(resp.type)>(Platform::PacketType::EVT_OK);
-      resp.flags = 0x02; // Timeout / Deadline Exceeded Flag
-      resp.job_id = task.msg.job_id;
-      resp.req_id = task.msg.req_id;
-
-      if (shm_.evt_ring != nullptr) {
-        shm_.evt_ring->push(resp);
-      }
-      continue;
-    }
-
-    // Zero-copy telemetry span recording via RAII
-    {
-      log::SpanScope scope(span_ring_, 1 /* MODULE_WORKER */,
-                           static_cast<std::uint32_t>(task.msg.job_id),
-                           static_cast<std::uint32_t>(task.msg.req_id));
-      handle_message(task.msg);
-    }
+  if (deepest == shallowest || max_depth < min_depth + WORK_STEAL_THRESHOLD) {
+    return 0;
   }
+
+  // Move at most half the difference, so the two nodes cannot oscillate.
+  const std::uint64_t to_move = (max_depth - min_depth) / 2;
+  std::size_t moved = 0;
+  ScheduledTask task{};
+
+  while (moved < to_move && queues_per_node_normal_[deepest]->pop(task)) {
+    task.source_node_id = static_cast<std::uint16_t>(shallowest);
+    if (!queues_per_node_normal_[shallowest]->push(task)) {
+      // The destination filled up; put it back rather than dropping the task.
+      (void)queues_per_node_normal_[deepest]->push(task);
+      break;
+    }
+    ++moved;
+  }
+  return moved;
+}
+
+std::size_t Engine::heap_defragment_tick() {
+  if (shm_ == nullptr || shm_->data_heap == nullptr) {
+    return 0;
+  }
+  return shm_heap_compact_logical(*shm_);
+}
+
+bool Engine::replay_next_journal_entry(BridgeMessage &msg) {
+  if (shm_ == nullptr || shm_->tx_log == nullptr) {
+    return false;
+  }
+  if (!shm_journal_replay_next(*shm_, journal_replay_index_, msg)) {
+    return false;
+  }
+  ++journal_replay_index_;
+  return true;
 }
 
 } // namespace Sphere

@@ -18,9 +18,9 @@ namespace Sphere::cmd::ttree {
 namespace {
 
 /**
- * RAII Guard: Temporarily isolates branch activation for optimized column
- * extraction and automatically restores full branch status upon scope exit.
- */
+* RAII Guard: Temporarily isolates branch activation for optimized column
+* extraction and automatically restores full branch status upon scope exit.
+*/
 struct BranchStatusGuard {
   TTree *tree;
   explicit BranchStatusGuard(TTree *t) : tree(t) {
@@ -38,9 +38,9 @@ struct BranchStatusGuard {
 } // anonymous namespace
 
 /**
- * Maps ROOT TLeaf type identifiers to shared memory data types (ShmDType)
- * and determines their underlying element byte sizes.
- */
+* Maps ROOT TLeaf type identifiers to shared memory data types (ShmDType)
+* and determines their underlying element byte sizes.
+*/
 LeafTypeInfo map_root_leaf_type(TLeaf *leaf) {
   if (!leaf) {
     return {ShmDType::Float32, sizeof(float)};
@@ -84,44 +84,41 @@ LeafTypeInfo map_root_leaf_type(TLeaf *leaf) {
 }
 
 /**
- * Handles incoming IPC requests to read a contiguous column of TTree branch
- * data directly into shared memory.
- */
-void handle_read_column(ShmLayout &shm, const Platform::PacketHeader &pkt) {
+* Handles incoming IPC requests to read a contiguous column of TTree branch
+* data directly into shared memory.
+*/
+void handle_read_column(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
   TTree *tree = get_tree(pkt.job_id);
   if (!tree) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;
   }
 
   if (pkt.payload_size == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_INVALID_ARG);
     return;
   }
 
-  // Calculate raw payload pointer using payload_offset
-  const auto *base_ptr = reinterpret_cast<const char *>(&shm);
-  const char *raw_ptr = base_ptr + pkt.payload_offset;
-  if (!raw_ptr) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+  const std::string branch_name = read_payload_text(shm, pkt);
+  if (branch_name.empty()) {
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_INVALID_ARG);
     return;
   }
-
-  std::string branch_name(raw_ptr, pkt.payload_size);
 
   TBranch *br = tree->GetBranch(branch_name.c_str());
   if (!br) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_BRANCH);
     return;
   }
 
   auto *leaves = br->GetListOfLeaves();
   if (!leaves || leaves->GetSize() == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_BRANCH);
     return;
   }
@@ -140,7 +137,7 @@ void handle_read_column(ShmLayout &shm, const Platform::PacketHeader &pkt) {
 
   const std::int64_t count = end_entry - start_entry;
   if (count <= 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_GENERIC);
     return;
   }
@@ -151,13 +148,12 @@ void handle_read_column(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   // Allocate contiguous data block directly within the shared memory heap
   std::uint64_t payload_off = shm_heap_alloc_data(shm, total_bytes);
   if (payload_off == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
 
-  const auto *shm_bytes = reinterpret_cast<const std::uint8_t *>(&shm);
-  auto *dest_base = const_cast<std::uint8_t *>(shm_bytes + payload_off);
+  auto *dest_base = reinterpret_cast<std::uint8_t *>(shm.base + payload_off);
 
   {
     BranchStatusGuard guard(tree);
@@ -196,9 +192,6 @@ void handle_read_column(ShmLayout &shm, const Platform::PacketHeader &pkt) {
     shm.evt_ring->push(msg);
   }
 
-  std::cout << "[CmdTTree] Zero-copy column '" << branch_name
-            << "' extracted: " << count << " elements (" << total_bytes
-            << " bytes) at SHM offset " << payload_off << ".\n";
 }
 
 } // namespace Sphere::cmd::ttree

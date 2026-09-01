@@ -4,6 +4,8 @@
  * UTF-8 processing, string operations, and cycle timing.
  */
 
+#include "utils.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -234,146 +236,14 @@ make_aligned_unique(std::size_t alignment, Args &&...args) {
 // 2. CYCLE TIMER IMPLEMENTATION & TIME UTILITIES
 // ============================================================================
 
-class CycleTimer {
-public:
-  CycleTimer() noexcept : start_cycles_(0), ns_per_cycle_fp_(0) { calibrate(); }
-
-  /**
-   * Reads the native CPU cycle counter or high-resolution counter
-   * depending on the target platform architecture.
-   */
-  static ALWAYS_INLINE std::uint64_t rdtsc() noexcept {
-#if defined(ARCH_X86_64)
-#if defined(_MSC_VER)
-    return __rdtsc();
-#else
-    std::uint32_t low, high;
-    asm volatile("rdtsc" : "=a"(low), "=d"(high)::"memory");
-    return (static_cast<std::uint64_t>(high) << 32) | low;
-#endif
-#elif defined(ARCH_ARM64)
-#if defined(_MSC_VER)
-    return static_cast<std::uint64_t>(__readcntvct());
-#else
-    std::uint64_t val;
-    // Instruction synchronization barrier 'isb' prevents speculative execution
-    asm volatile("isb; mrs %0, cntvct_el0" : "=r"(val)::"memory");
-    return val;
-#endif
-#else
-    return static_cast<std::uint64_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-#endif
-  }
-
-  /**
-   * Reads cycle counter with a serialization fence
-   */
-  static ALWAYS_INLINE std::uint64_t rdtsc_fenced() noexcept {
-#if defined(ARCH_X86_64)
-#if defined(_MSC_VER)
-    _mm_lfence();
-    return __rdtsc();
-#else
-    std::uint32_t low, high;
-    asm volatile("lfence\n\trdtsc" : "=a"(low), "=d"(high)::"memory");
-    return (static_cast<std::uint64_t>(high) << 32) | low;
-#endif
-#elif defined(ARCH_ARM64)
-    return rdtsc();
-#else
-    return rdtsc();
-#endif
-  }
-
-  ALWAYS_INLINE void start() noexcept { start_cycles_ = rdtsc_fenced(); }
-
-  ALWAYS_INLINE std::uint64_t stop_cycles() const noexcept {
-    const std::uint64_t end = rdtsc_fenced();
-    return (end > start_cycles_) ? (end - start_cycles_) : 0;
-  }
-
-  /**
-   * Converts elapsed cycles to nanoseconds
-   */
-  ALWAYS_INLINE std::uint64_t stop_ns() const noexcept {
-    const std::uint64_t elapsed = stop_cycles();
-#if defined(__SIZEOF_INT128__)
-    return static_cast<std::uint64_t>(
-        (static_cast<unsigned __int128>(elapsed) * ns_per_cycle_fp_) >> 32);
-#else
-    const std::uint64_t elapsed_hi = elapsed >> 32;
-    const std::uint64_t elapsed_lo = elapsed & 0xFFFFFFFFULL;
-    const std::uint64_t fp_hi = ns_per_cycle_fp_ >> 32;
-    const std::uint64_t fp_lo = ns_per_cycle_fp_ & 0xFFFFFFFFULL;
-
-    const std::uint64_t res_mid =
-        (elapsed_lo * fp_hi) + ((elapsed_lo * fp_lo) >> 32);
-    return (elapsed_hi * ns_per_cycle_fp_) + (elapsed_lo * fp_hi) +
-           (res_mid >> 32);
-#endif
-  }
-
-  ALWAYS_INLINE double stop_ms() const noexcept {
-    return static_cast<double>(stop_ns()) / 1e6;
-  }
-
-  ALWAYS_INLINE double get_frequency_ghz() const noexcept {
-    if (ns_per_cycle_fp_ == 0)
-      return 0.0;
-    const double ns_per_cycle =
-        static_cast<double>(ns_per_cycle_fp_) / static_cast<double>(1ULL << 32);
-    return 1.0 / ns_per_cycle;
-  }
-
-private:
-  void calibrate() noexcept {
-    constexpr int CALIBRATION_LOOPS = 3;
-    std::uint64_t best_ns_fp = 0;
-    std::uint64_t min_delta = (std::numeric_limits<std::uint64_t>::max)();
-
-    for (int i = 0; i < CALIBRATION_LOOPS; ++i) {
-      const auto t1 = std::chrono::steady_clock::now();
-      const std::uint64_t c1 = rdtsc_fenced();
-
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
-      const std::uint64_t c2 = rdtsc_fenced();
-      const auto t2 = std::chrono::steady_clock::now();
-
-      const auto ns =
-          std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
-      const std::uint64_t cycles = c2 - c1;
-
-      if (cycles > 0 && cycles < min_delta) {
-        min_delta = cycles;
-#if defined(__SIZEOF_INT128__)
-        best_ns_fp = (static_cast<unsigned __int128>(ns) << 32) / cycles;
-#else
-        best_ns_fp = (static_cast<std::uint64_t>(ns) << 32) / cycles;
-#endif
-      }
-    }
-
-    ns_per_cycle_fp_ = (best_ns_fp > 0) ? best_ns_fp : (1ULL << 32);
-  }
-
-  std::uint64_t start_cycles_{0};
-  std::uint64_t ns_per_cycle_fp_{0};
-};
+// CycleTimer is declared in utils.h; its out-of-line members are defined near
+// the bottom of this file, after the CPU capability helpers they depend on.
 
 // ============================================================================
 // 3. HARDWARE & CPUID DISCOVERY UTILITIES
 // ============================================================================
 
-struct CPUCapabilities {
-  bool has_avx2 = false;
-  bool has_avx512f = false;
-  bool has_avx512bw = false;
-  bool has_neon = false;
-  bool has_sve = false;
-  bool has_bmi2 = false;
-};
+// CPUCapabilities is declared in utils.h.
 
 CPUCapabilities detect_cpu_capabilities() noexcept {
   CPUCapabilities caps;
@@ -384,6 +254,7 @@ CPUCapabilities detect_cpu_capabilities() noexcept {
 
   // Query leaf 1 to check OSXSAVE and AVX support
   __cpuid(cpu_info, 1);
+  caps.has_sse42 = (cpu_info[2] & (1 << 20)) != 0;
   const bool osxsave = (cpu_info[2] & (1 << 27)) != 0;
   const bool avx = (cpu_info[2] & (1 << 28)) != 0;
 
@@ -413,6 +284,7 @@ CPUCapabilities detect_cpu_capabilities() noexcept {
 
   // Query leaf 1 to check OSXSAVE and AVX support
   if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
+    caps.has_sse42 = (ecx & (1u << 20)) != 0;
     const bool osxsave = (ecx & (1 << 27)) != 0;
     const bool avx = (ecx & (1 << 28)) != 0;
 
@@ -438,6 +310,9 @@ CPUCapabilities detect_cpu_capabilities() noexcept {
 #endif
 #elif defined(ARCH_ARM64)
   caps.has_neon = true;
+#if defined(__ARM_FEATURE_CRC32)
+  caps.has_arm_crc = true;
+#endif
 #if defined(__ARM_FEATURE_SVE)
   caps.has_sve = true;
 #endif
@@ -842,7 +717,7 @@ int memcmp_adaptive(const void *a, const void *b, std::size_t n) noexcept {
  */
 TARGET_AVX512
 void tensor_process_avx512(float *__restrict__ ptr, std::size_t count,
-                           float factor = 1.0f) noexcept {
+                           float factor) noexcept {
   std::size_t i = 0;
   const __m512 v_scale = _mm512_set1_ps(factor);
 
@@ -884,7 +759,7 @@ void tensor_process_avx512(float *__restrict__ ptr, std::size_t count,
  */
 TARGET_SVE
 void tensor_process_sve(float *__restrict__ ptr, std::size_t count,
-                        float factor = 1.0f) noexcept {
+                        float factor) noexcept {
   std::size_t i = 0;
   const svfloat32_t v_scale = svdup_n_f32(factor);
   const std::size_t vl = svcntw(); // Get current vector length (32B elements)
@@ -918,7 +793,7 @@ void tensor_process_sve(float *__restrict__ ptr, std::size_t count,
  * Fallback implementation for non-ARM SVE architectures (x86_64, NEON, etc.).
  */
 void tensor_process_sve(float *__restrict__ ptr, std::size_t count,
-                        float factor = 1.0f) noexcept {
+                        float factor) noexcept {
   for (std::size_t i = 0; i < count; ++i) {
     ptr[i] *= factor;
   }
@@ -950,7 +825,7 @@ static void tensor_process_avx2_fallback(float *__restrict__ ptr,
  * NEON) at runtime based on detected hardware support.
  */
 void tensor_process_simd(void *raw, std::size_t bytes,
-                         float factor = 1.0f) noexcept {
+                         float factor) noexcept {
   if (!raw || bytes < sizeof(float))
     return;
 
@@ -963,7 +838,7 @@ void tensor_process_simd(void *raw, std::size_t bytes,
   if (caps.has_avx512f && caps.has_avx512bw) {
     tensor_process_avx512(ptr, count, factor);
   } else if (caps.has_avx2) {
-    // AVX2 path — only reached once CPUID has actually confirmed support.
+    // AVX2 path -- only reached once CPUID has actually confirmed support.
     tensor_process_avx2_fallback(ptr, count, factor);
   } else {
     std::size_t i = 0;
@@ -1043,7 +918,7 @@ utils_prefetch_hotness(std::uint64_t hot) noexcept {
 
 [[nodiscard]] inline float
 utils_backpressure_smooth(float level, float &prev_state,
-                          float alpha = 0.5f) noexcept {
+                          float alpha) noexcept {
   level = std::clamp(level, 0.0f, 1.0f);
   alpha = std::clamp(alpha, 0.001f, 1.0f);
 
@@ -1064,7 +939,7 @@ utils_mix_journal_seq(std::uint64_t seq) noexcept {
 
 [[nodiscard]] inline bool
 utils_should_steal(std::uint64_t local, std::uint64_t remote,
-                   std::uint64_t min_threshold = 4) noexcept {
+                   std::uint64_t min_threshold) noexcept {
   // Steal only if remote has strictly more tasks than local plus the minimum
   // threshold
   if (remote <= local || (remote - local) < min_threshold) {
@@ -1690,8 +1565,7 @@ std::uint64_t hash_xxhash64_neon(const void *input, std::size_t len,
 #endif
 
 #if defined(ARCH_X86_64)
-// Scalar xxHash64-compatible fallback for x86_64 CPUs without AVX2 (used to
-// be entirely missing from the dispatcher below — see CHANGELOG).
+
 static std::uint64_t hash_xxhash64_scalar(const void *input, std::size_t len,
                                           std::uint64_t seed) noexcept {
   const auto *p = static_cast<const std::uint8_t *>(input);
@@ -1815,13 +1689,11 @@ bool utf8_validate_neon(const char *str, std::size_t len) noexcept {
   std::size_t i = 0;
   const uint8x16_t msb_mask = vdupq_n_u8(0x80);
 
-  // Fast path: Process 16B chunks using ARM NEON when all bytes are ASCII
-  // (< 0x80)
+  // Fast path: Process 16B chunks using ARM NEON when all bytes are ASCII (< 0x80)
   for (; i + 16 <= len; i += 16) {
     uint8x16_t chunk = vld1q_u8(data + i);
     uint8x16_t has_msb = vandq_u8(chunk, msb_mask);
 
-    // If MSB is set anywhere in the vector, process block via scalar fallback
     if (vmaxvq_u8(has_msb) != 0) {
       std::size_t j = i;
       std::size_t block_end = i + 16;
@@ -2370,8 +2242,7 @@ ALWAYS_INLINE void do_not_optimize(T const &value) noexcept {
 #if defined(__GNUC__) || defined(__clang__)
   asm volatile("" : : "r,m"(value) : "memory");
 #else
-  // MSVC has no inline asm on x64; a volatile write is the closest portable
-  // equivalent and still defeats most dead-store elimination.
+
   volatile T sink = value;
   (void)sink;
 #endif
@@ -2611,8 +2482,7 @@ bytes_equal_multiversioned(const void *a, const void *b,
   return diff == 0;
 }
 
-#else // !HAS_TARGET_CLONES_X86 — fall back to the hand-dispatched entry \
-    // points so callers don't need to care which path was compiled.
+#else // !HAS_TARGET_CLONES_X86
 
 inline void to_lower_multiversioned(char *str, std::size_t len) noexcept {
   to_lower_simd(str, len);
@@ -2633,5 +2503,197 @@ inline bool bytes_equal_multiversioned(const void *a, const void *b,
 }
 
 #endif // HAS_TARGET_CLONES_X86
+
+// ============================================================================
+// Cycle counter and calibration (declared in utils.h)
+// ============================================================================
+
+std::uint64_t rdtsc() noexcept {
+#if defined(SPHERE_ARCH_X86_64)
+#if defined(_MSC_VER)
+  return __rdtsc();
+#else
+  std::uint32_t low = 0;
+  std::uint32_t high = 0;
+  asm volatile("rdtsc" : "=a"(low), "=d"(high));
+  return (static_cast<std::uint64_t>(high) << 32) | low;
+#endif
+#elif defined(SPHERE_ARCH_ARM64)
+  std::uint64_t val = 0;
+  asm volatile("mrs %0, cntvct_el0" : "=r"(val));
+  return val;
+#else
+  return static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+#endif
+}
+
+std::uint64_t rdtsc_fenced() noexcept {
+#if defined(SPHERE_ARCH_X86_64)
+#if defined(_MSC_VER)
+  _mm_lfence();
+  return __rdtsc();
+#else
+  std::uint32_t low = 0;
+  std::uint32_t high = 0;
+  asm volatile("lfence\n\trdtsc" : "=a"(low), "=d"(high)::"memory");
+  return (static_cast<std::uint64_t>(high) << 32) | low;
+#endif
+#elif defined(SPHERE_ARCH_ARM64)
+  std::uint64_t val = 0;
+  asm volatile("isb; mrs %0, cntvct_el0" : "=r"(val)::"memory");
+  return val;
+#else
+  return rdtsc();
+#endif
+}
+
+namespace {
+
+/// Cycles per second, measured once against steady_clock.
+struct Calibration {
+  std::uint64_t cycles_per_sec{0};
+  double ghz{0.0};
+};
+
+Calibration measure_calibration() noexcept {
+  using clock = std::chrono::steady_clock;
+
+  Calibration best{};
+  double best_ghz = 0.0;
+
+  for (int i = 0; i < 3; ++i) {
+    const auto t1 = clock::now();
+    const std::uint64_t c1 = rdtsc_fenced();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const std::uint64_t c2 = rdtsc_fenced();
+    const auto t2 = clock::now();
+
+    const auto ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+    if (ns <= 0 || c2 <= c1) {
+      continue;
+    }
+    const double cycles = static_cast<double>(c2 - c1);
+    const double ghz = cycles / static_cast<double>(ns);
+    if (ghz > best_ghz) {
+      best_ghz = ghz;
+      best.ghz = ghz;
+      best.cycles_per_sec = static_cast<std::uint64_t>(ghz * 1.0e9);
+    }
+  }
+
+  if (best.cycles_per_sec == 0) {
+    
+    best.ghz = 1.0;
+    best.cycles_per_sec = 1000000000ULL;
+  }
+  return best;
+}
+
+const Calibration &calibration() noexcept {
+  // Function-local static: initialized exactly once, thread-safe since C++11.
+  static const Calibration cal = measure_calibration();
+  return cal;
+}
+
+} // namespace
+
+void CycleTimer::ensure_calibrated() noexcept { (void)calibration(); }
+
+double CycleTimer::frequency_ghz() noexcept { return calibration().ghz; }
+
+std::uint64_t CycleTimer::cycles_per_second() noexcept {
+  return calibration().cycles_per_sec;
+}
+
+std::uint64_t CycleTimer::tsc_to_ns(std::uint64_t cycles) noexcept {
+  const double ghz = calibration().ghz;
+  if (ghz <= 0.0) {
+    return cycles;
+  }
+  return static_cast<std::uint64_t>(static_cast<double>(cycles) / ghz);
+}
+
+std::uint64_t CycleTimer::ns_to_tsc(std::uint64_t nanoseconds) noexcept {
+  return static_cast<std::uint64_t>(static_cast<double>(nanoseconds) *
+                                    calibration().ghz);
+}
+
+// ============================================================================
+// Prefetch (declared in utils.h)
+// ============================================================================
+
+void prefetch_read(const void *ptr) noexcept {
+#if defined(__GNUC__) || defined(__clang__)
+  __builtin_prefetch(ptr, 0, 3);
+#elif defined(_M_X64) || defined(_M_IX86)
+  _mm_prefetch(reinterpret_cast<const char *>(ptr), _MM_HINT_T0);
+#elif defined(_M_ARM64)
+  __prefetch(ptr);
+#else
+  (void)ptr;
+#endif
+}
+
+void prefetch_write(const void *ptr) noexcept {
+#if defined(__GNUC__) || defined(__clang__)
+  __builtin_prefetch(ptr, 1, 3);
+#else
+  prefetch_read(ptr);
+#endif
+}
+
+void prefetch_stream(const void *ptr) noexcept {
+#if defined(__GNUC__) || defined(__clang__)
+  __builtin_prefetch(ptr, 0, 0);
+#elif defined(_M_X64) || defined(_M_IX86)
+  _mm_prefetch(reinterpret_cast<const char *>(ptr), _MM_HINT_NTA);
+#else
+  (void)ptr;
+#endif
+}
+
+// ============================================================================
+// Public wrappers over the internal SIMD implementations
+// ============================================================================
+
+const CPUCapabilities &cpu_capabilities() noexcept {
+  return get_cpu_capabilities();
+}
+
+void tensor_scale(void *raw, std::size_t bytes, float factor) noexcept {
+  tensor_process_simd(raw, bytes, factor);
+}
+
+void to_lower_ascii(char *str, std::size_t len) noexcept {
+  if (str != nullptr && len > 0) {
+    to_lower_simd(str, len);
+  }
+}
+
+void to_upper_ascii(char *str, std::size_t len) noexcept {
+  if (str != nullptr && len > 0) {
+    to_upper_simd(str, len);
+  }
+}
+
+std::uint64_t mix64(std::uint64_t x) noexcept {
+  return utils_mix_journal_seq(x);
+}
+
+std::size_t numa_hash(std::uint64_t key, std::size_t nodes) noexcept {
+  return utils_numa_hash(key, nodes);
+}
+
+float backpressure_smooth(float level, float &prev_state,
+                          float alpha) noexcept {
+  return utils_backpressure_smooth(level, prev_state, alpha);
+}
+
+bool should_steal(std::uint64_t local, std::uint64_t remote,
+                  std::uint64_t min_threshold) noexcept {
+  return utils_should_steal(local, remote, min_threshold);
+}
 
 } // namespace utils

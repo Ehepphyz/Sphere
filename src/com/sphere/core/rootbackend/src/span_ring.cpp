@@ -1,4 +1,5 @@
 // span_ring.cpp
+
 #include "span_ring.h"
 #include "logger.h"
 
@@ -6,19 +7,21 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#elif defined(__linux__) || defined(__APPLE__)
-#include <pthread.h>
+#elif defined(__linux__)
+#include <sys/syscall.h>
 #include <unistd.h>
+#else
+#include <pthread.h>
 #endif
 
-#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) ||               \
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) ||              \
     defined(__i386__)
 #include <immintrin.h>
-#define CPU_PAUSE() _mm_pause()
+#define SPAN_CPU_PAUSE() _mm_pause()
 #elif defined(__aarch64__) || defined(__arm__)
-#define CPU_PAUSE() asm volatile("yield" ::: "memory")
+#define SPAN_CPU_PAUSE() asm volatile("yield" ::: "memory")
 #else
-#define CPU_PAUSE() ((void)0)
+#define SPAN_CPU_PAUSE() ((void)0)
 #endif
 
 namespace Sphere::log {
@@ -26,19 +29,20 @@ namespace Sphere::log {
 namespace {
 
 /**
- * Fast platform-native thread identifier retrieval.
- * Eliminates std::hash overhead on high-frequency hot paths.
+ * Native thread id, cached per thread
  */
-inline std::uint32_t get_cached_thread_id() noexcept {
+std::uint32_t cached_thread_id() noexcept {
   thread_local const std::uint32_t tid = []() noexcept -> std::uint32_t {
 #if defined(_WIN32)
-    return static_cast<std::uint32_t>(GetCurrentThreadId());
+    return static_cast<std::uint32_t>(::GetCurrentThreadId());
 #elif defined(__linux__)
-    return static_cast<std::uint32_t>(
-        std::hash<pthread_t>{}(pthread_self()));
+    return static_cast<std::uint32_t>(::syscall(SYS_gettid));
 #else
-    return static_cast<std::uint32_t>(
-        std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    std::uint64_t value = 0;
+    const pthread_t self = ::pthread_self();
+    std::memcpy(&value, &self,
+                sizeof(value) < sizeof(self) ? sizeof(value) : sizeof(self));
+    return static_cast<std::uint32_t>(value ^ (value >> 32));
 #endif
   }();
   return tid;
@@ -46,8 +50,24 @@ inline std::uint32_t get_cached_thread_id() noexcept {
 
 } // namespace
 
+SpanRing span_ring_view(void *base, std::size_t bytes,
+                        std::uint64_t capacity) noexcept {
+  SpanRing ring{};
+  if (base == nullptr || capacity == 0 || (capacity & (capacity - 1)) != 0) {
+    return ring;
+  }
+  if (bytes < span_ring_bytes(capacity)) {
+    return ring;
+  }
+
+  ring.hdr = static_cast<SpanRingHeader *>(base);
+  ring.slots = reinterpret_cast<SpanCell *>(static_cast<std::byte *>(base) +
+                                            sizeof(SpanRingHeader));
+  return ring;
+}
+
 void span_ring_init(SpanRing &ring, std::uint64_t capacity) noexcept {
-  if (!ring.hdr || !ring.slots || capacity == 0) {
+  if (!ring.is_valid() || capacity == 0 || (capacity & (capacity - 1)) != 0) {
     return;
   }
 
@@ -59,6 +79,13 @@ void span_ring_init(SpanRing &ring, std::uint64_t capacity) noexcept {
   for (std::uint64_t i = 0; i < capacity; ++i) {
     ring.slots[i].seq.store(i, std::memory_order_relaxed);
   }
+  ring.hdr->init_magic.store(SPAN_RING_MAGIC, std::memory_order_release);
+}
+
+bool span_ring_is_initialized(const SpanRing &ring) noexcept {
+  return ring.is_valid() &&
+         ring.hdr->init_magic.load(std::memory_order_acquire) ==
+             SPAN_RING_MAGIC;
 }
 
 bool span_ring_push(SpanRing &ring, std::uint8_t level, std::uint16_t module,
@@ -67,96 +94,97 @@ bool span_ring_push(SpanRing &ring, std::uint8_t level, std::uint16_t module,
   SpanRecord record{};
   record.tsc_start = tsc_start;
   record.tsc_end = tsc_end;
-  record.thread_id = get_cached_thread_id();
+  record.thread_id = cached_thread_id();
   record.job_id = job_id;
   record.req_id = req_id;
   record.module_id = module;
   record.level = level;
   record.reserved = 0;
-
   return span_ring_push_record(ring, record);
 }
 
 bool span_ring_push_record(SpanRing &ring, const SpanRecord &record) noexcept {
-  if (!ring.hdr || !ring.slots) {
+  if (!ring.is_valid()) {
     return false;
   }
-
   const std::uint64_t cap = ring.hdr->capacity;
   if (cap == 0) {
     return false;
   }
-
   const std::uint64_t mask = cap - 1;
-  SpanCell *cell{nullptr};
+
+  SpanCell *cell = nullptr;
   std::uint64_t pos = ring.hdr->write_index.load(std::memory_order_relaxed);
 
   for (;;) {
     cell = &ring.slots[pos & mask];
-    std::uint64_t seq = cell->seq.load(std::memory_order_acquire);
-    auto dif =
-        static_cast<std::intptr_t>(seq) - static_cast<std::intptr_t>(pos);
+    const std::uint64_t seq = cell->seq.load(std::memory_order_acquire);
+    const auto dif =
+        static_cast<std::int64_t>(seq) - static_cast<std::int64_t>(pos);
 
     if (dif == 0) {
       if (ring.hdr->write_index.compare_exchange_weak(
               pos, pos + 1, std::memory_order_relaxed,
               std::memory_order_relaxed)) {
-        break; // Successfully claimed slot
+        break;
       }
     } else if (dif < 0) {
-      // Ring buffer is full; record dropped metric
       ring.hdr->dropped_count.fetch_add(1, std::memory_order_relaxed);
       metrics().evt_ring_drops.fetch_add(1, std::memory_order_relaxed);
       return false;
     } else {
       pos = ring.hdr->write_index.load(std::memory_order_relaxed);
     }
-    CPU_PAUSE();
+    SPAN_CPU_PAUSE();
   }
 
-  // Emplace data and update sequence for consumer visibility
   cell->record = record;
   cell->seq.store(pos + 1, std::memory_order_release);
   return true;
 }
 
 bool span_ring_pop(SpanRing &ring, SpanRecord &out_record) noexcept {
-  if (!ring.hdr || !ring.slots) {
+  if (!ring.is_valid()) {
     return false;
   }
-
   const std::uint64_t cap = ring.hdr->capacity;
   if (cap == 0) {
     return false;
   }
-
   const std::uint64_t mask = cap - 1;
-  SpanCell *cell{nullptr};
+
+  SpanCell *cell = nullptr;
   std::uint64_t pos = ring.hdr->read_index.load(std::memory_order_relaxed);
 
   for (;;) {
     cell = &ring.slots[pos & mask];
-    std::uint64_t seq = cell->seq.load(std::memory_order_acquire);
-    auto dif =
-        static_cast<std::intptr_t>(seq) - static_cast<std::intptr_t>(pos + 1);
+    const std::uint64_t seq = cell->seq.load(std::memory_order_acquire);
+    const auto dif =
+        static_cast<std::int64_t>(seq) - static_cast<std::int64_t>(pos + 1);
 
     if (dif == 0) {
       if (ring.hdr->read_index.compare_exchange_weak(
               pos, pos + 1, std::memory_order_relaxed,
               std::memory_order_relaxed)) {
-        break; // Successfully claimed slot for reading
+        break;
       }
     } else if (dif < 0) {
-      return false; // Queue is empty
+      return false; // empty
     } else {
       pos = ring.hdr->read_index.load(std::memory_order_relaxed);
     }
-    CPU_PAUSE();
+    SPAN_CPU_PAUSE();
   }
 
   out_record = cell->record;
   cell->seq.store(pos + cap, std::memory_order_release);
   return true;
+}
+
+std::uint64_t span_ring_dropped(const SpanRing &ring) noexcept {
+  return ring.is_valid()
+             ? ring.hdr->dropped_count.load(std::memory_order_relaxed)
+             : 0;
 }
 
 } // namespace Sphere::log

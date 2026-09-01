@@ -1,15 +1,19 @@
 // RootBatchLoader.h
+
+// Extracts on-disk byte ranges for TTree baskets and RNTuple pages
+
 #pragma once
 
+#include "AsyncFileLoader_io_uring.h"
+#include "common_config.h"
 #include "platform.h"
 
-// ROOT TTree Headers
+// ROOT TTree headers
 #include <TBasket.h>
 #include <TBranch.h>
 #include <TFile.h>
 #include <TTree.h>
 
-// ROOT Version Macros for Multi-Version API Compatibility
 #include <RVersion.h>
 
 #if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
@@ -21,15 +25,12 @@ namespace RNTupleNS = ROOT::Experimental;
 namespace RNTupleNS = ROOT;
 #endif
 
-// ROOT v7 RNTuple Headers
-// Note: RClusterDescriptor is natively declared inside RNTupleDescriptor.hxx
 #include <ROOT/RNTupleDescriptor.hxx>
 #include <ROOT/RPageStorage.hxx>
 
 #include <algorithm>
 #include <cstdint>
-#include <iostream>
-#include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -46,462 +47,410 @@ namespace RNTupleNS = ROOT;
 namespace Sphere::IO {
 
 /**
- * Drives hardware-specific I/O coalescing thresholds.
+ * Storage class
  */
 enum class StorageMediaType {
-  NVMe,     // Low latency, high IOPS: smaller gap threshold (e.g., 64 KB)
-  SATA_SSD, // Medium latency: moderate gap threshold (e.g., 256 KB)
-  HDD       // High seek latency: aggressive gap merging (e.g., 2 MB)
+  NVMe,     // low latency, high IOPS: merge only small gaps
+  SATA_SSD, // moderate latency
+  HDD       // high seek cost: merge aggressively
 };
 
-/**
- * Hardware-specific parameters for I/O request coalescing.
- */
 struct CoalesceTuningParams {
-  std::uint64_t max_gap_bytes{
-      64 * 1024}; // Maximum allowed gap between reads to merge
-  std::uint32_t max_read_bytes{4 * 1024 *
-                               1024}; // Maximum combined read buffer size
+  std::uint64_t max_gap_bytes{64 * 1024};
+  std::uint32_t max_read_bytes{4 * 1024 * 1024};
 
-  static CoalesceTuningParams for_media(StorageMediaType media) {
+  static CoalesceTuningParams for_media(StorageMediaType media) noexcept {
     switch (media) {
-    case StorageMediaType::NVMe:
-      return {64 * 1024, 4 * 1024 * 1024};
     case StorageMediaType::SATA_SSD:
       return {256 * 1024, 8 * 1024 * 1024};
     case StorageMediaType::HDD:
       return {2 * 1024 * 1024, 16 * 1024 * 1024};
+    case StorageMediaType::NVMe:
+    default:
+      return {64 * 1024, 4 * 1024 * 1024};
     }
-    return {64 * 1024, 4 * 1024 * 1024};
   }
 };
 
 /**
- * Represents a physical byte range on disk for a TTree Basket or RNTuple
- * Page.
+ * One physical byte range on disk.
  */
 struct RootChunkRequest {
-  std::uint64_t
-      file_offset; // Absolute byte position on disk (BasketSeek / PageOffset)
-  std::uint32_t compressed_bytes; // Physical payload size on disk (BasketBytes
-                                  // / PageSize)
-  std::uint32_t
-      uncompressed_bytes;      // Size after decompression (0 if uninspected)
-  std::uint64_t entry_start;   // First event/entry index in this chunk
-  std::uint64_t entry_count;   // Total number of events/entries in this chunk
-  std::uint32_t cluster_id;    // RNTuple Cluster ID (0 for TTree)
-  std::uint32_t column_id;     // RNTuple Column ID (0 for TTree)
-  std::uint32_t logical_index; // Original sequence index before sorting
-  void *target_shm_buffer; // Assigned target pointer inside Platform::ShmRegion
+  std::uint64_t file_offset{0};         // absolute position in the file
+  std::uint32_t compressed_bytes{0};    // on-disk size of this range
+  std::uint32_t uncompressed_bytes{0};  // expanded size, 0 when not yet known
+  std::uint64_t entry_start{0};
+  std::uint64_t entry_count{0};
+  std::uint32_t cluster_id{0};          // RNTuple cluster, 0 for TTree
+  std::uint32_t column_id{0};           // RNTuple column, 0 for TTree
+  std::uint32_t logical_index{0};       // stable identity for the caller
+  std::uint32_t file_index{0};          // index into the loader's file list
+
+  /**
+   * True when file_offset addresses a TKey rather than the payload
+   */
+  bool has_key_header{false};
+
+  void *target_shm_buffer{nullptr}; // assigned by coalesce_requests
 };
 
 /**
- * Represents a merged contiguous I/O read operation containing multiple
- * sub-chunks.
+ * A merged read covering several chunks
  */
 struct RootCoalescedRequest {
-  std::uint64_t
-      file_offset; // Starting disk byte offset for the combined operation
-  std::uint32_t
-      total_bytes; // Total byte range to read from disk (including gaps)
-  void *
-      target_shm_buffer; // Target memory destination inside Platform::ShmRegion
-  std::vector<RootChunkRequest>
-      sub_chunks; // Individual pages or baskets in this range
+  std::uint64_t file_offset{0};
+  std::uint32_t total_bytes{0};
+  std::uint32_t file_index{0};
+  void *target_shm_buffer{nullptr};
+  std::vector<std::size_t> sub_indices;
 };
 
 /**
- * High-performance asynchronous chunk and page loader for CERN ROOT
- * files. Features AVX-512 aligned allocations and dynamic I/O request
- * coalescing.
+ * Result of a coalescing pass.
+ */
+struct CoalesceResult {
+  std::vector<RootCoalescedRequest> batches;
+  std::size_t chunks_placed{0};
+  std::size_t chunks_dropped{0}; // did not fit in the shared-memory region
+  bool shm_exhausted{false};
+};
+
+/**
+ * Merges requests into contiguous reads and assigns destination pointers
+ */
+[[nodiscard]] inline CoalesceResult
+coalesce_requests(std::vector<RootChunkRequest> &requests,
+                  std::uint8_t *destination, std::size_t destination_bytes,
+                  CoalesceTuningParams params =
+                      CoalesceTuningParams::for_media(StorageMediaType::NVMe)) {
+  CoalesceResult result{};
+  if (requests.empty() || destination == nullptr || destination_bytes == 0) {
+    return result;
+  }
+
+  auto *cursor = destination;
+  std::size_t remaining = destination_bytes;
+
+  RootCoalescedRequest batch{};
+  batch.file_offset = requests[0].file_offset;
+  batch.file_index = requests[0].file_index;
+
+  auto finalize = [&]() -> bool {
+    if (batch.sub_indices.empty()) {
+      return true;
+    }
+
+    const std::size_t aligned =
+        (static_cast<std::size_t>(batch.total_bytes) + (SIMD_ALIGNMENT - 1)) &
+        ~(SIMD_ALIGNMENT - 1);
+
+    if (remaining < aligned) {
+      result.shm_exhausted = true;
+      result.chunks_dropped += batch.sub_indices.size();
+      batch.sub_indices.clear();
+      return false;
+    }
+
+    batch.target_shm_buffer = cursor;
+    for (const std::size_t index : batch.sub_indices) {
+      const std::uint64_t relative =
+          requests[index].file_offset - batch.file_offset;
+      requests[index].target_shm_buffer = cursor + relative;
+    }
+    result.chunks_placed += batch.sub_indices.size();
+    result.batches.push_back(std::move(batch));
+
+    cursor += aligned;
+    remaining -= aligned;
+    return true;
+  };
+
+  for (std::size_t i = 0; i < requests.size(); ++i) {
+    const RootChunkRequest &req = requests[i];
+    const bool first = batch.sub_indices.empty();
+    const bool file_changed = (req.file_index != batch.file_index);
+
+    const std::uint64_t req_end = req.file_offset + req.compressed_bytes;
+    const std::uint64_t batch_end = batch.file_offset + batch.total_bytes;
+    const std::uint64_t gap = (first || file_changed || req.file_offset <= batch_end)
+                                  ? 0
+                                  : (req.file_offset - batch_end);
+    const std::uint64_t candidate_size =
+        (req_end > batch.file_offset) ? (req_end - batch.file_offset)
+                                      : batch.total_bytes;
+
+    if (!first && (file_changed || gap > params.max_gap_bytes ||
+                   candidate_size > params.max_read_bytes)) {
+      if (!finalize()) {
+        result.chunks_dropped += requests.size() - i;
+        return result;
+      }
+      batch = RootCoalescedRequest{};
+      batch.file_offset = req.file_offset;
+      batch.file_index = req.file_index;
+    }
+
+    batch.sub_indices.push_back(i);
+    batch.total_bytes = static_cast<std::uint32_t>(
+        std::max<std::uint64_t>(batch.total_bytes,
+                                req_end - batch.file_offset));
+  }
+
+  (void)finalize();
+  return result;
+}
+
+/**
+ * Convenience overload placing chunks in a whole ShmRegion
+ */
+[[nodiscard]] inline CoalesceResult
+coalesce_requests(std::vector<RootChunkRequest> &requests,
+                  Platform::ShmRegion &shm,
+                  CoalesceTuningParams params =
+                      CoalesceTuningParams::for_media(StorageMediaType::NVMe)) {
+  if (!shm.is_valid()) {
+    return CoalesceResult{};
+  }
+  return coalesce_requests(requests, shm.as<std::uint8_t>(), shm.size(), params);
+}
+
+/**
+ * Sorts requests for sequential disk access
+ */
+inline void sort_requests(std::vector<RootChunkRequest> &requests) noexcept {
+  std::sort(requests.begin(), requests.end(),
+            [](const RootChunkRequest &a, const RootChunkRequest &b) noexcept {
+              if (a.file_index != b.file_index) {
+                return a.file_index < b.file_index;
+              }
+              return a.file_offset < b.file_offset;
+            });
+}
+
+/**
+ * Extracts basket byte ranges for one TTree branch
+ */
+[[nodiscard]] inline std::vector<RootChunkRequest>
+inspect_branch_chunks(TTree *tree, const char *branch_name,
+                      std::uint32_t file_index = 0) {
+  std::vector<RootChunkRequest> requests;
+
+  if (tree == nullptr || branch_name == nullptr) {
+    return requests;
+  }
+  TBranch *branch = tree->GetBranch(branch_name);
+  if (branch == nullptr) {
+    return requests;
+  }
+
+  const Int_t basket_count = branch->GetWriteBasket();
+  if (basket_count <= 0) {
+    return requests;
+  }
+
+  auto *basket_bytes = branch->GetBasketBytes();
+  Long64_t *basket_entry = branch->GetBasketEntry();
+  if (basket_bytes == nullptr || basket_entry == nullptr) {
+    return requests;
+  }
+
+  requests.reserve(static_cast<std::size_t>(basket_count));
+
+  for (Int_t i = 0; i < basket_count; ++i) {
+    const auto size = static_cast<std::uint32_t>(basket_bytes[i]);
+    const auto offset = static_cast<std::uint64_t>(branch->GetBasketSeek(i));
+    if (offset == 0 || size == 0) {
+      continue;
+    }
+
+    RootChunkRequest req{};
+    req.file_offset = offset;
+    req.compressed_bytes = size;
+    req.entry_start = static_cast<std::uint64_t>(basket_entry[i]);
+    req.entry_count =
+        static_cast<std::uint64_t>(basket_entry[i + 1] - basket_entry[i]);
+    req.logical_index = static_cast<std::uint32_t>(requests.size());
+    req.file_index = file_index;
+    // GetBasketSeek() addresses the TKey, so the decoder must skip it.
+    req.has_key_header = true;
+
+    requests.push_back(req);
+  }
+
+  sort_requests(requests);
+  return requests;
+}
+
+/**
+ * Extracts page locators for one RNTuple field
+ */
+[[nodiscard]] inline std::vector<RootChunkRequest>
+inspect_field_pages(const RNTupleNS::RNTupleDescriptor &descriptor,
+                    std::string_view field_name, std::uint32_t file_index = 0) {
+  std::vector<RootChunkRequest> requests;
+
+  const auto field_id = descriptor.FindFieldId(std::string(field_name));
+#if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
+  if (field_id == RNTupleNS::kInvalidDescriptorId) {
+    return requests;
+  }
+  std::vector<RNTupleNS::DescriptorId_t> column_ids;
+#else
+  if (field_id == ROOT::kInvalidDescriptorId) {
+    return requests;
+  }
+  std::vector<ROOT::DescriptorId_t> column_ids;
+#endif
+
+  for (const auto &column : descriptor.GetColumnIterable(field_id)) {
+    column_ids.push_back(column.GetPhysicalId());
+  }
+
+  for (const auto &cluster : descriptor.GetClusterIterable()) {
+    const auto cluster_id = cluster.GetId();
+
+#if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
+    const std::uint64_t first_entry = cluster.GetFirstEntryNum();
+#else
+    const std::uint64_t first_entry = cluster.GetFirstEntryIndex();
+#endif
+    const std::uint64_t entry_count = cluster.GetNEntries();
+
+    for (const auto column_id : column_ids) {
+      auto emit = [&](std::uint64_t offset, std::uint32_t size) {
+        if (offset == 0 || size == 0) {
+          return;
+        }
+        RootChunkRequest req{};
+        req.file_offset = offset;
+        req.compressed_bytes = size;
+        req.entry_start = first_entry;
+        req.entry_count = entry_count;
+        req.cluster_id = static_cast<std::uint32_t>(cluster_id);
+        req.column_id = static_cast<std::uint32_t>(column_id);
+        req.logical_index = static_cast<std::uint32_t>(requests.size());
+        req.file_index = file_index;
+        // Page locators point at the payload; there is no key to skip.
+        req.has_key_header = false;
+        requests.push_back(req);
+      };
+
+#if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
+      for (const auto &page : descriptor.GetPageLocations(cluster_id, column_id)) {
+        emit(page.fLocator.fOffset, page.fLocator.fSize);
+      }
+#else
+      const auto &page_range = cluster.GetPageRange(column_id);
+      for (const auto &page : page_range.GetPageInfos()) {
+        const auto &locator = page.GetLocator();
+        emit(locator.template GetPosition<std::uint64_t>(),
+             static_cast<std::uint32_t>(locator.GetNBytesOnStorage()));
+      }
+#endif
+    }
+  }
+
+  sort_requests(requests);
+  return requests;
+}
+
+/**
+ * Opens one or more ROOT files and submits merged reads for them
  */
 class RootBatchLoader {
 public:
-  explicit RootBatchLoader(const char *filepath) {
+  explicit RootBatchLoader(const std::vector<std::string> &filepaths) {
+    files_.reserve(filepaths.size());
+    for (const auto &path : filepaths) {
 #if defined(SPHERE_OS_WINDOWS)
-    file_handle_ = ::_open(filepath, _O_RDONLY | _O_BINARY);
+      const int fd = ::_open(path.c_str(), _O_RDONLY | _O_BINARY);
 #else
-    file_handle_ = ::open(filepath, O_RDONLY);
+      const int fd = ::open(path.c_str(), O_RDONLY);
 #endif
-    if (file_handle_ < 0) {
-      throw std::runtime_error("Failed to open ROOT file descriptor for "
-                               "asynchronous batch reading.");
+      if (fd < 0) {
+        close_handles(); // do not leak the files already opened
+        throw std::runtime_error("Failed to open ROOT file: " + path);
+      }
+      files_.push_back(fd);
+      paths_.push_back(path);
     }
   }
 
-  ~RootBatchLoader() {
-    if (file_handle_ >= 0) {
-#if defined(SPHERE_OS_WINDOWS)
-      ::_close(file_handle_);
-#else
-      ::close(file_handle_);
-#endif
-    }
-  }
+  explicit RootBatchLoader(const std::string &filepath)
+      : RootBatchLoader(std::vector<std::string>{filepath}) {}
+
+  ~RootBatchLoader() { close_handles(); }
 
   RootBatchLoader(const RootBatchLoader &) = delete;
   RootBatchLoader &operator=(const RootBatchLoader &) = delete;
 
   RootBatchLoader(RootBatchLoader &&other) noexcept
-      : file_handle_(other.file_handle_) {
-    other.file_handle_ = -1;
+      : files_(std::move(other.files_)), paths_(std::move(other.paths_)) {
+    other.files_.clear();
+    other.paths_.clear();
   }
 
   RootBatchLoader &operator=(RootBatchLoader &&other) noexcept {
     if (this != &other) {
-      if (file_handle_ >= 0) {
-#if defined(SPHERE_OS_WINDOWS)
-        ::_close(file_handle_);
-#else
-        ::close(file_handle_);
-#endif
-      }
-      file_handle_ = other.file_handle_;
-      other.file_handle_ = -1;
+      close_handles();
+      files_ = std::move(other.files_);
+      paths_ = std::move(other.paths_);
+      other.files_.clear();
+      other.paths_.clear();
     }
     return *this;
   }
 
   /**
-   * Inspects a classic TTree branch and extracts disk byte offsets for all
-   * baskets sorted by disk offset
+   * Submits merged reads using registered file indices
    */
-  std::vector<RootChunkRequest> inspect_branch_chunks(TTree *tree,
-                                                      const char *branch_name) {
-    std::vector<RootChunkRequest> requests;
-
-    if (!tree) {
-      std::cerr << "[RootBatchLoader] Error: Provided TTree pointer is null.\n";
-      return requests;
-    }
-
-    TBranch *branch = tree->GetBranch(branch_name);
-    if (!branch) {
-      std::cerr << "[RootBatchLoader] Error: Branch not found: " << branch_name
-                << "\n";
-      return requests;
-    }
-
-    const Int_t last_write_basket = branch->GetWriteBasket();
-    if (last_write_basket < 0) {
-      return requests;
-    }
-    const Int_t num_baskets = last_write_basket + 1;
-
-    // Use auto* to handle Int_t* vs Long64_t* variations across ROOT releases
-    auto *basket_bytes = branch->GetBasketBytes();
-    Long64_t *basket_entry = branch->GetBasketEntry();
-
-    if (!basket_bytes || !basket_entry) {
-      std::cerr
-          << "[RootBatchLoader] Error: Basket metadata arrays are null.\n";
-      return requests;
-    }
-
-    for (Int_t i = 0; i < num_baskets; ++i) {
-      const auto size = static_cast<std::uint32_t>(basket_bytes[i]);
-
-      if (i + 1 >= num_baskets) {
-        break;
-      }
-
-      const Long64_t seek = branch->GetBasketSeek(i);
-      const auto offset = static_cast<std::uint64_t>(seek);
-
-      if (offset == 0 || size == 0) {
+  [[nodiscard]] std::size_t
+  submit_batches(Platform::AsyncFileLoaderIoUring &loader,
+                 const std::vector<RootCoalescedRequest> &batches) const {
+    std::size_t submitted = 0;
+    for (std::size_t i = 0; i < batches.size(); ++i) {
+      const RootCoalescedRequest &batch = batches[i];
+      if (batch.file_index >= files_.size() ||
+          batch.target_shm_buffer == nullptr) {
         continue;
       }
-
-      RootChunkRequest req{};
-      req.file_offset = offset;
-      req.compressed_bytes = size;
-      req.uncompressed_bytes = 0;
-      req.entry_start = static_cast<std::uint64_t>(basket_entry[i]);
-      req.entry_count =
-          static_cast<std::uint64_t>(basket_entry[i + 1] - basket_entry[i]);
-      req.cluster_id = 0;
-      req.column_id = 0;
-      req.logical_index = static_cast<std::uint32_t>(i);
-      req.target_shm_buffer = nullptr;
-
-      requests.push_back(req);
+      if (loader.submit_read_fixed(static_cast<int>(batch.file_index),
+                                   batch.target_shm_buffer, batch.total_bytes,
+                                   batch.file_offset,
+                                   static_cast<std::uint64_t>(i))) {
+        ++submitted;
+      }
     }
-
-    // Sort requests by disk offset to maximize physical read performance
-    std::sort(requests.begin(), requests.end(),
-              [](const RootChunkRequest &a, const RootChunkRequest &b) {
-                return a.file_offset < b.file_offset;
-              });
-
-    return requests;
+    loader.flush_sq();
+    return submitted;
   }
 
-  /**
-   * Inspects an RNTuple descriptor and extracts page locators.
-   * Compatible across ROOT < 6.34 and ROOT 6.34+ APIs
-   */
-  std::vector<RootChunkRequest>
-  inspect_field_pages(const RNTupleNS::RNTupleDescriptor &descriptor,
-                      std::string_view field_name) {
-
-    std::vector<RootChunkRequest> requests;
-
-#if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
-    const auto field_id = descriptor.FindFieldId(std::string(field_name));
-    if (field_id == RNTupleNS::kInvalidDescriptorId) {
-#else
-    const auto field_id = descriptor.FindFieldId(std::string(field_name));
-    if (field_id == ROOT::kInvalidDescriptorId) {
-#endif
-      std::cerr << "[RootBatchLoader] Error: RNTuple field name not found: "
-                << field_name << "\n";
-      return requests;
-    }
-
-#if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
-    std::vector<RNTupleNS::DescriptorId_t> column_ids;
-#else
-    std::vector<ROOT::DescriptorId_t> column_ids;
-#endif
-
-    for (const auto &col_desc : descriptor.GetColumnIterable(field_id)) {
-      column_ids.push_back(col_desc.GetPhysicalId());
-    }
-
-    std::uint32_t logical_index = 0;
-
-    for (const auto &cluster_desc : descriptor.GetClusterIterable()) {
-      const auto cluster_id = cluster_desc.GetId();
-
-#if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
-      const std::uint64_t cluster_first_entry = cluster_desc.GetFirstEntryNum();
-#else
-      const std::uint64_t cluster_first_entry =
-          cluster_desc.GetFirstEntryIndex();
-#endif
-      const std::uint64_t cluster_n_entries = cluster_desc.GetNEntries();
-
-      for (const auto col_id : column_ids) {
-#if ROOT_VERSION_CODE < ROOT_VERSION(6, 34, 0)
-        const auto &page_locations =
-            descriptor.GetPageLocations(cluster_id, col_id);
-
-        for (const auto &page_loc : page_locations) {
-          const std::uint64_t offset = page_loc.fLocator.fOffset;
-          const std::uint32_t size = page_loc.fLocator.fSize;
-
-          if (offset == 0 || size == 0) {
-            continue;
-          }
-
-          RootChunkRequest req{};
-          req.file_offset = offset;
-          req.compressed_bytes = size;
-          req.uncompressed_bytes = 0;
-          req.entry_start = cluster_first_entry;
-          req.entry_count = cluster_n_entries;
-          req.cluster_id = static_cast<std::uint32_t>(cluster_id);
-          req.column_id = static_cast<std::uint32_t>(col_id);
-          req.logical_index = logical_index++;
-          req.target_shm_buffer = nullptr;
-
-          requests.push_back(req);
-        }
-#else
-        // ROOT 6.34+: Inspect RPageRange via GetPageInfos() and
-        // RNTupleLocator accessors
-        const auto &page_range = cluster_desc.GetPageRange(col_id);
-
-        for (const auto &page_info : page_range.GetPageInfos()) {
-          const auto &locator = page_info.GetLocator();
-          const std::uint64_t offset = locator.GetPosition<std::uint64_t>();
-          const std::uint32_t size =
-              static_cast<std::uint32_t>(locator.GetNBytesOnStorage());
-
-          if (offset == 0 || size == 0) {
-            continue;
-          }
-
-          RootChunkRequest req{};
-          req.file_offset = offset;
-          req.compressed_bytes = size;
-          req.uncompressed_bytes = 0;
-          req.entry_start = cluster_first_entry;
-          req.entry_count = cluster_n_entries;
-          req.cluster_id = static_cast<std::uint32_t>(cluster_id);
-          req.column_id = static_cast<std::uint32_t>(col_id);
-          req.logical_index = logical_index++;
-          req.target_shm_buffer = nullptr;
-
-          requests.push_back(req);
-        }
-#endif
-      }
-    }
-
-    // Sort requests by disk offset to maximize physical read performance
-    std::sort(requests.begin(), requests.end(),
-              [](const RootChunkRequest &a, const RootChunkRequest &b) {
-                return a.file_offset < b.file_offset;
-              });
-
-    return requests;
+  [[nodiscard]] const std::vector<int> &native_handles() const noexcept {
+    return files_;
   }
 
-  /**
-   * Merges adjacent requests with small disk gaps into contiguous I/O
-   * blocks. Assigns 128-byte aligned target pointers inside the provided shared
-   * memory region std::vector<RootCoalescedRequest> Coalesced list of batched
-   * requests
-   */
-  std::vector<RootCoalescedRequest> coalesce_requests(
-      std::vector<RootChunkRequest> &requests, Platform::ShmRegion &shm,
-      CoalesceTuningParams params =
-          CoalesceTuningParams::for_media(StorageMediaType::NVMe)) {
-
-    std::vector<RootCoalescedRequest> coalesced_list;
-    if (requests.empty()) {
-      return coalesced_list;
-    }
-
-    auto *current_shm_ptr = shm.as<std::uint8_t>();
-    std::size_t remaining_shm_size = shm.size();
-
-    RootCoalescedRequest current_batch{};
-    current_batch.file_offset = requests[0].file_offset;
-    current_batch.total_bytes = 0;
-
-    // Helper lambda to finalize and commit the active batch safely
-    auto finalize_batch = [&](RootCoalescedRequest &batch) -> bool {
-      if (batch.sub_chunks.empty()) {
-        return true;
-      }
-
-      // Align memory offset to 128-byte boundaries for AVX-512 optimizations
-      constexpr std::size_t kAvx512Alignment = 128;
-      const std::size_t aligned_size =
-          (static_cast<std::size_t>(batch.total_bytes) +
-           (kAvx512Alignment - 1)) &
-          ~(kAvx512Alignment - 1);
-
-      if (remaining_shm_size < aligned_size) {
-        std::cerr << "[RootBatchLoader] Warning: Shared memory region "
-                     "exhausted during I/O coalescing.\n";
-        return false;
-      }
-
-      batch.target_shm_buffer = current_shm_ptr;
-
-      for (auto &sub : batch.sub_chunks) {
-        const std::uint64_t relative_offset =
-            sub.file_offset - batch.file_offset;
-        sub.target_shm_buffer = current_shm_ptr + relative_offset;
-
-        // Synchronize target buffer address back to caller's request vector
-        if (sub.logical_index < requests.size()) {
-          requests[sub.logical_index].target_shm_buffer = sub.target_shm_buffer;
-        }
-      }
-
-      coalesced_list.push_back(std::move(batch));
-
-      current_shm_ptr += aligned_size;
-      remaining_shm_size = (remaining_shm_size > aligned_size)
-                               ? (remaining_shm_size - aligned_size)
-                               : 0;
-      return true;
-    };
-
-    for (auto &req : requests) {
-      const std::uint64_t req_end = req.file_offset + req.compressed_bytes;
-      const std::uint64_t batch_start = current_batch.file_offset;
-      const std::uint64_t batch_end = batch_start + current_batch.total_bytes;
-
-      const bool is_first = current_batch.sub_chunks.empty();
-      const std::uint64_t gap =
-          is_first
-              ? 0
-              : (req.file_offset > batch_end ? req.file_offset - batch_end : 0);
-      const std::uint64_t potential_new_size = (req_end > batch_start)
-                                                   ? (req_end - batch_start)
-                                                   : current_batch.total_bytes;
-
-      // Finalize and commit the current batch if gaps or batch size exceed
-      // thresholds
-      if (!is_first && (gap > params.max_gap_bytes ||
-                        potential_new_size > params.max_read_bytes)) {
-
-        if (!finalize_batch(current_batch)) {
-          break;
-        }
-
-        current_batch = RootCoalescedRequest{};
-        current_batch.file_offset = req.file_offset;
-        current_batch.total_bytes = 0;
-      }
-
-      current_batch.sub_chunks.push_back(req);
-      current_batch.total_bytes = static_cast<std::uint32_t>(
-          (req.file_offset + req.compressed_bytes) - current_batch.file_offset);
-    }
-
-    // Commit final pending batch
-    if (!current_batch.sub_chunks.empty()) {
-      finalize_batch(current_batch);
-    }
-
-    return coalesced_list;
+  [[nodiscard]] const std::vector<std::string> &paths() const noexcept {
+    return paths_;
   }
 
-  /**
-   * Submits unmerged requests directly to AsyncFileLoader
-   */
-  void submit_batch(Platform::AsyncFileLoader &loader,
-                    const std::vector<RootChunkRequest> &requests) {
-
-    for (std::size_t i = 0; i < requests.size(); ++i) {
-      const auto &req = requests[i];
-      const std::uint64_t user_data = static_cast<std::uint64_t>(i);
-
-      const bool submitted =
-          loader.submit_read(file_handle_, req.target_shm_buffer,
-                             req.compressed_bytes, req.file_offset, user_data);
-
-      if (!submitted) {
-        std::cerr << "[RootBatchLoader] Failed to submit asynchronous I/O "
-                     "request for index "
-                  << i << "\n";
-      }
-    }
-  }
-
-  /**
-   * Submits coalesced merged requests to AsyncFileLoader
-   */
-  void submit_coalesced_batch(
-      Platform::AsyncFileLoader &loader,
-      const std::vector<RootCoalescedRequest> &coalesced_requests) {
-
-    for (std::size_t i = 0; i < coalesced_requests.size(); ++i) {
-      const auto &batch = coalesced_requests[i];
-      const std::uint64_t user_data = static_cast<std::uint64_t>(i);
-
-      const bool submitted =
-          loader.submit_read(file_handle_, batch.target_shm_buffer,
-                             batch.total_bytes, batch.file_offset, user_data);
-
-      if (!submitted) {
-        std::cerr << "[RootBatchLoader] Failed to submit coalesced I/O request "
-                     "for index "
-                  << i << "\n";
-      }
-    }
-  }
-
-  [[nodiscard]] int native_handle() const noexcept { return file_handle_; }
+  [[nodiscard]] std::size_t file_count() const noexcept { return files_.size(); }
 
 private:
-  int file_handle_{-1};
+  void close_handles() noexcept {
+    for (const int fd : files_) {
+      if (fd >= 0) {
+#if defined(SPHERE_OS_WINDOWS)
+        ::_close(fd);
+#else
+        ::close(fd);
+#endif
+      }
+    }
+    files_.clear();
+  }
+
+  std::vector<int> files_;
+  std::vector<std::string> paths_;
 };
 
 } // namespace Sphere::IO

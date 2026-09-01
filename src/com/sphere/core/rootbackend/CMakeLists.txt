@@ -14,7 +14,11 @@ endif()
 # -----------------------------------------------------------------------------
 # ROOT & System Dependencies
 # -----------------------------------------------------------------------------
-find_package(ROOT REQUIRED COMPONENTS Core RIO Net Hist ROOTNTuple)
+# Tree and TreePlayer were missing. commands/ uses TTree, TBranch, TLeaf and
+# TTreeCache (libTree), and TTreeFormula for the selection cut, which lives in
+# libTreePlayer rather than libTree. Without both, the build gets all the way to
+# the link step and then fails on undefined symbols.
+find_package(ROOT REQUIRED COMPONENTS Core RIO Net Hist Tree TreePlayer ROOTNTuple)
 include(${ROOT_USE_FILE})
 
 find_package(Threads REQUIRED)
@@ -28,6 +32,12 @@ endif()
 if(NOT LIBDEFLATE_FOUND)
   find_library(LIBDEFLATE_LIBRARIES NAMES deflate libdeflate)
 endif()
+
+# zstd and lz4 were never looked for, although inc/DecompressorPool.h calls
+# ZSTD_decompress, LZ4_decompress_safe and friends directly. They resolved only
+# by accident, through whatever ROOT happened to pull in.
+find_library(ZSTD_LIBRARY NAMES zstd REQUIRED)
+find_library(LZ4_LIBRARY NAMES lz4 REQUIRED)
 
 # -----------------------------------------------------------------------------
 # Discover Sources & Headers
@@ -121,10 +131,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
   message(STATUS "[Sphere] Architecture detected: x86_64")
 
-  # Optional fallback for native CPU auto-tuning on host build machines
-  check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
-  if(COMPILER_SUPPORTS_MARCH_NATIVE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    target_compile_options(root-bridge PRIVATE -march=native)
+  # -march=native is OFF by default now.
+  #
+  # Wide SIMD and the CRC32C instruction are chosen at RUN time through
+  # utils::cpu_capabilities(), and the functions that use them carry their own
+  # __attribute__((target(...))). Enabling an ISA globally lets the compiler emit
+  # those instructions anywhere, so the binary traps on any machine older than
+  # the one it was built on -- including the rest of a heterogeneous cluster.
+  #
+  # Turn it back on with -DENABLE_MARCH_NATIVE=ON for a build that never leaves
+  # this host.
+  option(ENABLE_MARCH_NATIVE "Tune for the build host's exact CPU" OFF)
+  if(ENABLE_MARCH_NATIVE)
+    check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
+    if(COMPILER_SUPPORTS_MARCH_NATIVE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+      target_compile_options(root-bridge PRIVATE -march=native)
+    endif()
   endif()
 endif()
 
@@ -190,6 +212,8 @@ target_link_libraries(root-bridge PRIVATE
     ${ROOT_LIBRARIES}
     ROOTNTuple
     ${LIBDEFLATE_LIBRARIES}
+    ${ZSTD_LIBRARY}
+    ${LZ4_LIBRARY}
     Threads::Threads
 )
 

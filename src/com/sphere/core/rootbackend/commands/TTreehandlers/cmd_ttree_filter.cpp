@@ -21,25 +21,17 @@ namespace Sphere::cmd::ttree {
 // ============================================================================
 // Server-Side Summary Statistics Reduction (Welford's Algorithm)
 // ============================================================================
-void handle_compute_stats(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdTTree] Computing server-side column statistics...\n";
+void handle_compute_stats(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   TTree *tree = get_tree(pkt.job_id);
   if (!tree) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;
   }
 
-  // Extract target branch name safely from payload offset
-  std::string target_branch_name;
-  if (pkt.payload_size > 0) {
-    const auto *base_ptr = reinterpret_cast<const char *>(&shm);
-    const char *raw_ptr = base_ptr + pkt.payload_offset;
-    if (raw_ptr) {
-      target_branch_name.assign(raw_ptr, pkt.payload_size);
-    }
-  }
+  std::string target_branch_name = read_payload_text(shm, pkt);
 
   TBranch *br = nullptr;
   if (!target_branch_name.empty()) {
@@ -52,21 +44,21 @@ void handle_compute_stats(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   }
 
   if (!br) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_BRANCH);
     return;
   }
 
   const std::uint64_t total_entries = tree->GetEntries();
   if (total_entries == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_GENERIC);
     return;
   }
 
   auto *leaves = br->GetListOfLeaves();
   if (!leaves || leaves->GetSize() == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_BRANCH);
     return;
   }
@@ -120,67 +112,70 @@ void handle_compute_stats(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::size_t size = json.size();
   std::uint64_t payload_off = shm_heap_alloc_tx(shm, size);
   if (payload_off == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
 
-  const auto *shm_bytes = reinterpret_cast<const std::uint8_t *>(&shm);
-  auto *dest_ptr = const_cast<std::uint8_t *>(shm_bytes + payload_off);
+  auto *dest_ptr = reinterpret_cast<std::uint8_t *>(shm.base + payload_off);
   std::memcpy(dest_ptr, json.data(), size);
   shm_chunk_commit(shm, payload_off);
 
-  send_response(shm, pkt, Platform::PacketType::EVT_OK, 0,
-                static_cast<std::uint32_t>(size), ResponseStatus::OK);
+  send_response(shm, pkt, Proto::PacketType::EVT_OK, 0,
+                static_cast<std::uint32_t>(size), ResponseStatus::OK,
+                payload_off, ShmDType::UInt8);
 }
 
 // ============================================================================
 // High-Speed In-Engine Selection & SHM Bitmask Generation
 // ============================================================================
-void handle_apply_filter(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdTTree] Executing fast in-engine selection cut...\n";
+void handle_apply_filter(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   TTree *tree = get_tree(pkt.job_id);
   if (!tree) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;
   }
 
   const std::uint64_t total_entries = tree->GetEntries();
   if (total_entries == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_GENERIC);
     return;
   }
 
   // Safe extraction of cut expression string without assuming null-termination
   if (pkt.payload_size == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_INVALID_FORMULA);
     return;
   }
 
-  const auto *base_ptr = reinterpret_cast<const char *>(&shm);
-  const char *raw_ptr = base_ptr + pkt.payload_offset;
-  if (!raw_ptr) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+  const std::string cut_expression = read_payload_text(shm, pkt);
+  if (cut_expression.empty()) {
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_INVALID_FORMULA);
     return;
   }
-
-  std::string cut_expression(raw_ptr, pkt.payload_size);
 
   // Compile expression using native ROOT TTreeFormula
   TTreeFormula formula("SelectionFormula", cut_expression.c_str(), tree);
   if (formula.GetNdim() == 0) {
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_INVALID_FORMULA);
     return;
   }
 
-  // Fast I/O: Disable active reading for unused branches
   tree->SetBranchStatus("*", 0);
+  for (int code = 0; code < formula.GetNcodes(); ++code) {
+    if (TLeaf *leaf = formula.GetLeaf(code); leaf != nullptr) {
+      if (TBranch *fb = leaf->GetBranch(); fb != nullptr) {
+        tree->SetBranchStatus(fb->GetName(), 1);
+      }
+    }
+  }
   formula.UpdateFormulaLeaves();
 
   // Allocate 1 bit per entry
@@ -188,20 +183,24 @@ void handle_apply_filter(ShmLayout &shm, const Platform::PacketHeader &pkt) {
   std::uint64_t payload_off = shm_heap_alloc_data(shm, bitmask_bytes);
   if (payload_off == 0) {
     tree->SetBranchStatus("*", 1); // Reset status on failure
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR, 0, 0,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
 
-  const auto *shm_bytes = reinterpret_cast<const std::uint8_t *>(&shm);
-  auto *bitmask = const_cast<std::uint8_t *>(shm_bytes + payload_off);
+  auto *bitmask = reinterpret_cast<std::uint8_t *>(shm.base + payload_off);
   std::memset(bitmask, 0, bitmask_bytes);
 
   std::uint64_t passed_count = 0;
 
   // Event loop: Evaluate formula for each entry
   for (std::uint64_t i = 0; i < total_entries; ++i) {
-    tree->GetEntry(i);
+    if (tree->GetEntry(static_cast<Long64_t>(i)) <= 0) {
+      continue; // an unreadable entry does not pass
+    }
+    if (formula.GetNdata() == 0) {
+      continue;
+    }
 
     if (formula.EvalInstance(0) != 0.0) {
       bitmask[i / 8] |= static_cast<std::uint8_t>(1u << (i % 8));
@@ -230,11 +229,6 @@ void handle_apply_filter(ShmLayout &shm, const Platform::PacketHeader &pkt) {
     shm.evt_ring->push(msg);
   }
 
-  std::cout << "[CmdTTree] Selection completed: " << passed_count << " / "
-            << total_entries << " events passed filter ("
-            << (static_cast<double>(passed_count) /
-                static_cast<double>(total_entries) * 100.0)
-            << "%).\n";
 }
 
 } // namespace Sphere::cmd::ttree

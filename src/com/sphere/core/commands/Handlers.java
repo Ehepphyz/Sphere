@@ -392,1040 +392,1496 @@ public class Handlers {
 
 
     // --- ROOT Framework Engine ---
-    public static void rootMode(String input, CommandExecutionContext c) { 
-        String clean = (input != null) ? input.trim() : "";
-        if (clean.equals(":root mode")) {
-            switchMode(c, "root", "[root]"); 
-        } else {
-            AppLogger.info("[root] Evaluating ROOT script or standalone interactive statement...");
-        }
-    }
+    // --- ROOT bridge plumbing ---
 
-    public static void rootExit(String input, CommandExecutionContext c) { 
-        switchMode(c, null, ""); 
-    }
+    private static final long TIMEOUT_MS = 5000L;
 
-    public static void rootVars(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root vars", "").trim();
-        if (args.isEmpty()) {
-            sendToRootBridge("vars", c);
-        } else {
-            sendToRootBridge("cling exec gROOT->GetGlobal(\"" + args + "\")->Print();", c);
-        }
-    }
-
-    public static void rootDiag(String input, CommandExecutionContext c) { 
-        sendToRootBridge("diag", c); 
-    }
-
-    public static void rootConfig(String input, CommandExecutionContext c) {
-        sendToRootBridge("cling exec gSystem->GetMakeSharedLib();", c);
-    }
-
-    public static void rootVersion(String input, CommandExecutionContext c) {
-        sendToRootBridge("version", c);
-    }
-
-    public static void sendToRootBridge(String command, CommandExecutionContext context) {
-        if (context != null && context.ctx != null && context.ctx.router != null) {
-            Object backendObj = context.ctx.router.getRootBackend();
-            if (backendObj instanceof com.sphere.core.rootbackend.RootBackend rootBackend) {
-                boolean status = rootBackend.executeCling(command);
-                if (!status) {
-                    AppLogger.warn("Failed to dispatch command via ROOT process bridge: " + command);
-                }
-            } else {
-                AppLogger.error("ROOT backend core component is uninitialized or type-mismatched.");
-            }
-        } else {
+    private static com.sphere.core.rootbackend.RootBackend backend(CommandExecutionContext c) {
+        if (c == null || c.ctx == null || c.ctx.router == null) {
             AppLogger.error("Command execution context is lost or missing router driver configuration.");
+            return null;
         }
+        Object o = c.ctx.router.getRootBackend();
+        if (o instanceof com.sphere.core.rootbackend.RootBackend b) {
+            return b;
+        }
+        AppLogger.error("ROOT backend core component is uninitialized or type-mismatched.");
+        return null;
     }
 
-    // --- Files & Handles ---
-    public static void rootOpenFile(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root open", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing parameters. Usage: :root open <path> [mode]");
+    /**
+     * Entry point used by InternalDispatcher. A "CLING_EXEC " prefix marks C++ code
+     * the caller already resolved; anything else is first looked up among the
+     * registered :root commands, and only then handed to the interpreter.
+     */
+    public static void sendToRootBridge(String command, CommandExecutionContext context) {
+        if (command == null || command.isBlank()) {
             return;
         }
-        sendToRootBridge("file open " + args, c);
-    }
-
-    public static void rootOpenRemoteFile(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root open_remote", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing parameters. Usage: :root open_remote <url>");
+        String text = command.trim();
+        if (text.regionMatches(true, 0, "CLING_EXEC ", 0, 11)) {
+            cling(context, text.substring(11).trim());
             return;
         }
-        sendToRootBridge("file open-remote " + args, c);
-    }
-
-    public static void rootClose(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root close", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing handle ID. Usage: :root close <handle_id>");
+        String full = text.startsWith(":root") ? text : ":root " + text;
+        CommandDefinitions.CommandInfo info = CommandDefinitions.find(full);
+        if (info != null) {
+            info.handler.accept(full, context);
             return;
         }
-        sendToRootBridge("file close " + args, c);
+        cling(context, text);
     }
 
-    public static void rootCloseAll(String input, CommandExecutionContext c) {
-        sendToRootBridge("file close-all", c);
+    /** Everything after the registered command name. */
+    private static String args(String input, String command) {
+        if (input == null) {
+            return "";
+        }
+        String s = input.trim();
+        return s.regionMatches(true, 0, command, 0, command.length())
+            ? s.substring(command.length()).trim()
+            : s.replaceFirst("^:root\\s+", "").trim();
     }
 
-    public static void rootLs(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root ls", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing handle ID. Usage: :root ls <file_handle_id>");
+    private static void usage(String text) {
+        AppLogger.warn("Usage: " + text);
+    }
+
+    /** Sends a native opcode and prints the engine's answer. */
+    private static void send(CommandExecutionContext c, short opcode, int jobId, String payload) {
+        com.sphere.core.rootbackend.RootBackend b = backend(c);
+        if (b == null) {
             return;
         }
-        sendToRootBridge("file ls " + args, c);
-    }
-
-    public static void rootPwd(String input, CommandExecutionContext c) {
-        sendToRootBridge("file pwd", c);
-    }
-
-    public static void rootCd(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root cd", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing target directory. Usage: :root cd <dir_path>");
+        byte[] bytes = (payload == null || payload.isEmpty())
+            ? null : payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String answer = b.sendAwait(opcode, jobId, bytes, TIMEOUT_MS);
+        if (answer == null) {
+            AppLogger.error("No answer from the engine (opcode " + opcode + ").");
             return;
         }
-        sendToRootBridge("file cd " + args, c);
+        AppLogger.info(answer);
     }
 
-    public static void rootMkdir(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root mkdir", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing directory name. Usage: :root mkdir <dir_name>");
+    /** Runs one C++ expression in the engine's interpreter and prints the result. */
+    private static void cling(CommandExecutionContext c, String expression) {
+        com.sphere.core.rootbackend.RootBackend b = backend(c);
+        if (b == null) {
             return;
         }
-        sendToRootBridge("file mkdir " + args, c);
-    }
-
-    // --- Histograms ---
-    public static void rootGetHist(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root get_hist", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root get_hist <file_id> <hist_name>");
+        String answer = b.executeClingAwait(expression, TIMEOUT_MS);
+        if (answer == null) {
+            AppLogger.error("No answer for: " + expression);
             return;
         }
-        sendToRootBridge("hist get " + args, c);
+        AppLogger.info(answer);
     }
 
-    public static void rootDumpHistBins(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root dump_bins", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing Histogram Handle. Usage: :root dump_bins <hist_id>");
+    /** First token, the rest, or "" when absent. */
+    private static String head(String s) {
+        int i = s.indexOf(' ');
+        return i < 0 ? s : s.substring(0, i);
+    }
+
+    private static String tail(String s) {
+        int i = s.indexOf(' ');
+        return i < 0 ? "" : s.substring(i + 1).trim();
+    }
+
+    private static int asInt(String s, int fallback) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    /** A named ROOT object, cast to `type`. Handles are names, not numbers:
+     *  the engine keeps no registry for histograms, objects, graphs or canvases. */
+    private static String obj(String type, String name) {
+        return "((" + type + "*)gROOT->FindObject(\"" + name + "\"))";
+    }
+
+    // --- Level 1: native opcodes ---
+
+    public static void rootPing(String i, CommandExecutionContext c) {
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_PING, 0, null);
+    }
+
+    public static void rootVersion(String i, CommandExecutionContext c) {
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SYS_VERSION, 0, null);
+    }
+
+    public static void rootSysUptime(String i, CommandExecutionContext c) {
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SYS_UPTIME, 0, null);
+    }
+
+    public static void rootSysConfig(String i, CommandExecutionContext c) {
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SYS_CONFIG, 0, args(i, ":root sys config"));
+    }
+
+    public static void rootOpenFile(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file open");
+        if (a.isEmpty()) {
+            usage(":root file open <path>");
             return;
         }
-        sendToRootBridge("hist bins " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_OPEN_FILE, 0, head(a));
     }
 
-    public static void rootHistDraw(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist_draw", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing Histogram Handle. Usage: :root hist_draw <hist_id> [opt]");
+    public static void rootClose(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file close");
+        if (a.isEmpty()) {
+            usage(":root file close <file_id>");
             return;
         }
-        sendToRootBridge("hist draw " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_CLOSE_FILE, asInt(a, 0), null);
     }
 
-    public static void rootHistFit(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist_fit", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root hist_fit <hist_id> <formula>");
+    public static void rootCloseAll(String i, CommandExecutionContext c) {
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_CLOSE_ALL_FILES, 0, null);
+    }
+
+    public static void rootFileWrite(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file write");
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SAVE_FILE, asInt(a, 0), null);
+    }
+
+    public static void rootSchemaDiscover(String i, CommandExecutionContext c) {
+        String a = args(i, ":root schema discover");
+        if (a.isEmpty()) {
+            usage(":root schema discover <tree_id>");
             return;
         }
-        sendToRootBridge("hist fit " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SCHEMA_DISCOVER, asInt(a, 0), null);
     }
 
-    public static void rootHistRebin(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist_rebin", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root hist_rebin <hist_id> <ngroup>");
+    public static void rootTreePrint(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree print");
+        if (a.isEmpty()) {
+            usage(":root tree print <tree_id>");
             return;
         }
-        sendToRootBridge("hist rebin " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_INSPECT, asInt(a, 0), null);
     }
 
-    // --- Objects ---
-    public static void rootGetObject(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root get_object", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root get_object <file_id> <obj_name>");
+    public static void rootTreeEntries(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree entries");
+        if (a.isEmpty()) {
+            usage(":root tree entries <tree_id>");
             return;
         }
-        sendToRootBridge("obj get " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_QUERY_ENTRIES, asInt(a, 0), null);
     }
 
-    public static void rootDumpObject(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root dump", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing Handle ID. Usage: :root dump <handle_id>");
+    public static void rootTreeBranches(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree branches");
+        if (a.isEmpty()) {
+            usage(":root tree branches <tree_id>");
             return;
         }
-        sendToRootBridge("obj dump " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_SCAN_BRANCHES, asInt(a, 0), null);
     }
 
-    public static void rootDescribeObject(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root describe", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing Handle ID. Usage: :root describe <handle_id>");
+    public static void rootTreeLeaves(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree leaves");
+        if (a.isEmpty()) {
+            usage(":root tree leaves <tree_id>");
             return;
         }
-        sendToRootBridge("obj describe " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_SCAN_BRANCHES, asInt(a, 0), null);
     }
 
-    // --- Trees & Chains ---
-    public static void rootGetTree(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root get_tree", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root get_tree <file_id> <tree_name>");
+    public static void rootTreeGetentry(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree getentry");
+        if (a.isEmpty()) {
+            usage(":root tree getentry <tree_id> <entry>");
             return;
         }
-        sendToRootBridge("obj get " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_GET_ENTRY,
+             asInt(head(a), 0), tail(a));
     }
 
-    public static void rootTreePrint(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree_print", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root tree_print <tree_handle_id>");
+    public static void rootTreeColumn(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree column");
+        if (a.isEmpty() || tail(a).isEmpty()) {
+            usage(":root tree column <tree_id> <branch>");
             return;
         }
-        sendToRootBridge("tree print " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_READ_COLUMN,
+             asInt(head(a), 0), tail(a));
     }
 
-    public static void rootTreeScan(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree_scan", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root tree_scan <tree_handle_id> [varexp] [selection]");
+    public static void rootTreeStats(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree stats");
+        if (a.isEmpty() || tail(a).isEmpty()) {
+            usage(":root tree stats <tree_id> <branch>");
             return;
         }
-        sendToRootBridge("tree scan " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_COMPUTE_STATS,
+             asInt(head(a), 0), tail(a));
     }
 
-    public static void rootTreeDraw(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree_draw", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root tree_draw <tree_handle_id> <varexp> [selection]");
+    public static void rootTreeFilter(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree filter");
+        if (a.isEmpty() || tail(a).isEmpty()) {
+            usage(":root tree filter <tree_id> <expression>");
             return;
         }
-        sendToRootBridge("tree draw " + args, c);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_APPLY_FILTER,
+             asInt(head(a), 0), tail(a));
     }
 
-    public static void rootGetBranch(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root get_branch", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root get_branch <tree_handle_id>");
+    public static void rootOpenRemoteFile(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file open-remote");
+        if (a.isEmpty()) {
+            usage(":root file open-remote <url>");
             return;
         }
-        sendToRootBridge("tree branches " + args, c);
+        String a0 = a;
+        cling(c, "TFile::Open(\"" + a0 + "\")");
     }
 
-    public static void rootChainAdd(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root chain_add", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root chain_add <tree_name> <file_pattern>");
+    public static void rootLs(String i, CommandExecutionContext c) {
+        cling(c, "gDirectory->ls()");
+    }
+
+    public static void rootFileKeys(String i, CommandExecutionContext c) {
+        cling(c, "gDirectory->GetListOfKeys()->Print()");
+    }
+
+    public static void rootFileCd(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file cd");
+        if (a.isEmpty()) {
+            usage(":root file cd <path>");
             return;
         }
-        sendToRootBridge("chain add " + args, c);
+        String a0 = a;
+        cling(c, "gDirectory->cd(\"" + a0 + "\")");
     }
 
-    // --- DataFrames (RDataFrame) ---
-    public static void rootRdfOpen(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root rdf_open", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root rdf_open <tree_name> <file_path>");
+    public static void rootFilePwd(String i, CommandExecutionContext c) {
+        cling(c, "gDirectory->pwd()");
+    }
+
+    public static void rootFileDir(String i, CommandExecutionContext c) {
+        cling(c, "gDirectory->ls()");
+    }
+
+    public static void rootFileGet(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file get");
+        if (a.isEmpty()) {
+            usage(":root file get <name>");
             return;
         }
-        sendToRootBridge("dataframe open " + args, c);
+        String a0 = a;
+        cling(c, "gDirectory->Get(\"" + a0 + "\")->ClassName()");
     }
 
-    public static void rootRdfFilter(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root rdf_filter", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root rdf_filter <rdf_handle_id> <expression>");
+    public static void rootFileRecreate(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file recreate");
+        if (a.isEmpty()) {
+            usage(":root file recreate <path>");
             return;
         }
-        sendToRootBridge("dataframe filter " + args, c);
+        String a0 = a;
+        cling(c, "TFile::Open(\"" + a0 + "\",\"RECREATE\")");
     }
 
-    public static void rootRdfCount(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root rdf_count", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root rdf_count <rdf_handle_id>");
+    public static void rootFileOpenUpdate(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file open-update");
+        if (a.isEmpty()) {
+            usage(":root file open-update <path>");
             return;
         }
-        sendToRootBridge("dataframe count " + args, c);
+        String a0 = a;
+        cling(c, "TFile::Open(\"" + a0 + "\",\"UPDATE\")");
     }
 
-    // --- Graphs & Canvases ---
-    public static void rootGraphDraw(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root graph_draw", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root graph_draw <graph_handle_id> [opt]");
+    public static void rootFileMkdir(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file mkdir");
+        if (a.isEmpty()) {
+            usage(":root file mkdir <name>");
             return;
         }
-        sendToRootBridge("graph draw " + args, c);
+        String a0 = a;
+        cling(c, "gDirectory->mkdir(\"" + a0 + "\")");
     }
 
-    public static void rootCanvasNew(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root canvas_new", "").trim();
-        sendToRootBridge("canvas new " + args, c);
-    }
-
-    public static void rootCanvasSave(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root canvas_save", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root canvas_save <canvas_id> <file_path>");
+    public static void rootFileRmdir(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file rmdir");
+        if (a.isEmpty()) {
+            usage(":root file rmdir <name>");
             return;
         }
-        sendToRootBridge("canvas save " + args, c);
+        String a0 = a;
+        cling(c, "gDirectory->rmdir(\"" + a0 + "\")");
     }
 
-    // --- Functions & Style ---
-    public static void rootFuncNew(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root func_new", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root func_new <name> <formula> <xmin> <xmax>");
+    public static void rootFileDelete(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file delete");
+        if (a.isEmpty()) {
+            usage(":root file delete <name>");
             return;
         }
-        sendToRootBridge("func new " + args, c);
+        String a0 = a;
+        cling(c, "gDirectory->Delete(\"" + a0 + "\")");
     }
 
-    public static void rootStyleSet(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root style_set", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root style_set <style_name>");
+    public static void rootFileCopy(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file copy");
+        if (a.isEmpty()) {
+            usage(":root file copy <src> <dst>");
             return;
         }
-        sendToRootBridge("style set " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "gDirectory->Get(\"" + a0 + "\")->Clone(\"" + a1 + "\")");
     }
 
-    // --- Analytics, Diagnostics & System ---
-    public static void rootAnalyze(String input, CommandExecutionContext c) {
-        String rawArgs = input.replaceFirst("^:root analyze", "").trim();
-        if (rawArgs.isEmpty()) {
-            AppLogger.warn("Missing Handle. Usage: :root analyze [hist/obj] <handle_id>");
+    public static void rootFileMove(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file move");
+        if (a.isEmpty()) {
+            usage(":root file move <src> <dst>");
             return;
         }
-        
-        if (rawArgs.startsWith("hist ")) {
-            sendToRootBridge("analyze hist " + rawArgs.substring(5).trim(), c);
-        } else if (rawArgs.startsWith("obj ")) {
-            sendToRootBridge("analyze obj " + rawArgs.substring(4).trim(), c);
-        } else {
-            sendToRootBridge("analyze hist " + rawArgs, c);
-        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "gDirectory->Get(\"" + a0 + "\")->Clone(\"" + a1 + "\");gDirectory->Delete(\"" + a0 + "\")");
     }
 
-    public static void rootInfo(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root info", "").trim();
-        if (args.isEmpty()) {
-            sendToRootBridge("status", c);
-        } else {
-            sendToRootBridge("file info " + args, c);
-        }
+    public static void rootFileInfo(String i, CommandExecutionContext c) {
+        cling(c, "gFile->Print()");
     }
 
-    public static void rootListHandles(String input, CommandExecutionContext c) {
-        sendToRootBridge("handles list", c);
+    public static void rootListHandles(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfFiles()->Print()");
     }
 
-    public static void rootStats(String input, CommandExecutionContext c) {
-        sendToRootBridge("stats", c);
-    }
-
-    public static void rootGc(String input, CommandExecutionContext c) {
-        sendToRootBridge("gc", c);
-    }
-
-    public static void rootSafeMode(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root safe_mode", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root safe_mode <ON/OFF>");
+    public static void rootCd(String i, CommandExecutionContext c) {
+        String a = args(i, ":root cd");
+        if (a.isEmpty()) {
+            usage(":root cd <path>");
             return;
         }
-        sendToRootBridge("safe-mode " + args, c);
+        String a0 = a;
+        cling(c, "gDirectory->cd(\"" + a0 + "\")");
     }
 
-    public static void rootSetOutput(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root set_output", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root set_output <TEXT/JSON>");
+    public static void rootPwd(String i, CommandExecutionContext c) {
+        cling(c, "gDirectory->pwd()");
+    }
+
+    public static void rootMkdir(String i, CommandExecutionContext c) {
+        String a = args(i, ":root mkdir");
+        if (a.isEmpty()) {
+            usage(":root mkdir <name>");
             return;
         }
-        sendToRootBridge("output set " + args, c);
+        String a0 = a;
+        cling(c, "gDirectory->mkdir(\"" + a0 + "\")");
     }
 
-    public static void rootSetCacheSize(String input, CommandExecutionContext c) {
-        if (!c.hasParamValue(":root cache_size")) {
-            AppLogger.warn("Usage: :root cache_size=<max_items> or :root cache_size <max_items>");
+    public static void rootGetHist(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist get");
+        if (a.isEmpty()) {
+            usage(":root hist get <name>");
             return;
         }
-        sendToRootBridge("cache size " + c.getCleanParamValue(":root cache_size"), c);
+        String a0 = a;
+        cling(c, "" + obj("TH1", a0) + "->ClassName()");
     }
 
-    public static void rootSetCachePolicy(String input, CommandExecutionContext c) {
-        String value = c.getCleanParamValue(":root cache_policy");
-        if (value.isEmpty()) {
-            AppLogger.warn("Usage: :root cache_policy=<NONE/FIFO/LRU>");
+    public static void rootDumpHistBins(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist bins");
+        if (a.isEmpty()) {
+            usage(":root hist bins <name>");
             return;
         }
-        sendToRootBridge("cache policy " + value, c);
+        String a0 = a;
+        cling(c, "" + obj("TH1", a0) + "->Print(\"all\")");
     }
 
-    public static void rootCacheStats(String input, CommandExecutionContext c) {
-        sendToRootBridge("cache stats", c);
-    }
-
-    public static void rootCacheClear(String input, CommandExecutionContext c) {
-        sendToRootBridge("cache clear", c);
-    }
-
-    public static void rootSetMaxObjSize(String input, CommandExecutionContext c) {
-        if (!c.hasParamValue(":root max_size")) {
-            AppLogger.warn("Usage: :root max_size=<bytes> or :root max_size <bytes>");
+    public static void rootHistReset(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist reset");
+        if (a.isEmpty()) {
+            usage(":root hist reset <name>");
             return;
         }
-        sendToRootBridge("limits obj-size " + c.getCleanParamValue(":root max_size"), c);
+        String a0 = a;
+        cling(c, "" + obj("TH1", a0) + "->Reset()");
     }
 
-    public static void rootSetMaxHandles(String input, CommandExecutionContext c) {
-        if (!c.hasParamValue(":root max_handles")) {
-            AppLogger.warn("Usage: :root max_handles=<n> or :root max_handles <n>");
+    public static void rootHistRebin(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist rebin");
+        if (a.isEmpty()) {
+            usage(":root hist rebin <name> <n>");
             return;
         }
-        sendToRootBridge("limits handles " + c.getCleanParamValue(":root max_handles"), c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Rebin(" + a1 + ")");
     }
 
-    public static void rootSetMaxAge(String input, CommandExecutionContext c) {
-        if (!c.hasParamValue(":root max_age")) {
-            AppLogger.warn("Usage: :root max_age=<seconds> or :root max_age <seconds>");
+    public static void rootHistScale(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist scale");
+        if (a.isEmpty()) {
+            usage(":root hist scale <name> <f>");
             return;
         }
-        sendToRootBridge("limits age " + c.getCleanParamValue(":root max_age"), c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Scale(" + a1 + ")");
     }
 
-    public static void rootCompileIncludes(String input, CommandExecutionContext c) {
-        sendToRootBridge("includes compile", c);
-    }
-
-    public static void rootLoadIncludes(String input, CommandExecutionContext c) {
-        sendToRootBridge("includes load", c);
-    }
-
-    public static void rootCompileScripts(String input, CommandExecutionContext c) {
-        sendToRootBridge("script compile", c);
-    }
-
-    public static void rootLoadScript(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root load_script", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root load_script <script_name>");
+    public static void rootHistDraw(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist draw");
+        if (a.isEmpty()) {
+            usage(":root hist draw <name> [opt]");
             return;
         }
-        sendToRootBridge("script load " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Draw(\"" + a1 + "\")");
     }
 
-    public static void rootRunScript(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root run_script", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root run_script <script_path>");
+    public static void rootHistFit(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist fit");
+        if (a.isEmpty()) {
+            usage(":root hist fit <name> <f>");
             return;
         }
-        sendToRootBridge("script run " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Fit(\"" + a1 + "\")");
     }
 
-    // --- Bridge Environment & Maintenance Systems ---
-    public static void rootReset(String input, CommandExecutionContext c) {
-        sendToRootBridge("system reset", c);
-    }
-
-    public static void rootBenchmark(String input, CommandExecutionContext c) {
-        sendToRootBridge("stats", c);
-    }
-
-    public static void rootGetEnv(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root getenv", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root getenv <VAR_NAME>");
+    public static void rootHistIntegral(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist integral");
+        if (a.isEmpty()) {
+            usage(":root hist integral <name>");
             return;
         }
-        sendToRootBridge("system exec echo $" + args, c);
+        String a0 = a;
+        cling(c, "" + obj("TH1", a0) + "->Integral()");
     }
 
-    public static void rootPing(String input, CommandExecutionContext c) {
-        sendToRootBridge("ping", c);
-    }
-
-    // =========================================================================
-    // --- EXTENDED ROOT BRIDGE & SYSTEM HANDLERS ---
-    // =========================================================================
-
-    // --- Files & Directories (Extended) ---
-    public static void rootFileInfo(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file info", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing parameters. Usage: :root file info <file_id>");
+    public static void rootHistMax(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist max");
+        if (a.isEmpty()) {
+            usage(":root hist max <name>");
             return;
         }
-        sendToRootBridge("file info " + args, c);
+        String a0 = a;
+        cling(c, "" + obj("TH1", a0) + "->GetMaximum()");
     }
 
-    public static void rootFileWrite(String input, CommandExecutionContext c) {
-        sendToRootBridge("file write", c);
-    }
-
-    public static void rootFileKeys(String input, CommandExecutionContext c) {
-        sendToRootBridge("file keys", c);
-    }
-
-    public static void rootFileCd(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file cd", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing path. Usage: :root file cd <path>");
+    public static void rootHistMin(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist min");
+        if (a.isEmpty()) {
+            usage(":root hist min <name>");
             return;
         }
-        sendToRootBridge("file cd " + args, c);
+        String a0 = a;
+        cling(c, "" + obj("TH1", a0) + "->GetMinimum()");
     }
 
-    public static void rootFilePwd(String input, CommandExecutionContext c) {
-        sendToRootBridge("file pwd", c);
+    public static void rootHistList(String i, CommandExecutionContext c) {
+        cling(c, "gDirectory->GetList()->Print()");
     }
 
-    public static void rootFileDir(String input, CommandExecutionContext c) {
-        sendToRootBridge("file dir", c);
-    }
-
-    public static void rootFileGet(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file get", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root file get <file_id> <name>");
+    public static void rootHistSmooth(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist smooth");
+        if (a.isEmpty()) {
+            usage(":root hist smooth <name>");
             return;
         }
-        sendToRootBridge("file get " + args, c);
+        String a0 = a;
+        cling(c, "" + obj("TH1", a0) + "->Smooth()");
     }
 
-    public static void rootFileRecreate(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file recreate", "").trim();
-        sendToRootBridge("file recreate " + args, c);
-    }
-
-    public static void rootFileOpenUpdate(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file open-update", "").trim();
-        sendToRootBridge("file open-update " + args, c);
-    }
-
-    public static void rootFileMkdir(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file mkdir", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing directory name. Usage: :root file mkdir <name>");
+    public static void rootHistProject(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist project");
+        if (a.isEmpty()) {
+            usage(":root hist project <name> <axis>");
             return;
         }
-        sendToRootBridge("file mkdir " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH2", a0) + "->ProjectionX(\"" + a1 + "\")");
     }
 
-    public static void rootFileRmdir(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file rmdir", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing directory name. Usage: :root file rmdir <name>");
+    public static void rootHistStatbox(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist statbox");
+        if (a.isEmpty()) {
+            usage(":root hist statbox <0|1>");
             return;
         }
-        sendToRootBridge("file rmdir " + args, c);
+        String a0 = a;
+        cling(c, "gStyle->SetOptStat(" + a0 + ")");
     }
 
-    public static void rootFileCopy(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file copy", "").trim();
-        sendToRootBridge("file copy " + args, c);
-    }
-
-    public static void rootFileMove(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file move", "").trim();
-        sendToRootBridge("file move " + args, c);
-    }
-
-    public static void rootFileDelete(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root file delete", "").trim();
-        sendToRootBridge("file delete " + args, c);
-    }
-
-    // --- Histograms (Extended) ---
-    public static void rootHistReset(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist reset", "").trim();
-        sendToRootBridge("hist reset " + args, c);
-    }
-
-    public static void rootHistScale(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist scale", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root hist scale <hist_id> <factor>");
+    public static void rootHistSetbin(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist setbin");
+        if (a.isEmpty()) {
+            usage(":root hist setbin <name> <bin> <v>");
             return;
         }
-        sendToRootBridge("hist scale " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->SetBinContent(" + a1 + ")");
     }
 
-    public static void rootHistIntegral(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist integral", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing handle. Usage: :root hist integral <hist_id>");
+    public static void rootHistFill(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist fill");
+        if (a.isEmpty()) {
+            usage(":root hist fill <name> <v>");
             return;
         }
-        sendToRootBridge("hist integral " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Fill(" + a1 + ")");
     }
 
-    public static void rootHistMax(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist max", "").trim();
-        sendToRootBridge("hist max " + args, c);
-    }
-
-    public static void rootHistMin(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist min", "").trim();
-        sendToRootBridge("hist min " + args, c);
-    }
-
-    public static void rootHistList(String input, CommandExecutionContext c) {
-        sendToRootBridge("hist list", c);
-    }
-
-    public static void rootHistSmooth(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist smooth", "").trim();
-        sendToRootBridge("hist smooth " + args, c);
-    }
-
-    public static void rootHistProject(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist project", "").trim();
-        sendToRootBridge("hist project " + args, c);
-    }
-
-    public static void rootHistStatbox(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist statbox", "").trim();
-        sendToRootBridge("hist statbox " + args, c);
-    }
-
-    public static void rootHistSetbin(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist setbin", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root hist setbin <hist_id> <bin> <val>");
+    public static void rootHistClone(String i, CommandExecutionContext c) {
+        String a = args(i, ":root hist clone");
+        if (a.isEmpty()) {
+            usage(":root hist clone <name> <new>");
             return;
         }
-        sendToRootBridge("hist setbin " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Clone(\"" + a1 + "\")");
     }
 
-    public static void rootHistFill(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist fill", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Missing arguments. Usage: :root hist fill <hist_id> <val> [weight]");
+    public static void rootGetObject(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj get");
+        if (a.isEmpty()) {
+            usage(":root obj get <name>");
             return;
         }
-        sendToRootBridge("hist fill " + args, c);
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->ClassName()");
     }
 
-    public static void rootHistClone(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root hist clone", "").trim();
-        sendToRootBridge("hist clone " + args, c);
-    }
-
-    // --- Generic Objects (Extended) ---
-    public static void rootObjClone(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj clone", "").trim();
-        sendToRootBridge("obj clone " + args, c);
-    }
-
-    public static void rootObjWrite(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj write", "").trim();
-        sendToRootBridge("obj write " + args, c);
-    }
-
-    public static void rootObjDelete(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj delete", "").trim();
-        sendToRootBridge("obj delete " + args, c);
-    }
-
-    public static void rootObjMethods(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj methods", "").trim();
-        sendToRootBridge("obj methods " + args, c);
-    }
-
-    public static void rootObjMembers(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj members", "").trim();
-        sendToRootBridge("obj members " + args, c);
-    }
-
-    public static void rootObjList(String input, CommandExecutionContext c) {
-        sendToRootBridge("obj list", c);
-    }
-
-    public static void rootObjClass(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj class", "").trim();
-        sendToRootBridge("obj class " + args, c);
-    }
-
-    public static void rootObjType(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj type", "").trim();
-        sendToRootBridge("obj type " + args, c);
-    }
-
-    public static void rootObjPrint(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj print", "").trim();
-        sendToRootBridge("obj print " + args, c);
-    }
-
-    public static void rootObjInspect(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root obj inspect", "").trim();
-        sendToRootBridge("obj inspect " + args, c);
-    }
-
-    // --- Trees & Datasets (Extended) ---
-    public static void rootTreeProcess(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree process", "").trim();
-        sendToRootBridge("tree process " + args, c);
-    }
-
-    public static void rootTreeProject(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree project", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root tree project <tree_id> <hist_id> <expr>");
+    public static void rootDumpObject(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj dump");
+        if (a.isEmpty()) {
+            usage(":root obj dump <name>");
             return;
         }
-        sendToRootBridge("tree project " + args, c);
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Dump()");
     }
 
-    public static void rootTreeEntries(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree entries", "").trim();
-        sendToRootBridge("tree entries " + args, c);
-    }
-
-    public static void rootTreeBranches(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree branches", "").trim();
-        sendToRootBridge("tree branches " + args, c);
-    }
-
-    public static void rootTreeLeaves(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree leaves", "").trim();
-        sendToRootBridge("tree leaves " + args, c);
-    }
-
-    public static void rootTreeGetentry(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree getentry", "").trim();
-        sendToRootBridge("tree getentry " + args, c);
-    }
-
-    public static void rootTreeCopytree(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tree copytree", "").trim();
-        sendToRootBridge("tree copytree " + args, c);
-    }
-
-    // --- Graphs & Canvas (Extended) ---
-    public static void rootGraphFit(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root graph fit", "").trim();
-        sendToRootBridge("graph fit " + args, c);
-    }
-
-    public static void rootGraphPoints(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root graph points", "").trim();
-        sendToRootBridge("graph points " + args, c);
-    }
-
-    public static void rootGraphAdd(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root graph add", "").trim();
-        sendToRootBridge("graph add " + args, c);
-    }
-
-    public static void rootCanvasCd(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root canvas cd", "").trim();
-        sendToRootBridge("canvas cd " + args, c);
-    }
-
-    public static void rootCanvasClear(String input, CommandExecutionContext c) {
-        sendToRootBridge("canvas clear", c);
-    }
-
-    public static void rootCanvasUpdate(String input, CommandExecutionContext c) {
-        sendToRootBridge("canvas update", c);
-    }
-
-    public static void rootCanvasList(String input, CommandExecutionContext c) {
-        sendToRootBridge("canvas list", c);
-    }
-
-    // --- Fitting & Math Engine ---
-    public static void rootFitExpr(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root fit expr", "").trim();
-        sendToRootBridge("fit expr " + args, c);
-    }
-
-    public static void rootFitFunction(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root fit function", "").trim();
-        sendToRootBridge("fit function " + args, c);
-    }
-
-    public static void rootFitReset(String input, CommandExecutionContext c) {
-        sendToRootBridge("fit reset", c);
-    }
-
-    public static void rootFitParams(String input, CommandExecutionContext c) {
-        sendToRootBridge("fit params", c);
-    }
-
-    public static void rootMathEval(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root math eval", "").trim();
-        sendToRootBridge("math eval " + args, c);
-    }
-
-    public static void rootMathDeriv(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root math deriv", "").trim();
-        sendToRootBridge("math deriv " + args, c);
-    }
-
-    public static void rootMathIntegral(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root math integral", "").trim();
-        sendToRootBridge("math integral " + args, c);
-    }
-
-    // --- TMVA & RooFit ---
-    public static void rootTmvaFactory(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root tmva factory", "").trim();
-        sendToRootBridge("tmva factory " + args, c);
-    }
-
-    public static void rootTmvaTrain(String input, CommandExecutionContext c) {
-        sendToRootBridge("tmva train", c);
-    }
-
-    public static void rootTmvaTest(String input, CommandExecutionContext c) {
-        sendToRootBridge("tmva test", c);
-    }
-
-    public static void rootTmvaEvaluate(String input, CommandExecutionContext c) {
-        sendToRootBridge("tmva evaluate", c);
-    }
-
-    public static void rootTmvaGui(String input, CommandExecutionContext c) {
-        sendToRootBridge("tmva gui", c);
-    }
-
-    public static void rootRoofitWorkspace(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root roofit workspace", "").trim();
-        sendToRootBridge("roofit workspace " + args, c);
-    }
-
-    public static void rootRoofitPdf(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root roofit pdf", "").trim();
-        sendToRootBridge("roofit pdf " + args, c);
-    }
-
-    public static void rootRoofitFit(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root roofit fit", "").trim();
-        sendToRootBridge("roofit fit " + args, c);
-    }
-
-    public static void rootRoofitPlot(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root roofit plot", "").trim();
-        sendToRootBridge("roofit plot " + args, c);
-    }
-
-    // --- Geometry, SQL, Networking & PROOF ---
-    public static void rootGeomLoad(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root geom load", "").trim();
-        sendToRootBridge("geom load " + args, c);
-    }
-
-    public static void rootGeomDraw(String input, CommandExecutionContext c) {
-        sendToRootBridge("geom draw", c);
-    }
-
-    public static void rootGeomExport(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root geom export", "").trim();
-        sendToRootBridge("geom export " + args, c);
-    }
-
-    public static void rootSqlConnect(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root sql connect", "").trim();
-        sendToRootBridge("sql connect " + args, c);
-    }
-
-    public static void rootSqlQuery(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root sql query", "").trim();
-        sendToRootBridge("sql query " + args, c);
-    }
-
-    public static void rootSqlDisconnect(String input, CommandExecutionContext c) {
-        sendToRootBridge("sql disconnect", c);
-    }
-
-    public static void rootNetServer(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root net server", "").trim();
-        sendToRootBridge("net server " + args, c);
-    }
-
-    public static void rootNetConnect(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root net connect", "").trim();
-        sendToRootBridge("net connect " + args, c);
-    }
-
-    public static void rootNetSend(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root net send", "").trim();
-        sendToRootBridge("net send " + args, c);
-    }
-
-    public static void rootProofOpen(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root proof open", "").trim();
-        sendToRootBridge("proof open " + args, c);
-    }
-
-    public static void rootProofProcess(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root proof process", "").trim();
-        sendToRootBridge("proof process " + args, c);
-    }
-
-    public static void rootProofStatus(String input, CommandExecutionContext c) {
-        sendToRootBridge("proof status", c);
-    }
-
-    // --- GUI, PyROOT & System Diagnostics ---
-    public static void rootGuiNew(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root gui new", "").trim();
-        sendToRootBridge("gui new " + args, c);
-    }
-
-    public static void rootGuiShow(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root gui show", "").trim();
-        sendToRootBridge("gui show " + args, c);
-    }
-
-    public static void rootGuiClose(String input, CommandExecutionContext c) {
-        sendToRootBridge("gui close", c);
-    }
-
-    public static void rootPyImport(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root py import", "").trim();
-        sendToRootBridge("py import " + args, c);
-    }
-
-    public static void rootPyEval(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root py eval", "").trim();
-        sendToRootBridge("py eval " + args, c);
-    }
-
-    public static void rootPyExec(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root py exec", "").trim();
-        sendToRootBridge("py exec " + args, c);
-    }
-
-    public static void rootSysInfo(String input, CommandExecutionContext c) {
-        sendToRootBridge("sys info", c);
-    }
-
-    public static void rootSysMemory(String input, CommandExecutionContext c) {
-        sendToRootBridge("sys memory", c);
-    }
-
-    public static void rootSysPlugins(String input, CommandExecutionContext c) {
-        sendToRootBridge("sys plugins", c);
-    }
-
-    public static void rootStatus(String input, CommandExecutionContext c) {
-        sendToRootBridge("status", c);
-    }
-
-    public static void rootDump(String input, CommandExecutionContext c) {
-        sendToRootBridge("dump", c);
-    }
-
-    // --- Profiling Commands ---
-    public static void rootProfile(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root profile", "").trim();
-        if (args.isEmpty()) {
-            sendToRootBridge("profile", c);
-        } else {
-            sendToRootBridge("profile " + args, c);
-        }
-    }
-
-    public static void rootProfileStats(String input, CommandExecutionContext c) {
-        sendToRootBridge("profile stats", c);
-    }
-
-    public static void rootProfileJson(String input, CommandExecutionContext c) {
-        sendToRootBridge("profile json", c);
-    }
-
-    public static void rootProfileReset(String input, CommandExecutionContext c) {
-        sendToRootBridge("profile reset", c);
-    }
-
-    public static void rootProfileLevel(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root profile_level", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root profile_level <basic|advanced|full>");
+    public static void rootDescribeObject(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj describe");
+        if (a.isEmpty()) {
+            usage(":root obj describe <name>");
             return;
         }
-        sendToRootBridge("profile level " + args, c);
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->Print()");
     }
 
-    // --- Debug & Diagnostic Commands ---
-    public static void rootDebugDump(String input, CommandExecutionContext c) {
-        sendToRootBridge("debug dump", c);
-    }
-
-    public static void rootDebugGraphviz(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root\\s+", "").trim();
-        sendToRootBridge(args, c);
-    }
-
-    public static void rootDebugAudit(String input, CommandExecutionContext c) {
-        sendToRootBridge("debug audit", c);
-    }
-
-    public static void rootDebugLevel(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root\\s+", "").trim();
-        sendToRootBridge(args, c);
-    }
-
-    // =========================================================================
-    // --- PROFILING & WATCHDOG DIAGNOSTICS ---
-    // =========================================================================
-
-    public static void rootProfilingStatus(String input, CommandExecutionContext c) {
-        sendToRootBridge("profile stats", c);
-    }
-
-    public static void rootProfilingJson(String input, CommandExecutionContext c) {
-        sendToRootBridge("profile json", c);
-    }
-
-    public static void rootProfilingReset(String input, CommandExecutionContext c) {
-        sendToRootBridge("profile reset", c);
-    }
-
-    public static void rootProfilingLevel(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root profiling level", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root profiling level <BASIC|ADVANCED|FULL>");
+    public static void rootObjClone(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj clone");
+        if (a.isEmpty()) {
+            usage(":root obj clone <name> <new>");
             return;
         }
-        sendToRootBridge("profile level " + args, c);
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Clone(\"" + a1 + "\")");
     }
 
-    public static void rootProfileThreshold(String input, CommandExecutionContext c) {
-        String args = input.replaceFirst("^:root profile threshold", "").trim();
-        if (args.isEmpty()) {
-            AppLogger.warn("Usage: :root profile threshold <ms>");
+    public static void rootObjWrite(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj write");
+        if (a.isEmpty()) {
+            usage(":root obj write <name>");
             return;
         }
-        sendToRootBridge("profile threshold " + args, c);
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Write()");
     }
 
-    public static void rootWatchdogStatus(String input, CommandExecutionContext c) {
-        sendToRootBridge("watchdog status", c);
+    public static void rootObjDelete(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj delete");
+        if (a.isEmpty()) {
+            usage(":root obj delete <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Delete()");
     }
 
-    public static void rootWatchdogKill(String input, CommandExecutionContext c) {
-        sendToRootBridge("watchdog kill", c);
+    public static void rootObjMethods(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj methods");
+        if (a.isEmpty()) {
+            usage(":root obj methods <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->GetListOfMethods()->Print()");
+    }
+
+    public static void rootObjMembers(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj members");
+        if (a.isEmpty()) {
+            usage(":root obj members <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->GetListOfDataMembers()->Print()");
+    }
+
+    public static void rootObjList(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfSpecials()->Print()");
+    }
+
+    public static void rootObjClass(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj class");
+        if (a.isEmpty()) {
+            usage(":root obj class <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->ClassName()");
+    }
+
+    public static void rootObjType(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj type");
+        if (a.isEmpty()) {
+            usage(":root obj type <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->GetName()");
+    }
+
+    public static void rootObjPrint(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj print");
+        if (a.isEmpty()) {
+            usage(":root obj print <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Print()");
+    }
+
+    public static void rootObjInspect(String i, CommandExecutionContext c) {
+        String a = args(i, ":root obj inspect");
+        if (a.isEmpty()) {
+            usage(":root obj inspect <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Inspect()");
+    }
+
+    public static void rootTreeScan(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree scan");
+        if (a.isEmpty()) {
+            usage(":root tree scan <name> [expr]");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TTree", a0) + "->Scan(\"" + a1 + "\")");
+    }
+
+    public static void rootTreeDraw(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree draw");
+        if (a.isEmpty()) {
+            usage(":root tree draw <name> <expr>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TTree", a0) + "->Draw(\"" + a1 + "\")");
+    }
+
+    public static void rootTreeProcess(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree process");
+        if (a.isEmpty()) {
+            usage(":root tree process <name> <macro>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TTree", a0) + "->Process(\"" + a1 + "\")");
+    }
+
+    public static void rootTreeProject(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree project");
+        if (a.isEmpty()) {
+            usage(":root tree project <name> <h> <e>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TTree", a0) + "->Project(\"" + a1 + "\")");
+    }
+
+    public static void rootTreeCopytree(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree copytree");
+        if (a.isEmpty()) {
+            usage(":root tree copytree <name> <cut>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TTree", a0) + "->CopyTree(\"" + a1 + "\")");
+    }
+
+    public static void rootGetTree(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree open");
+        if (a.isEmpty()) {
+            usage(":root tree open <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "" + obj("TTree", a0) + "->GetEntries()");
+    }
+
+    public static void rootGetBranch(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree branch");
+        if (a.isEmpty()) {
+            usage(":root tree branch <name> <b>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TTree", a0) + "->GetBranch(\"" + a1 + "\")->Print()");
+    }
+
+    public static void rootChainAdd(String i, CommandExecutionContext c) {
+        String a = args(i, ":root chain add");
+        if (a.isEmpty()) {
+            usage(":root chain add <name> <file>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TChain", a0) + "->Add(\"" + a1 + "\")");
+    }
+
+    public static void rootRdfOpen(String i, CommandExecutionContext c) {
+        String a = args(i, ":root rdf open");
+        if (a.isEmpty()) {
+            usage(":root rdf open <tree> <file>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "ROOT::RDataFrame(\"" + a0 + "\",\"" + a1 + "\")");
+    }
+
+    public static void rootRdfFilter(String i, CommandExecutionContext c) {
+        String a = args(i, ":root rdf filter");
+        if (a.isEmpty()) {
+            usage(":root rdf filter <expr>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "df.Filter(\"" + a0 + "\")");
+    }
+
+    public static void rootRdfCount(String i, CommandExecutionContext c) {
+        cling(c, "df.Count().GetValue()");
+    }
+
+    public static void rootGraphDraw(String i, CommandExecutionContext c) {
+        String a = args(i, ":root graph draw");
+        if (a.isEmpty()) {
+            usage(":root graph draw <name> [opt]");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TGraph", a0) + "->Draw(\"" + a1 + "\")");
+    }
+
+    public static void rootGraphFit(String i, CommandExecutionContext c) {
+        String a = args(i, ":root graph fit");
+        if (a.isEmpty()) {
+            usage(":root graph fit <name> <f>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TGraph", a0) + "->Fit(\"" + a1 + "\")");
+    }
+
+    public static void rootGraphPoints(String i, CommandExecutionContext c) {
+        String a = args(i, ":root graph points");
+        if (a.isEmpty()) {
+            usage(":root graph points <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "" + obj("TGraph", a0) + "->Print()");
+    }
+
+    public static void rootGraphAdd(String i, CommandExecutionContext c) {
+        String a = args(i, ":root graph add");
+        if (a.isEmpty()) {
+            usage(":root graph add <name> <x> <y>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TGraph", a0) + "->SetPoint(" + a1 + ")");
+    }
+
+    public static void rootCanvasNew(String i, CommandExecutionContext c) {
+        String a = args(i, ":root canvas new");
+        if (a.isEmpty()) {
+            usage(":root canvas new <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "new TCanvas(\"" + a0 + "\",\"" + a0 + "\",800,600)");
+    }
+
+    public static void rootCanvasCd(String i, CommandExecutionContext c) {
+        String a = args(i, ":root canvas cd");
+        if (a.isEmpty()) {
+            usage(":root canvas cd <pad>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gPad->cd(" + a0 + ")");
+    }
+
+    public static void rootCanvasSave(String i, CommandExecutionContext c) {
+        String a = args(i, ":root canvas save");
+        if (a.isEmpty()) {
+            usage(":root canvas save <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gPad->SaveAs(\"" + a0 + "\")");
+    }
+
+    public static void rootCanvasClear(String i, CommandExecutionContext c) {
+        cling(c, "gPad->Clear()");
+    }
+
+    public static void rootCanvasUpdate(String i, CommandExecutionContext c) {
+        cling(c, "gPad->Update()");
+    }
+
+    public static void rootCanvasList(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfCanvases()->Print()");
+    }
+
+    public static void rootStyleSet(String i, CommandExecutionContext c) {
+        String a = args(i, ":root style set");
+        if (a.isEmpty()) {
+            usage(":root style set <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->SetStyle(\"" + a0 + "\")");
+    }
+
+    public static void rootFuncNew(String i, CommandExecutionContext c) {
+        String a = args(i, ":root func new");
+        if (a.isEmpty()) {
+            usage(":root func new <name> <f>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "new TF1(\"" + a0 + "\",\"" + a1 + "\",0,1)");
+    }
+
+    public static void rootFitExpr(String i, CommandExecutionContext c) {
+        String a = args(i, ":root fit expr");
+        if (a.isEmpty()) {
+            usage(":root fit expr <obj> <f>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Fit(\"" + a1 + "\")");
+    }
+
+    public static void rootFitFunction(String i, CommandExecutionContext c) {
+        String a = args(i, ":root fit function");
+        if (a.isEmpty()) {
+            usage(":root fit function <obj> <f>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TH1", a0) + "->Fit(\"" + a1 + "\")");
+    }
+
+    public static void rootFitReset(String i, CommandExecutionContext c) {
+        cling(c, "gMinuit->mnrset(1)");
+    }
+
+    public static void rootFitParams(String i, CommandExecutionContext c) {
+        String a = args(i, ":root fit params");
+        if (a.isEmpty()) {
+            usage(":root fit params <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "" + obj("TF1", a0) + "->Print()");
+    }
+
+    public static void rootMathEval(String i, CommandExecutionContext c) {
+        String a = args(i, ":root math eval");
+        if (a.isEmpty()) {
+            usage(":root math eval <name> <x>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TF1", a0) + "->Eval(" + a1 + ")");
+    }
+
+    public static void rootMathDeriv(String i, CommandExecutionContext c) {
+        String a = args(i, ":root math deriv");
+        if (a.isEmpty()) {
+            usage(":root math deriv <name> <x>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TF1", a0) + "->Derivative(" + a1 + ")");
+    }
+
+    public static void rootMathIntegral(String i, CommandExecutionContext c) {
+        String a = args(i, ":root math integral");
+        if (a.isEmpty()) {
+            usage(":root math integral <name> <a> <b>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "" + obj("TF1", a0) + "->Integral(" + a1 + ")");
+    }
+
+    public static void rootSysInfo(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetBuildArch()");
+    }
+
+    public static void rootSysMemory(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMemInfo(0)");
+    }
+
+    public static void rootSysPlugins(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfTypes()->Print()");
+    }
+
+    public static void rootStatus(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfFiles()->Print()");
+    }
+
+    public static void rootDump(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfSpecials()->Print()");
+    }
+
+    public static void rootReset(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->Reset()");
+    }
+
+    public static void rootGc(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->CheckObjectValidity()");
+    }
+
+    public static void rootStats(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMemInfo(0)");
+    }
+
+    public static void rootInfo(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetVersion()");
+    }
+
+    public static void rootVars(String i, CommandExecutionContext c) {
+        String a = args(i, ":root vars");
+        if (a.isEmpty()) {
+            usage(":root vars <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->GetGlobal(\"" + a0 + "\")->Print()");
+    }
+
+    public static void rootGetEnv(String i, CommandExecutionContext c) {
+        String a = args(i, ":root getenv");
+        if (a.isEmpty()) {
+            usage(":root getenv <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gSystem->Getenv(\"" + a0 + "\")");
+    }
+
+    public static void rootConfig(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMakeSharedLib()");
+    }
+
+    public static void rootDiag(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetVersion()");
+    }
+
+    public static void rootBenchmark(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetCpuInfo(0)");
+    }
+
+    public static void rootSafeMode(String i, CommandExecutionContext c) {
+        String a = args(i, ":root safe-mode");
+        if (a.isEmpty()) {
+            usage(":root safe-mode <0|1>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->SetBatch(" + a0 + ")");
+    }
+
+    public static void rootSetOutput(String i, CommandExecutionContext c) {
+        String a = args(i, ":root output set");
+        if (a.isEmpty()) {
+            usage(":root output set <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gSystem->RedirectOutput(\"" + a0 + "\")");
+    }
+
+    public static void rootLoadScript(String i, CommandExecutionContext c) {
+        String a = args(i, ":root script load");
+        if (a.isEmpty()) {
+            usage(":root script load <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->LoadMacro(\"" + a0 + "\")");
+    }
+
+    public static void rootRunScript(String i, CommandExecutionContext c) {
+        String a = args(i, ":root script run");
+        if (a.isEmpty()) {
+            usage(":root script run <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->ProcessLine(\".x " + a0 + "\")");
+    }
+
+    public static void rootCompileScripts(String i, CommandExecutionContext c) {
+        String a = args(i, ":root script compile");
+        if (a.isEmpty()) {
+            usage(":root script compile <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->LoadMacro(\"" + a0 + "+\")");
+    }
+
+    public static void rootLoadIncludes(String i, CommandExecutionContext c) {
+        String a = args(i, ":root includes load");
+        if (a.isEmpty()) {
+            usage(":root includes load <dir>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->ProcessLine(\".I " + a0 + "\")");
+    }
+
+    public static void rootCompileIncludes(String i, CommandExecutionContext c) {
+        String a = args(i, ":root includes compile");
+        if (a.isEmpty()) {
+            usage(":root includes compile <dir>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gSystem->AddIncludePath(\"-I" + a0 + "\")");
+    }
+
+    public static void rootGeomLoad(String i, CommandExecutionContext c) {
+        String a = args(i, ":root geom load");
+        if (a.isEmpty()) {
+            usage(":root geom load <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "TGeoManager::Import(\"" + a0 + "\")");
+    }
+
+    public static void rootGeomDraw(String i, CommandExecutionContext c) {
+        cling(c, "gGeoManager->GetTopVolume()->Draw()");
+    }
+
+    public static void rootGeomExport(String i, CommandExecutionContext c) {
+        String a = args(i, ":root geom export");
+        if (a.isEmpty()) {
+            usage(":root geom export <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gGeoManager->Export(\"" + a0 + "\")");
+    }
+
+    public static void rootSqlConnect(String i, CommandExecutionContext c) {
+        String a = args(i, ":root sql connect");
+        if (a.isEmpty()) {
+            usage(":root sql connect <url>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "TSQLServer::Connect(\"" + a0 + "\",\"\",\"\")");
+    }
+
+    public static void rootSqlQuery(String i, CommandExecutionContext c) {
+        String a = args(i, ":root sql query");
+        if (a.isEmpty()) {
+            usage(":root sql query <sql>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "db->Query(\"" + a0 + "\")");
+    }
+
+    public static void rootSqlDisconnect(String i, CommandExecutionContext c) {
+        cling(c, "db->Close()");
+    }
+
+    public static void rootNetServer(String i, CommandExecutionContext c) {
+        String a = args(i, ":root net server");
+        if (a.isEmpty()) {
+            usage(":root net server <port>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "new TServerSocket(" + a0 + ",kTRUE)");
+    }
+
+    public static void rootNetConnect(String i, CommandExecutionContext c) {
+        String a = args(i, ":root net connect");
+        if (a.isEmpty()) {
+            usage(":root net connect <host> <port>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "new TSocket(\"" + a0 + "\"," + a1 + ")");
+    }
+
+    public static void rootNetSend(String i, CommandExecutionContext c) {
+        String a = args(i, ":root net send");
+        if (a.isEmpty()) {
+            usage(":root net send <msg>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "sock->Send(\"" + a0 + "\")");
+    }
+
+    public static void rootProofOpen(String i, CommandExecutionContext c) {
+        String a = args(i, ":root proof open");
+        if (a.isEmpty()) {
+            usage(":root proof open <url>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "TProof::Open(\"" + a0 + "\")");
+    }
+
+    public static void rootProofProcess(String i, CommandExecutionContext c) {
+        String a = args(i, ":root proof process");
+        if (a.isEmpty()) {
+            usage(":root proof process <sel>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gProof->Process(\"" + a0 + "\")");
+    }
+
+    public static void rootProofStatus(String i, CommandExecutionContext c) {
+        cling(c, "gProof->Print()");
+    }
+
+    public static void rootGuiNew(String i, CommandExecutionContext c) {
+        String a = args(i, ":root gui new");
+        if (a.isEmpty()) {
+            usage(":root gui new <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "new TGMainFrame(gClient->GetRoot())");
+    }
+
+    public static void rootGuiShow(String i, CommandExecutionContext c) {
+        cling(c, "gClient->GetRoot()->MapWindow()");
+    }
+
+    public static void rootGuiClose(String i, CommandExecutionContext c) {
+        cling(c, "gClient->GetRoot()->UnmapWindow()");
+    }
+
+    public static void rootPyImport(String i, CommandExecutionContext c) {
+        String a = args(i, ":root py import");
+        if (a.isEmpty()) {
+            usage(":root py import <mod>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "TPython::Exec(\"import " + a0 + "\")");
+    }
+
+    public static void rootPyEval(String i, CommandExecutionContext c) {
+        String a = args(i, ":root py eval");
+        if (a.isEmpty()) {
+            usage(":root py eval <expr>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "TPython::Eval(\"" + a0 + "\")");
+    }
+
+    public static void rootPyExec(String i, CommandExecutionContext c) {
+        String a = args(i, ":root py exec");
+        if (a.isEmpty()) {
+            usage(":root py exec <code>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "TPython::Exec(\"" + a0 + "\")");
+    }
+
+    public static void rootTmvaFactory(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tmva factory");
+        if (a.isEmpty()) {
+            usage(":root tmva factory <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "new TMVA::Factory(\"" + a0 + "\",0,\"\")");
+    }
+
+    public static void rootTmvaTrain(String i, CommandExecutionContext c) {
+        cling(c, "factory->TrainAllMethods()");
+    }
+
+    public static void rootTmvaTest(String i, CommandExecutionContext c) {
+        cling(c, "factory->TestAllMethods()");
+    }
+
+    public static void rootTmvaEvaluate(String i, CommandExecutionContext c) {
+        cling(c, "factory->EvaluateAllMethods()");
+    }
+
+    public static void rootTmvaGui(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tmva gui");
+        if (a.isEmpty()) {
+            usage(":root tmva gui <file>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "TMVA::TMVAGui(\"" + a0 + "\")");
+    }
+
+    public static void rootRoofitWorkspace(String i, CommandExecutionContext c) {
+        String a = args(i, ":root roofit workspace");
+        if (a.isEmpty()) {
+            usage(":root roofit workspace <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "new RooWorkspace(\"" + a0 + "\")");
+    }
+
+    public static void rootRoofitPdf(String i, CommandExecutionContext c) {
+        String a = args(i, ":root roofit pdf");
+        if (a.isEmpty()) {
+            usage(":root roofit pdf <expr>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "w->factory(\"" + a0 + "\")");
+    }
+
+    public static void rootRoofitFit(String i, CommandExecutionContext c) {
+        String a = args(i, ":root roofit fit");
+        if (a.isEmpty()) {
+            usage(":root roofit fit <pdf> <data>");
+            return;
+        }
+        String a0 = head(a);
+        String a1 = tail(a);
+        cling(c, "w->pdf(\"" + a0 + "\")->fitTo(*w->data(\"" + a1 + "\"))");
+    }
+
+    public static void rootRoofitPlot(String i, CommandExecutionContext c) {
+        String a = args(i, ":root roofit plot");
+        if (a.isEmpty()) {
+            usage(":root roofit plot <var>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "w->var(\"" + a0 + "\")->frame()->Draw()");
+    }
+
+    public static void rootProfile(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetCpuInfo(0)");
+    }
+
+    public static void rootProfileStats(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMemInfo(0)");
+    }
+
+    public static void rootProfileJson(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMemInfo(0)");
+    }
+
+    public static void rootProfileReset(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->ResetSignal(kSigSegmentationViolation)");
+    }
+
+    public static void rootProfileLevel(String i, CommandExecutionContext c) {
+        String a = args(i, ":root profile level");
+        if (a.isEmpty()) {
+            usage(":root profile level <n>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gDebug=" + a0 + "");
+    }
+
+    public static void rootProfileThreshold(String i, CommandExecutionContext c) {
+        String a = args(i, ":root profile threshold");
+        if (a.isEmpty()) {
+            usage(":root profile threshold <ms>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gDebug=" + a0 + "");
+    }
+
+    public static void rootProfilingStatus(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMemInfo(0)");
+    }
+
+    public static void rootProfilingJson(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMemInfo(0)");
+    }
+
+    public static void rootProfilingReset(String i, CommandExecutionContext c) {
+        cling(c, "gDebug=0");
+    }
+
+    public static void rootProfilingLevel(String i, CommandExecutionContext c) {
+        String a = args(i, ":root profiling level");
+        if (a.isEmpty()) {
+            usage(":root profiling level <n>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gDebug=" + a0 + "");
+    }
+
+    public static void rootDebugDump(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfSpecials()->Print()");
+    }
+
+    public static void rootDebugGraphviz(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfClasses()->Print()");
+    }
+
+    public static void rootDebugAudit(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfFiles()->Print()");
+    }
+
+    public static void rootDebugLevel(String i, CommandExecutionContext c) {
+        String a = args(i, ":root debug level");
+        if (a.isEmpty()) {
+            usage(":root debug level <0-5>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gDebug=" + a0 + "");
+    }
+
+    public static void rootWatchdogStatus(String i, CommandExecutionContext c) {
+        cling(c, "gSystem->GetMemInfo(0)");
+    }
+
+    public static void rootWatchdogKill(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->Reset()");
+    }
+
+    public static void rootSetCacheSize(String i, CommandExecutionContext c) {
+        String a = args(i, ":root cache size");
+        if (a.isEmpty()) {
+            usage(":root cache size <n>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gEnv->SetValue(\"TFile.CacheSize\"," + a0 + ")");
+    }
+
+    public static void rootSetCachePolicy(String i, CommandExecutionContext c) {
+        String a = args(i, ":root cache policy");
+        if (a.isEmpty()) {
+            usage(":root cache policy <n>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gEnv->SetValue(\"TFile.CachePolicy\"," + a0 + ")");
+    }
+
+    public static void rootCacheStats(String i, CommandExecutionContext c) {
+        cling(c, "gEnv->Print()");
+    }
+
+    public static void rootCacheClear(String i, CommandExecutionContext c) {
+        cling(c, "gROOT->GetListOfFiles()->Print()");
+    }
+
+    public static void rootSetMaxObjSize(String i, CommandExecutionContext c) {
+        String a = args(i, ":root limits obj-size");
+        if (a.isEmpty()) {
+            usage(":root limits obj-size <n>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gEnv->SetValue(\"TFile.MaxSize\"," + a0 + ")");
+    }
+
+    public static void rootSetMaxHandles(String i, CommandExecutionContext c) {
+        String a = args(i, ":root limits handles");
+        if (a.isEmpty()) {
+            usage(":root limits handles <n>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gEnv->SetValue(\"TFile.MaxHandles\"," + a0 + ")");
+    }
+
+    public static void rootSetMaxAge(String i, CommandExecutionContext c) {
+        String a = args(i, ":root limits age");
+        if (a.isEmpty()) {
+            usage(":root limits age <n>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gEnv->SetValue(\"TFile.MaxAge\"," + a0 + ")");
+    }
+
+    public static void rootAnalyze(String i, CommandExecutionContext c) {
+        String a = args(i, ":root analyze");
+        if (a.isEmpty()) {
+            usage(":root analyze <name>");
+            return;
+        }
+        String a0 = a;
+        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Print()");
     }
 
 }

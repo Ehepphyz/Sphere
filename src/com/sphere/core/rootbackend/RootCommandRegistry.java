@@ -75,11 +75,7 @@ public final class RootCommandRegistry {
     }
 
     /**
-     * Registers a command handler for a given 16-bit message type ID.
-     * 
-     * @param msgType  Message/Command type ID.
-     * @param handler  Callback function executed upon message arrival.
-     * @param priority Task priority level for scheduling.
+     * Registers a command handler for a given 16-bit message type ID
      */
     public void registerCommand(short msgType, CommandHandler handler, TaskPriority priority) {
         int index = Short.toUnsignedInt(msgType);
@@ -104,9 +100,7 @@ public final class RootCommandRegistry {
     }
 
     /**
-     * Dispatches an incoming payload to the registered handler if present.
-     * 
-     * @return true if a handler was registered and executed; false otherwise.
+     * Dispatches an incoming payload to the registered handler if present
      */
     public boolean dispatch(short type, short flags, int jobId, int reqId, String inlineMsg, MemorySegment payload, long tscTimestamp) {
         CommandEntry entry = get(type);

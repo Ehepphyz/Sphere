@@ -1,6 +1,7 @@
 // commands/cmd_file.cpp
 
 #include "cmd_file.h"
+#include "command_registry.h"
 #include "lockfree_ring.h"
 #include "packets.h"
 #include "shm_layout.h"
@@ -22,8 +23,8 @@ namespace Sphere::cmd::file {
 namespace {
 
 /**
- * Thread-safe registry for managing active ROOT file handles.
- */
+* Thread-safe registry for managing active ROOT file handles.
+*/
 class FileRegistry {
 public:
   static FileRegistry &instance() noexcept {
@@ -90,18 +91,17 @@ public:
   }
 
   bool save_file(std::uint32_t file_id) {
-    TFile *file_ptr = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      auto it = files_.find(file_id);
-      if (it == files_.end() || !it->second || it->second->IsZombie()) {
-        return false;
-      }
-      file_ptr = it->second.get();
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = files_.find(file_id);
+    if (it == files_.end() || !it->second || it->second->IsZombie()) {
+      return false;
+    }
+    if (!it->second->IsWritable()) {
+      return false; // opened READ; reporting success would be a lie
     }
 
     // Execute flush/write command safely
-    return (file_ptr->Write(nullptr, TObject::kOverwrite) >= 0);
+    return (it->second->Write(nullptr, TObject::kOverwrite) >= 0);
   }
 
   TFile *get_file(std::uint32_t file_id) {
@@ -125,18 +125,19 @@ private:
 };
 
 /**
- * Helper function to dispatch an event response back through the
- * shared memory ring buffer with spin-yield retry logic.
- */
-void send_response(ShmLayout &shm, const Platform::PacketHeader &req,
-                   Platform::PacketType type, std::uint16_t flags = 0,
+* Helper function to dispatch an event response back through the
+* shared memory ring buffer with spin-yield retry logic.
+*/
+void send_response(ShmLayout &shm, const Proto::PacketHeader &req,
+                   Proto::PacketType type, std::uint16_t flags = 0,
                    std::uint32_t payload_size = 0) {
   if (!shm.evt_ring) {
     return;
   }
 
   BridgeMessage msg{};
-  msg.type = static_cast<MsgType>(type);
+  msg.type = MsgType::INLINE_DATA;
+  msg.cmd = static_cast<std::uint16_t>(type);
   msg.flags = flags;
   msg.payload_size = static_cast<std::uint8_t>(
       std::min<std::uint32_t>(payload_size, sizeof(msg.inline_bytes)));
@@ -162,34 +163,38 @@ void send_response(ShmLayout &shm, const Platform::PacketHeader &req,
 }
 
 /**
- * Helper function to extract a string path from the shared payload.
- */
+* Helper function to extract a string path from the shared payload.
+*/
 std::string_view extract_path(ShmLayout &shm,
-                              const Platform::PacketHeader &pkt) {
+                              const Proto::PacketHeader &pkt) {
   if (pkt.payload_size == 0) {
     return {};
   }
 
-  // Resolve base pointer from shared memory layout and apply payload offset
-  const auto *base_ptr = reinterpret_cast<const char *>(&shm);
-  const char *raw_ptr = base_ptr + pkt.payload_offset;
-
-  if (!raw_ptr) {
+  if (shm.base == nullptr || shm.header == nullptr) {
     return {};
   }
 
+  const std::uint64_t total = shm.header->total_size;
+  if (pkt.payload_offset >= total ||
+      pkt.payload_size > total - pkt.payload_offset) {
+    return {};
+  }
+
+  const auto *raw_ptr =
+      reinterpret_cast<const char *>(shm.base + pkt.payload_offset);
   return std::string_view(raw_ptr, pkt.payload_size);
 }
 
 } // anonymous namespace
 
-void handle_open(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdFile] Executing file open command...\n";
+void handle_open(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   const std::string_view path_view = extract_path(shm, pkt);
   if (path_view.empty()) {
     std::cerr << "[CmdFile] Error: Invalid or empty file path provided.\n";
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
                   1 /* ERR_INVALID_ARG */);
     return;
   }
@@ -201,58 +206,62 @@ void handle_open(ShmLayout &shm, const Platform::PacketHeader &pkt) {
 
   if (!success) {
     std::cerr << "[CmdFile] Error: Failed to open ROOT file: " << path << "\n";
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
                   2 /* ERR_FILE_NOT_FOUND */);
     return;
   }
 
-  std::cout << "[CmdFile] Successfully opened file: " << path
-            << " [file_id: " << pkt.req_id << "]\n";
-  send_response(shm, pkt, Platform::PacketType::EVT_FILE_OPENED);
+  send_response(shm, pkt, Proto::PacketType::EVT_FILE_OPENED);
 }
 
-void handle_close(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdFile] Executing file close command...\n";
+void handle_close(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   const bool success = FileRegistry::instance().close_file(pkt.req_id);
   if (!success) {
     std::cerr << "[CmdFile] Warning: File handle not found for file_id: "
               << pkt.req_id << "\n";
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
                   3 /* ERR_HANDLE_INVALID */);
     return;
   }
 
-  std::cout << "[CmdFile] Successfully closed file [file_id: " << pkt.req_id
-            << "]\n";
-  send_response(shm, pkt, Platform::PacketType::EVT_FILE_CLOSED);
+  send_response(shm, pkt, Proto::PacketType::EVT_FILE_CLOSED);
 }
 
-void handle_close_all(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdFile] Executing close all files command...\n";
+void close_all_files() { FileRegistry::instance().close_all(); }
+
+void handle_close_all(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   FileRegistry::instance().close_all();
 
-  std::cout << "[CmdFile] All active file handles closed successfully.\n";
-  send_response(shm, pkt, Platform::PacketType::EVT_OK);
+  send_response(shm, pkt, Proto::PacketType::EVT_OK);
 }
 
-void handle_save(ShmLayout &shm, const Platform::PacketHeader &pkt) {
-  std::cout << "[CmdFile] Executing file save command...\n";
+void handle_save(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
 
   const bool success = FileRegistry::instance().save_file(pkt.req_id);
   if (!success) {
     std::cerr
         << "[CmdFile] Error: Failed to save changes to ROOT file [file_id: "
         << pkt.req_id << "].\n";
-    send_response(shm, pkt, Platform::PacketType::EVT_ERROR,
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
                   4 /* ERR_WRITE_FAILED */);
     return;
   }
 
-  std::cout << "[CmdFile] Successfully saved changes to file [file_id: "
-            << pkt.req_id << "]\n";
-  send_response(shm, pkt, Platform::PacketType::EVT_OK);
+  send_response(shm, pkt, Proto::PacketType::EVT_OK);
+}
+
+void register_all() {
+  auto &registry = CommandRegistry::instance();
+  registry.register_command(Proto::PacketType::CMD_OPEN_FILE, &handle_open);
+  registry.register_command(Proto::PacketType::CMD_CLOSE_FILE, &handle_close);
+  registry.register_command(Proto::PacketType::CMD_CLOSE_ALL_FILES,
+                            &handle_close_all);
+  registry.register_command(Proto::PacketType::CMD_SAVE_FILE, &handle_save);
 }
 
 } // namespace Sphere::cmd::file

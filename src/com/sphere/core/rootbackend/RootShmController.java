@@ -5,6 +5,8 @@ import com.sphere.utils.SettingsManager;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutorService;
@@ -44,13 +46,36 @@ public final class RootShmController implements AutoCloseable {
      * Initializes the shared memory region using an explicit file reference.
      */
     public void initialize(File shmFile, long memorySize) throws Exception {
-        this.activeShmPath = shmFile.toPath().toAbsolutePath();
-        this.shmSegment = RootShmSegment.openSharedMemory(shmFile, memorySize);
-        this.eventRing = new RootShmRingBuffer(shmSegment.segment());
+        // The engine was started against this exact file, so map it directly.
+        File target = shmFile;
+
+        this.activeShmPath = target.toPath().toAbsolutePath();
+        long actualSize = target.length() > 0 ? target.length() : memorySize;
+        this.shmSegment = RootShmSegment.openSharedMemory(target, actualSize);
+
+        MemorySegment base = shmSegment.segment();
+        int magic = base.get(ValueLayout.JAVA_INT, RootBackend.HDR_MAGIC);
+        if (magic != RootBackend.SHM_MAGIC) {
+            throw new IllegalStateException(String.format(
+                "Shared region %s has magic 0x%08X, expected 0x%08X. Start the "
+                + "engine with --init-shm before attaching.", target, magic,
+                RootBackend.SHM_MAGIC));
+        }
+
+        long evtOffset = base.get(ValueLayout.JAVA_LONG, RootBackend.HDR_OFF_EVT_RING);
+        long evtSize = base.get(ValueLayout.JAVA_LONG, RootBackend.HDR_SIZE_EVT_RING);
+        long evtCapacity = base.get(ValueLayout.JAVA_LONG, RootBackend.HDR_EVT_RING_CAPACITY);
+
+        if (evtOffset <= 0 || evtSize <= 0 || evtOffset > actualSize
+            || evtSize > actualSize - evtOffset) {
+            throw new IllegalStateException(
+                "Event ring partition is out of range: offset=" + evtOffset
+                + " size=" + evtSize + " in a " + actualSize + " byte region.");
+        }
+
+        this.eventRing = new RootShmRingBuffer(base.asSlice(evtOffset, evtSize), evtCapacity);
         this.running.set(true);
 
-        // Start dedicated background polling thread (Lock-free + CPU adaptive spin-wait)
-        pollerExecutor.submit(this::pollLoop);
         //AppLogger.info("RootShmController connected to C++ shared memory buffer: " + activeShmPath);
     }
 
@@ -130,6 +155,9 @@ public final class RootShmController implements AutoCloseable {
     /**
      * Low-latency loop capturing native events from the shared memory ring buffer.
      */
+
+    @SuppressWarnings("unused")
+
     private void pollLoop() {
         int idleCount = 0;
 
@@ -160,9 +188,6 @@ public final class RootShmController implements AutoCloseable {
         }
     }
 
-    /**
-     * Stops the background poller thread and releases mapped off-heap memory resources.
-     */
     @Override
     public void close() {
         running.set(false);

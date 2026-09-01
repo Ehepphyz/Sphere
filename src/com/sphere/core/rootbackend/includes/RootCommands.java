@@ -27,12 +27,7 @@ public final class RootCommands implements AutoCloseable {
 
     /**
      * Safely opens a ROOT file. If the file is already open, returns the existing 
-     * cached instance to prevent redundant native file handles.
-     *
-     * @param path Path to the target ROOT file.
-     * @param mode File access mode (e.g., "READ", "RECREATE", "UPDATE").
-     * @return Resolved {@link RootFile} handle.
-     * @throws IOException If file handle initialization fails.
+     * cached instance to prevent redundant native file handles
      */
     public synchronized RootFile open(String path, String mode) throws IOException {
         if (activeFiles.containsKey(path)) {
@@ -40,12 +35,12 @@ public final class RootCommands implements AutoCloseable {
             return activeFiles.get(path);
         }
 
-        // Generate a unique handle ID to match RootBackend's 3-parameter openFile requirement
         String handleId = "handle_" + UUID.randomUUID().toString().substring(0, 8);
-        RootFile file = backend.openFile(path, mode, handleId);
+        RootFile file = new RootFile(backend.getProcessBridge(), handleId, path, mode);
 
-        if (file == null) {
-            throw new IOException("Failed to initialize ROOT file handle for path: " + path);
+        if (!file.isValid()) {
+            throw new IOException("Failed to queue the open for " + path
+                + ": " + file.getErrorMessage());
         }
 
         activeFiles.put(path, file);
@@ -58,11 +53,6 @@ public final class RootCommands implements AutoCloseable {
     /**
      * Safely retrieves a histogram from an open file.
      * Resolved by either the open file's absolute path or its native bridge handle ID.
-     *
-     * @param fileIdentifier File path or native handle ID.
-     * @param histName Name of the target histogram.
-     * @return Resolved {@link RootHistogram} instance.
-     * @throws IOException If file is missing or in an invalid state.
      */
     public RootHistogram hist(String fileIdentifier, String histName) throws IOException {
         RootFile file = activeFiles.get(fileIdentifier);
@@ -89,9 +79,6 @@ public final class RootCommands implements AutoCloseable {
 
     /**
      * Dispatches an interactive C++ snippet through the non-blocking SHM pipeline.
-     *
-     * @param clingCode C++ / Cling code snippet.
-     * @return {@code true} if command was queued successfully.
      */
     public boolean exec(String clingCode) {
         return backend.executeCling(clingCode);
@@ -99,9 +86,6 @@ public final class RootCommands implements AutoCloseable {
 
     /**
      * Dispatches an interactive C++ snippet cleanly (returns queue status).
-     *
-     * @param clingCode C++ / Cling code snippet.
-     * @return {@code true} if command was queued successfully.
      */
     public boolean execSimple(String clingCode) {
         return backend.executeCling(clingCode);

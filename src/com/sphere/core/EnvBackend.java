@@ -47,9 +47,7 @@ public enum EnvBackend {
 
     /**
      * Scans settings.conf dynamically to extract and return only the backends
-     * that contain active, non-blank operational paths.
-     * * @param settings The configuration framework manager instance.
-     * @return An array of active EnvBackend references matching real definitions.
+     * that contain active, non-blank operational paths
      */
     public static EnvBackend[] getActiveValues(SettingsManager settings) {
         List<EnvBackend> activeList = new ArrayList<>();
@@ -74,10 +72,7 @@ public enum EnvBackend {
 
     /**
      * Checks whether this specific backend has an active configuration path
-     * defined in the provided SettingsManager instance.
-     *
-     * @param settings The active configuration manager context.
-     * @return true if a configuration path is present, false if it is blank/missing.
+     * defined in the provided SettingsManager instance
      */
     public boolean isConfigured(com.sphere.utils.SettingsManager settings) {
         if (settings == null) {

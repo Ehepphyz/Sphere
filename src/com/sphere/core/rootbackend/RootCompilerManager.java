@@ -85,12 +85,7 @@ public class RootCompilerManager {
 
     /**
      * Compiles a C++ source file into a shared dynamic library (.so or .dll)
-     * using the compiler and library paths configured in settings.conf.
-     *
-     * @param sourcePath  Path to the .cpp source file
-     * @param outputPath  Path to save the compiled library (.so or .dll)
-     * @param extraFlags  Optional compilation flags (e.g., "-O3", "-std=c++20")
-     * @return true if compilation succeeded, false otherwise
+     * using the compiler and library paths configured in settings.conf
      */
     public boolean compileSharedLibrary(String sourcePath, String outputPath, List<String> extraFlags) {
         // Safe-guard validation

@@ -8,29 +8,27 @@ namespace Sphere {
 namespace cmd {
 namespace sys {
 
-/**
- * Executes a no-operation (NOOP) system check.
- */
-void handle_noop(ShmLayout &shm, const ::Platform::PacketHeader &pkt);
+void handle_noop(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
+
+void handle_version(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
+
+void handle_uptime(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
 
 /**
- * Queries and outputs the current version of the system engine.
- */
-void handle_version(ShmLayout &shm, const ::Platform::PacketHeader &pkt);
+* Central processing entry point for system-level IPC commands
+*/
+void handle_system(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
+
+// Runs the request payload through the ROOT interpreter and answers with the
+void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
+
+// Builds every ROOT-backed resource these handlers use, on the calling thread.
+void warm_up();
 
 /**
- * Calculates and reports engine uptime metrics.
+ * Installs the handlers above into the process-wide CommandRegistry
  */
-void handle_uptime(ShmLayout &shm, const ::Platform::PacketHeader &pkt);
-
-/**
- * Central processing entry point for system-level IPC commands.
- *
- * Dispatches incoming packet headers to dedicated internal handlers based on
- * PacketType (CMD_SYS_NOOP, CMD_SYS_VERSION, CMD_SYS_UPTIME), writing
- * responses back into the Shared Memory layout.
- */
-void handle_system(ShmLayout &shm, const ::Platform::PacketHeader &pkt);
+void register_all();
 
 } // namespace sys
 } // namespace cmd
