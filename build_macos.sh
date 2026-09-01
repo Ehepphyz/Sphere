@@ -1,10 +1,4 @@
 #!/bin/bash
-# ==============================================================================
-# SPHERE BUILD & PACKAGING SCRIPT FOR macOS (.DMG)
-# Output: dist/Sphere-2026.1.0.dmg
-# Version: 2026.1.0
-# ==============================================================================
-
 set -e
 
 echo "[1/6] Cleaning previous build artifacts..."
@@ -41,7 +35,7 @@ echo "[4/6] Creating executable JAR & custom JRE 26..."
 echo "[5/6] Preparing payload with assets at root level..."
 mkdir -p dist_input
 cp sphere.jar dist_input/
-echo "2026.1.0" > dist_input/VERSION
+echo "1.0.0" > dist_input/VERSION
 
 if [ -f settings.conf.linux ]; then
     cp settings.conf.linux dist_input/settings.conf
@@ -54,13 +48,12 @@ fi
 [ -d themes ] && cp -r themes dist_input/
 [ -d WorkSpace ] && cp -r WorkSpace dist_input/
 
-# Preserve empty directories
 find dist_input -type d -empty -exec touch {}/.gitkeep \;
 
 echo "[6/6] Packaging macOS Disk Image (.dmg)..."
 "$JAVA_HOME/bin/jpackage" \
   --name Sphere \
-  --app-version 2026.1.0 \
+  --app-version 1.0.0 \
   --type dmg \
   --input dist_input \
   --main-jar sphere.jar \

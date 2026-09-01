@@ -3,8 +3,8 @@ setlocal enabledelayedexpansion
 
 :: ==============================================================================
 :: SPHERE BUILD & PACKAGING SCRIPT FOR WINDOWS (.MSI)
-:: Output: dist\Sphere-2026.1.0.msi
-:: Version: 2026.1.0
+:: Output: dist\Sphere-1.0.0.msi
+:: Version: 1.0.0
 :: ==============================================================================
 
 echo [1/6] Cleaning previous build artifacts...
@@ -42,14 +42,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERRORLEVEL%
 )
 
-"%JAVA_HOME%\bin\jlink" ^
-  --module-path "%JAVA_HOME%\jmods" ^
-  --add-modules java.base,java.desktop,java.logging,java.scripting,java.management ^
-  --strip-debug ^
-  --compress zip-6 ^
-  --no-header-files ^
-  --no-man-pages ^
-  --output custom-jre
+"%JAVA_HOME%\bin\jlink" --module-path "%JAVA_HOME%\jmods" --add-modules java.base,java.desktop,java.logging,java.scripting,java.management --strip-debug --compress zip-6 --no-header-files --no-man-pages --output custom-jre
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] jlink execution failed.
     exit /b %ERRORLEVEL%
@@ -58,7 +51,7 @@ if %ERRORLEVEL% neq 0 (
 echo [5/6] Preparing payload with assets at root level...
 mkdir dist_input
 copy sphere.jar dist_input\ > nul
-echo 2026.1.0 > dist_input\VERSION
+echo 1.0.0 > dist_input\VERSION
 
 if exist settings.conf.windows (
     copy settings.conf.windows dist_input\settings.conf > nul
@@ -72,12 +65,12 @@ if exist themes xcopy /E /I /Y themes dist_input\themes > nul
 if exist WorkSpace xcopy /E /I /Y WorkSpace dist_input\WorkSpace > nul
 
 :: Preserve empty directories
-powershell -Command "Get-ChildItem -Path dist_input -Recurse -Directory | Where-Object { (Get-ChildItem \$.FullName).Count -eq 0 } | ForEach-Object { New-Item -Path \"\$(\$_.FullName)\.gitkeep\" -ItemType File }" > nul
+powershell -Command "Get-ChildItem -Path dist_input -Recurse -Directory | Where-Object { (Get-ChildItem $_.FullName).Count -eq 0 } | ForEach-Object { New-Item -Path \"$($_.FullName)\.gitkeep\" -ItemType File }" > nul
 
 echo [6/6] Packaging native Windows MSI installer...
 "%JAVA_HOME%\bin\jpackage" ^
   --name Sphere ^
-  --app-version 2026.1.0 ^
+  --app-version 1.0.0 ^
   --type msi ^
   --input dist_input ^
   --main-jar sphere.jar ^

@@ -16,15 +16,15 @@ jobs:
           - os: windows-latest
             run_cmd: cmd /c build_windows.bat
             artifact_pattern: dist/*.msi
-            artifact_name: Sphere-Windows-v2026.1.0-MSI
+            artifact_name: Sphere-Windows-v1.0.0-MSI
           - os: ubuntu-latest
             run_cmd: chmod +x build_linux.sh && ./build_linux.sh
             artifact_pattern: dist/*.deb
-            artifact_name: Sphere-Linux-v2026.1.0-DEB
+            artifact_name: Sphere-Linux-v1.0.0-DEB
           - os: macos-latest
             run_cmd: chmod +x build_macos.sh && ./build_macos.sh
             artifact_pattern: dist/*.dmg
-            artifact_name: Sphere-macOS-v2026.1.0-DMG
+            artifact_name: Sphere-macOS-v1.0.0-DMG
 
     runs-on: ${{ matrix.os }}
 
@@ -63,8 +63,8 @@ jobs:
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2026.1.0
-          name: "Sphere Release v2026.1.0"
+          tag_name: v1.0.0
+          name: "Sphere Release v1.0.0"
           body: "Automated Release: Native installers for Windows (.msi), Linux (.deb), and macOS (.dmg)."
           files: release-artifacts/*/*
         env:
