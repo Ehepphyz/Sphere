@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # SPHERE BUILD & PACKAGING SCRIPT FOR macOS
-# Output: dist/Sphere.app (macOS Application Bundle with embedded JRE 26)
+# Output: dist/Sphere.app with assets embedded in Contents/Resources/
 # Version: 2026.1.0
 # ==============================================================================
 
@@ -39,27 +39,11 @@ echo "[5/7] Generating minimal Java 26 runtime (custom-jre)..."
   --no-man-pages \
   --output custom-jre
 
-echo "[6/7] Preparing runtime workspace and assets..."
+echo "[6/7] Preparing isolated input for jpackage (JAR only)..."
 mkdir -p dist_input
 cp sphere.jar dist_input/
-echo "2026.1.0" > dist_input/VERSION
 
-# Copy OS-specific configuration for macOS (using Linux config)
-if [ -f settings.conf.linux ]; then
-    cp settings.conf.linux dist_input/settings.conf
-elif [ -f settings.conf ]; then
-    cp settings.conf dist_input/settings.conf
-fi
-
-[ -d rootbackend ] && cp -r rootbackend dist_input/
-[ -d snippets ] && cp -r snippets dist_input/
-[ -d themes ] && cp -r themes dist_input/
-[ -d WorkSpace ] && cp -r WorkSpace dist_input/
-
-# Preserve empty directories
-find dist_input -type d -empty -exec touch {}/.gitkeep \;
-
-echo "[7/7] Packaging native macOS Application Bundle (.app v2026.1.0)..."
+echo "[7/7] Packaging native macOS Application Bundle (.app)..."
 "$JAVA_HOME/bin/jpackage" \
   --name Sphere \
   --app-version 2026.1.0 \
@@ -73,6 +57,24 @@ echo "[7/7] Packaging native macOS Application Bundle (.app v2026.1.0)..."
 
 rm -rf dist_input
 
+echo "[8/8] Copying assets into macOS App Bundle Resources..."
+RESOURCES_DIR="dist/Sphere.app/Contents/Resources"
+echo "2026.1.0" > "$RESOURCES_DIR/VERSION"
+
+if [ -f settings.conf.linux ]; then
+    cp settings.conf.linux "$RESOURCES_DIR/settings.conf"
+elif [ -f settings.conf ]; then
+    cp settings.conf "$RESOURCES_DIR/settings.conf"
+fi
+
+[ -d rootbackend ] && cp -r rootbackend "$RESOURCES_DIR/"
+[ -d snippets ] && cp -r snippets "$RESOURCES_DIR/"
+[ -d themes ] && cp -r themes "$RESOURCES_DIR/"
+[ -d WorkSpace ] && cp -r WorkSpace "$RESOURCES_DIR/"
+
+# Preserve empty directories
+find "$RESOURCES_DIR" -type d -empty -exec touch {}/.gitkeep \;
+
 echo "=============================================================================="
-echo "SUCCESS: macOS Bundle created at: $(pwd)/dist/Sphere.app"
+echo "SUCCESS: macOS Bundle structured at: $(pwd)/dist/Sphere.app"
 echo "=============================================================================="

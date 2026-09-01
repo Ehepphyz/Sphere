@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # SPHERE BUILD & PACKAGING SCRIPT FOR LINUX
-# Output: dist/Sphere/Sphere (Linux native binary with embedded JRE 26)
+# Output: dist/Sphere/ with Sphere executable + assets at root level
 # Version: 2026.1.0
 # ==============================================================================
 
@@ -39,27 +39,11 @@ echo "[5/7] Generating minimal Java 26 runtime (custom-jre)..."
   --no-man-pages \
   --output custom-jre
 
-echo "[6/7] Preparing runtime workspace and assets..."
+echo "[6/7] Preparing isolated input for jpackage (JAR only)..."
 mkdir -p dist_input
 cp sphere.jar dist_input/
-echo "2026.1.0" > dist_input/VERSION
 
-# Copy OS-specific configuration for Linux
-if [ -f settings.conf.linux ]; then
-    cp settings.conf.linux dist_input/settings.conf
-elif [ -f settings.conf ]; then
-    cp settings.conf dist_input/settings.conf
-fi
-
-[ -d rootbackend ] && cp -r rootbackend dist_input/
-[ -d snippets ] && cp -r snippets dist_input/
-[ -d themes ] && cp -r themes dist_input/
-[ -d WorkSpace ] && cp -r WorkSpace dist_input/
-
-# Preserve empty directories
-find dist_input -type d -empty -exec touch {}/.gitkeep \;
-
-echo "[7/7] Packaging native Linux binary executable (v2026.1.0)..."
+echo "[7/7] Packaging native Linux binary executable..."
 "$JAVA_HOME/bin/jpackage" \
   --name Sphere \
   --app-version 2026.1.0 \
@@ -73,6 +57,23 @@ echo "[7/7] Packaging native Linux binary executable (v2026.1.0)..."
 
 rm -rf dist_input
 
+echo "[8/8] Copying assets directly next to Sphere binary..."
+echo "2026.1.0" > dist/Sphere/VERSION
+
+if [ -f settings.conf.linux ]; then
+    cp settings.conf.linux dist/Sphere/settings.conf
+elif [ -f settings.conf ]; then
+    cp settings.conf dist/Sphere/settings.conf
+fi
+
+[ -d rootbackend ] && cp -r rootbackend dist/Sphere/
+[ -d snippets ] && cp -r snippets dist/Sphere/
+[ -d themes ] && cp -r themes dist/Sphere/
+[ -d WorkSpace ] && cp -r WorkSpace dist/Sphere/
+
+# Preserve empty directories
+find dist/Sphere -type d -empty -exec touch {}/.gitkeep \;
+
 echo "=============================================================================="
-echo "SUCCESS: Linux executable created at: $(pwd)/dist/Sphere/bin/Sphere"
+echo "SUCCESS: Linux executable and assets structured at: $(pwd)/dist/Sphere"
 echo "=============================================================================="

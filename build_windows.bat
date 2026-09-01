@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 :: ==============================================================================
 :: SPHERE BUILD & PACKAGING SCRIPT FOR WINDOWS
-:: Output: dist\Sphere\Sphere.exe (standalone executable with embedded JRE 26)
+:: Output: dist\Sphere\Sphere.exe + assets at root level
 :: Version: 2026.1.0
 :: ==============================================================================
 
@@ -56,27 +56,11 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERRORLEVEL%
 )
 
-echo [6/7] Preparing runtime workspace and assets...
+echo [6/7] Preparing isolated input for jpackage (JAR only)...
 mkdir dist_input
 copy sphere.jar dist_input\ > nul
-echo 2026.1.0 > dist_input\VERSION
 
-:: Copy OS-specific configuration for Windows
-if exist settings.conf.windows (
-    copy settings.conf.windows dist_input\settings.conf > nul
-) else if exist settings.conf (
-    copy settings.conf dist_input\settings.conf > nul
-)
-
-if exist rootbackend xcopy /E /I /Y rootbackend dist_input\rootbackend > nul
-if exist snippets xcopy /E /I /Y snippets dist_input\snippets > nul
-if exist themes xcopy /E /I /Y themes dist_input\themes > nul
-if exist WorkSpace xcopy /E /I /Y WorkSpace dist_input\WorkSpace > nul
-
-:: Preserve empty directories
-powershell -Command "Get-ChildItem -Path dist_input -Recurse -Directory | Where-Object { (Get-ChildItem \$.FullName).Count -eq 0 } | ForEach-Object { New-Item -Path \"\$(\$_.FullName)\.gitkeep\" -ItemType File }" > nul
-
-echo [7/7] Packaging native Windows executable (Sphere.exe v2026.1.0)...
+echo [7/7] Packaging native Windows executable...
 "%JAVA_HOME%\bin\jpackage" ^
   --name Sphere ^
   --app-version 2026.1.0 ^
@@ -94,7 +78,24 @@ if %ERRORLEVEL% neq 0 (
 
 rmdir /s /q dist_input
 
+echo [8/8] Copying assets directly next to Sphere.exe...
+echo 2026.1.0 > dist\Sphere\VERSION
+
+if exist settings.conf.windows (
+    copy settings.conf.windows dist\Sphere\settings.conf > nul
+) else if exist settings.conf (
+    copy settings.conf dist\Sphere\settings.conf > nul
+)
+
+if exist rootbackend xcopy /E /I /Y rootbackend dist\Sphere\rootbackend > nul
+if exist snippets xcopy /E /I /Y snippets dist\Sphere\snippets > nul
+if exist themes xcopy /E /I /Y themes dist\Sphere\themes > nul
+if exist WorkSpace xcopy /E /I /Y WorkSpace dist\Sphere\WorkSpace > nul
+
+:: Preserve empty directories
+powershell -Command "Get-ChildItem -Path dist\Sphere -Recurse -Directory | Where-Object { (Get-ChildItem \$.FullName).Count -eq 0 } | ForEach-Object { New-Item -Path \"\$(\$_.FullName)\.gitkeep\" -ItemType File }" > nul
+
 echo.
 echo ==============================================================================
-echo SUCCESS: Windows executable created at: %CD%\dist\Sphere\Sphere.exe
+echo SUCCESS: Windows executable and assets structured at: %CD%\dist\Sphere
 echo ==============================================================================
