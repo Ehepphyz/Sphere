@@ -1,13 +1,13 @@
 #!/bin/bash
 # ==============================================================================
-# SPHERE BUILD & PACKAGING SCRIPT FOR LINUX
-# Output: dist/Sphere/ with Sphere executable + assets at root level
+# SPHERE BUILD & PACKAGING SCRIPT FOR LINUX (.DEB)
+# Output: dist/sphere_2026.1.0-1_amd64.deb
 # Version: 2026.1.0
 # ==============================================================================
 
 set -e
 
-echo "[1/7] Cleaning previous build artifacts..."
+echo "[1/6] Cleaning previous build artifacts..."
 rm -rf bin custom-jre dist dist_input sphere.jar sources_list.txt
 
 if [ -z "$JAVA_HOME" ]; then
@@ -17,19 +17,18 @@ fi
 
 echo "Using JAVA_HOME: $JAVA_HOME"
 
-echo "[2/7] Compiling Java source files..."
+echo "[2/6] Compiling Java source files..."
 mkdir -p bin
 find src -name "*.java" > sources_list.txt
 "$JAVA_HOME/bin/javac" -d bin @sources_list.txt
 
-echo "[3/7] Embedding static resources into classes..."
+echo "[3/6] Embedding static resources into classes..."
 cp -r src/* bin/
 find bin -name "*.java" -delete
 
-echo "[4/7] Creating executable JAR..."
+echo "[4/6] Creating executable JAR & custom JRE 26..."
 "$JAVA_HOME/bin/jar" --create --file sphere.jar --main-class com.sphere.Sphere -C bin .
 
-echo "[5/7] Generating minimal Java 26 runtime (custom-jre)..."
 "$JAVA_HOME/bin/jlink" \
   --module-path "$JAVA_HOME/jmods" \
   --add-modules java.base,java.desktop,java.logging,java.scripting,java.management \
@@ -39,41 +38,40 @@ echo "[5/7] Generating minimal Java 26 runtime (custom-jre)..."
   --no-man-pages \
   --output custom-jre
 
-echo "[6/7] Preparing isolated input for jpackage (JAR only)..."
+echo "[5/6] Preparing payload with assets at root level..."
 mkdir -p dist_input
 cp sphere.jar dist_input/
+echo "2026.1.0" > dist_input/VERSION
 
-echo "[7/7] Packaging native Linux binary executable..."
+if [ -f settings.conf.linux ]; then
+    cp settings.conf.linux dist_input/settings.conf
+elif [ -f settings.conf ]; then
+    cp settings.conf dist_input/settings.conf
+fi
+
+[ -d rootbackend ] && cp -r rootbackend dist_input/
+[ -d snippets ] && cp -r snippets dist_input/
+[ -d themes ] && cp -r themes dist_input/
+[ -d WorkSpace ] && cp -r WorkSpace dist_input/
+
+# Preserve empty directories
+find dist_input -type d -empty -exec touch {}/.gitkeep \;
+
+echo "[6/6] Packaging Debian package (.deb)..."
 "$JAVA_HOME/bin/jpackage" \
-  --name Sphere \
+  --name sphere \
   --app-version 2026.1.0 \
-  --type app-image \
+  --type deb \
   --input dist_input \
   --main-jar sphere.jar \
   --main-class com.sphere.Sphere \
   --runtime-image custom-jre \
   --dest dist \
+  --linux-shortcut \
   --verbose
 
 rm -rf dist_input
 
-echo "[8/8] Copying assets directly next to Sphere binary..."
-echo "2026.1.0" > dist/Sphere/VERSION
-
-if [ -f settings.conf.linux ]; then
-    cp settings.conf.linux dist/Sphere/settings.conf
-elif [ -f settings.conf ]; then
-    cp settings.conf dist/Sphere/settings.conf
-fi
-
-[ -d rootbackend ] && cp -r rootbackend dist/Sphere/
-[ -d snippets ] && cp -r snippets dist/Sphere/
-[ -d themes ] && cp -r themes dist/Sphere/
-[ -d WorkSpace ] && cp -r WorkSpace dist/Sphere/
-
-# Preserve empty directories
-find dist/Sphere -type d -empty -exec touch {}/.gitkeep \;
-
 echo "=============================================================================="
-echo "SUCCESS: Linux executable and assets structured at: $(pwd)/dist/Sphere"
+echo "SUCCESS: Debian package generated in dist/"
 echo "=============================================================================="
