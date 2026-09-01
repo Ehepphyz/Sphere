@@ -1,9 +1,12 @@
-name: Build All Sphere Executables
+name: Build and Publish Sphere Releases
 
 on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -35,8 +38,37 @@ jobs:
       - name: Build Executable
         run: ${{ matrix.run_cmd }}
 
-      - name: Upload Finished Executable (.zip)
+      - name: Compress Build Output to ZIP
+        shell: bash
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            powershell Compress-Archive -Path * -DestinationPath ../${{ matrix.artifact }}.zip
+          else
+            zip -r ../${{ matrix.artifact }}.zip .
+          fi
+
+      - name: Upload Artifacts (Internal Storage)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/
+          path: ${{ matrix.artifact }}.zip
+
+  publish-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2026.1.0
+          name: "Sphere Release v2026.1.0"
+          body: "Automated multi-platform build for Sphere v2026.1.0 (Windows, Linux, macOS)."
+          files: release-artifacts/*/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
