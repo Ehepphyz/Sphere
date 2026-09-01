@@ -33,9 +33,10 @@ jobs:
           java-version: '26'
 
       - name: Build Executable
+        shell: bash
         run: |
           if [ "$RUNNER_OS" == "Windows" ]; then
-            cmd /c ${{ matrix.script }}
+            cmd.exe /c ${{ matrix.script }}
           else
             chmod +x ${{ matrix.script }}
             ./${{ matrix.script }}
