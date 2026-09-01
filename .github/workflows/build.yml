@@ -15,13 +15,16 @@ jobs:
         include:
           - os: windows-latest
             run_cmd: cmd /c build_windows.bat
-            artifact: Sphere-Windows-v2026.1.0
+            artifact_pattern: dist/*.msi
+            artifact_name: Sphere-Windows-v2026.1.0-MSI
           - os: ubuntu-latest
             run_cmd: chmod +x build_linux.sh && ./build_linux.sh
-            artifact: Sphere-Linux-v2026.1.0
+            artifact_pattern: dist/*.deb
+            artifact_name: Sphere-Linux-v2026.1.0-DEB
           - os: macos-latest
             run_cmd: chmod +x build_macos.sh && ./build_macos.sh
-            artifact: Sphere-macOS-v2026.1.0
+            artifact_pattern: dist/*.dmg
+            artifact_name: Sphere-macOS-v2026.1.0-DMG
 
     runs-on: ${{ matrix.os }}
 
@@ -35,23 +38,18 @@ jobs:
           distribution: 'oracle'
           java-version: '26'
 
-      - name: Build Executable
-        run: ${{ matrix.run_cmd }}
+      - name: Install WiX Toolset (Windows Only)
+        if: runner.os == 'Windows'
+        run: choco install wix --version 3.11.2 -y
 
-      - name: Compress Build Output to ZIP
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            powershell "Compress-Archive -Path dist\* -DestinationPath ${{ matrix.artifact }}.zip"
-          else
-            cd dist && zip -r ../${{ matrix.artifact }}.zip . && cd ..
-          fi
+      - name: Build Native Installer
+        run: ${{ matrix.run_cmd }}
 
       - name: Upload Artifacts (Internal Storage)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.zip
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_pattern }}
 
   publish-release:
     needs: build
@@ -67,7 +65,7 @@ jobs:
         with:
           tag_name: v2026.1.0
           name: "Sphere Release v2026.1.0"
-          body: "Automated multi-platform build for Sphere v2026.1.0 (Windows, Linux, macOS)."
-          files: release-artifacts/*/*.zip
+          body: "Automated Release: Native installers for Windows (.msi), Linux (.deb), and macOS (.dmg)."
+          files: release-artifacts/*/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
