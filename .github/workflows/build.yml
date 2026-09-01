@@ -41,11 +41,10 @@ jobs:
       - name: Compress Build Output to ZIP
         shell: bash
         run: |
-          cd dist
           if [ "$RUNNER_OS" == "Windows" ]; then
-            powershell Compress-Archive -Path * -DestinationPath ../${{ matrix.artifact }}.zip
+            powershell "Compress-Archive -Path dist\* -DestinationPath ${{ matrix.artifact }}.zip"
           else
-            zip -r ../${{ matrix.artifact }}.zip .
+            cd dist && zip -r ../${{ matrix.artifact }}.zip . && cd ..
           fi
 
       - name: Upload Artifacts (Internal Storage)
