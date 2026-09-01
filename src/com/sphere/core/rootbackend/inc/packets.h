@@ -43,6 +43,10 @@ enum class PacketType : std::uint16_t {
   CMD_TTREE_COMPUTE_STATS = 25,
   CMD_TTREE_APPLY_FILTER = 26,
 
+  // File inspection
+  CMD_FILE_SCAN = 27,
+  CMD_FILE_LIST = 28,
+
   // Event types (responses / acknowledgments)
   EVT_OK = 100,
   EVT_PONG = 101,

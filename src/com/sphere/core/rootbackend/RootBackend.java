@@ -181,6 +181,8 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final short CMD_SYS_UPTIME      = 12;
     public static final short CMD_SYS_CONFIG      = 13;
     public static final short CMD_CLING_EXEC      = 14;
+    public static final short CMD_FILE_SCAN       = 27;
+    public static final short CMD_FILE_LIST       = 28;
 
     public static final short CMD_TTREE_INSPECT       = 20;
     public static final short CMD_TTREE_QUERY_ENTRIES = 21;
@@ -1399,7 +1401,37 @@ public final class RootBackend implements AutoCloseable, Backend {
             }
             return new String(bytes, 0, end, StandardCharsets.UTF_8);
         }
-        return reply.message();
+        final String text = reply.message();
+        return text.isEmpty() ? describeEvent(reply) : text;
+    }
+
+    /**
+     * Several events carry no text: EVT_PONG and the file acknowledgements answer
+     * with an empty payload. A success only needs its name; a failure needs enough
+     * to be chased.
+     */
+    private static String describeEvent(BridgeEvent reply) {
+        final short cmd = reply.cmd();
+        if (cmd == EVT_PONG)          { return "PONG"; }
+        if (cmd == EVT_OK)            { return "OK"; }
+        if (cmd == EVT_FILE_OPENED)   { return "FILE_OPENED"; }
+        if (cmd == EVT_FILE_CLOSED)   { return "FILE_CLOSED"; }
+        if (cmd == EVT_SCHEMA_READY)  { return "SCHEMA_READY"; }
+        if (cmd == EVT_SYS_VERSION)   { return "SYS_VERSION"; }
+        if (cmd == EVT_SYS_UPTIME)    { return "SYS_UPTIME"; }
+        if (cmd == EVT_SYS_CONFIG)    { return "SYS_CONFIG"; }
+
+        final String reqId = " (req_id=" + Integer.toUnsignedString(reply.reqId()) + ")";
+        if (cmd == EVT_ERROR) {
+            return "ERROR status=" + reply.status() + reqId;
+        }
+        if (cmd == EVT_BACKPRESSURE) {
+            return "ERROR: the engine queues are full" + reqId;
+        }
+        if (cmd == EVT_DEADLINE_EXCEEDED) {
+            return "ERROR: the engine dropped the command past its deadline" + reqId;
+        }
+        return "ERROR: unexpected event cmd=" + cmd + reqId;
     }
 
     public String executeClingAwait(String command, long timeoutMillis) {

@@ -429,7 +429,155 @@ public class Handlers {
             info.handler.accept(full, context);
             return;
         }
-        cling(context, text);
+        // The interpreter decides whether this is C++. A character scan here would
+        // reject `:root h1`, which is how one inspects an object in ROOT.
+        final String answer = clingAnswer(context, text);
+        if (answer == null) {
+            return;
+        }
+        // Any refusal is a candidate: a mistyped command word can collide with a
+        // real C symbol, as `open` does, and then the diagnostic is not about an
+        // undeclared identifier at all.
+        if (answer.startsWith("ERROR")) {
+            final java.util.List<String> near = nearestCommands(text);
+            if (!near.isEmpty()) {
+                reportUnknown(text, near, answer);
+                return;
+            }
+        }
+        AppLogger.info(answer);
+    }
+
+    // --- Unknown command rather than a puzzling interpreter error ---
+
+    private static final java.util.regex.Pattern UNDECLARED =
+        java.util.regex.Pattern.compile("use of undeclared identifier '([^']+)'");
+
+    /** The identifier cling did not know, or null when it refused for another reason. */
+    private static String undeclaredIdentifier(String answer) {
+        if (answer == null || !answer.startsWith("ERROR")) {
+            return null;
+        }
+        final java.util.regex.Matcher m = UNDECLARED.matcher(answer);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private static void reportUnknown(String text, java.util.List<String> near,
+                                      String diagnostic) {
+        AppLogger.error("Unknown command: :root " + text.trim());
+        for (int i = 0; i < near.size(); i++) {
+            final String name = near.get(i);
+            // Only the best match is worth rewriting as a line to run; the others
+            // would carry over words that belong to a different command.
+            final String line = (i == 0) ? runnable(name, text) : name;
+            final CommandDefinitions.CommandInfo info = CommandDefinitions.find(name);
+            AppLogger.raw((info != null && info.description != null && !info.description.isBlank())
+                ? "  " + line + "  -  " + info.description
+                : "  " + line);
+        }
+        // The interpreter's own reason, subordinate: the suggestion is the answer,
+        // but a line meant as C++ still deserves to know why it was refused.
+        final String reason = firstLine(diagnostic);
+        if (!reason.isEmpty() && undeclaredIdentifier(diagnostic) == null) {
+            AppLogger.raw("  (as C++ it was refused: " + reason + ")");
+        }
+    }
+
+    private static String firstLine(String text) {
+        if (text == null) {
+            return "";
+        }
+        String body = text.startsWith("ERROR:") ? text.substring(6).trim() : text.trim();
+        final int end = body.indexOf('\n');
+        if (end >= 0) {
+            body = body.substring(0, end).trim();
+        }
+        return body.length() > 160 ? body.substring(0, 160) + "..." : body;
+    }
+
+    /** The suggested command, carrying over the words that were not part of its name. */
+    private static String runnable(String name, String text) {
+        final String[] words = name.substring(6).toLowerCase(java.util.Locale.ROOT).split("\\s+");
+        final StringBuilder out = new StringBuilder(name);
+        for (String typed : text.trim().split("\\s+")) {
+            final String candidate = typed.toLowerCase(java.util.Locale.ROOT);
+            boolean partOfName = false;
+            for (String word : words) {
+                if (editDistance(candidate, word) <= 2) {
+                    partOfName = true;
+                    break;
+                }
+            }
+            if (!partOfName) {
+                out.append(' ').append(typed);
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * Registered :root commands closest to what was typed. A command word counts as
+     * matched when some typed word is within two edits of it; the command matching
+     * the most words wins, ties broken by how close those matches are.
+     */
+    private static java.util.List<String> nearestCommands(String text) {
+        final String[] typed = text.toLowerCase(java.util.Locale.ROOT).trim().split("\\s+");
+        final int lookAt = Math.min(typed.length, 4);
+        final java.util.List<String[]> scored = new java.util.ArrayList<>();
+
+        for (String name : CommandDefinitions.all().keySet()) {
+            if (!name.startsWith(":root ")) {
+                continue;
+            }
+            int matched = 0;
+            int total = 0;
+            for (String word : name.substring(6).toLowerCase(java.util.Locale.ROOT).split("\\s+")) {
+                int best = Integer.MAX_VALUE;
+                for (int i = 0; i < lookAt; i++) {
+                    best = Math.min(best, editDistance(typed[i], word));
+                }
+                if (best <= 2) {
+                    matched++;
+                    total += best;
+                }
+            }
+            if (matched > 0) {
+                final int average = (total * 100) / matched;
+                scored.add(new String[] {
+                    String.format("%02d%04d", 99 - matched, average), name });
+            }
+        }
+
+        scored.sort((a, b) -> a[0].equals(b[0]) ? a[1].compareTo(b[1]) : a[0].compareTo(b[0]));
+        final java.util.List<String> out = new java.util.ArrayList<>();
+        for (String[] entry : scored) {
+            if (out.size() == 3) {
+                break;
+            }
+            out.add(entry[1]);
+        }
+        return out;
+    }
+
+    private static int editDistance(String a, String b) {
+        final int n = b.length();
+        int[] previous = new int[n + 1];
+        int[] current = new int[n + 1];
+        for (int j = 0; j <= n; j++) {
+            previous[j] = j;
+        }
+        for (int i = 1; i <= a.length(); i++) {
+            current[0] = i;
+            for (int j = 1; j <= n; j++) {
+                final int cost = (a.charAt(i - 1) == b.charAt(j - 1)) ? 0 : 1;
+                current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1),
+                                      previous[j - 1] + cost);
+            }
+            final int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[n];
     }
 
     /** Everything after the registered command name. */
@@ -465,16 +613,24 @@ public class Handlers {
 
     /** Runs one C++ expression in the engine's interpreter and prints the result. */
     private static void cling(CommandExecutionContext c, String expression) {
+        String answer = clingAnswer(c, expression);
+        if (answer != null) {
+            AppLogger.info(answer);
+        }
+    }
+
+    /** Same, but hands the answer back instead of printing it. Null when none came. */
+    private static String clingAnswer(CommandExecutionContext c, String expression) {
         com.sphere.core.rootbackend.RootBackend b = backend(c);
         if (b == null) {
-            return;
+            return null;
         }
         String answer = b.executeClingAwait(expression, TIMEOUT_MS);
         if (answer == null) {
             AppLogger.error("No answer for: " + expression);
-            return;
+            return null;
         }
-        AppLogger.info(answer);
+        return answer;
     }
 
     /** First token, the rest, or "" when absent. */
@@ -498,8 +654,9 @@ public class Handlers {
 
     /** A named ROOT object, cast to `type`. Handles are names, not numbers:
      *  the engine keeps no registry for histograms, objects, graphs or canvases. */
+    /** A checked lookup: a missing or mistyped object raises instead of yielding null. */
     private static String obj(String type, String name) {
-        return "((" + type + "*)gROOT->FindObject(\"" + name + "\"))";
+        return "SphereBridge::Need<" + type + ">(\"" + name + "\", \"" + type + "\")";
     }
 
     // --- Level 1: native opcodes ---
@@ -532,10 +689,23 @@ public class Handlers {
     public static void rootClose(String i, CommandExecutionContext c) {
         String a = args(i, ":root file close");
         if (a.isEmpty()) {
-            usage(":root file close <file_id>");
+            usage(":root file close <id|name>");
             return;
         }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_CLOSE_FILE, asInt(a, 0), null);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_CLOSE_FILE, 0, head(a));
+    }
+
+    public static void rootFileList(String i, CommandExecutionContext c) {
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_LIST, 0, null);
+    }
+
+    public static void rootFileScan(String i, CommandExecutionContext c) {
+        String a = args(i, ":root file scan");
+        if (a.isEmpty()) {
+            usage(":root file scan <path> [--json]");
+            return;
+        }
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_SCAN, 0, a);
     }
 
     public static void rootCloseAll(String i, CommandExecutionContext c) {
@@ -544,7 +714,11 @@ public class Handlers {
 
     public static void rootFileWrite(String i, CommandExecutionContext c) {
         String a = args(i, ":root file write");
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SAVE_FILE, asInt(a, 0), null);
+        if (a.isEmpty()) {
+            usage(":root file write <id|name>");
+            return;
+        }
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SAVE_FILE, 0, head(a));
     }
 
     public static void rootSchemaDiscover(String i, CommandExecutionContext c) {

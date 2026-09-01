@@ -7,6 +7,7 @@
 #include "shm_layout.h"
 
 #include <TFile.h>
+#include <TList.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -15,8 +16,10 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <cstring>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace Sphere::cmd::file {
 
@@ -25,92 +28,168 @@ namespace {
 /**
 * Thread-safe registry for managing active ROOT file handles.
 */
+/// Short name derived from the path, so a human can type it.
+std::string short_name(const std::string &path) {
+  std::size_t begin = path.find_last_of("/\\");
+  begin = (begin == std::string::npos) ? 0 : begin + 1;
+  std::size_t end = path.find_last_of('.');
+  if (end == std::string::npos || end <= begin) {
+    end = path.size();
+  }
+  std::string name = path.substr(begin, end - begin);
+  return name.empty() ? std::string("file") : name;
+}
+
+struct FileEntry {
+  std::unique_ptr<TFile> file;
+  std::string path;
+  std::string name;
+};
+
+/**
+* Open ROOT files, addressable by a small number or by a short name. Both are
+* handed back when the file opens, because a human types whichever is shorter.
+*/
 class FileRegistry {
 public:
+  struct Handle {
+    std::uint32_t id{0};
+    std::string name;
+  };
+
   static FileRegistry &instance() noexcept {
     static FileRegistry registry;
     return registry;
   }
 
-  bool open_file(std::uint32_t file_id, const char *path, const char *option) {
-    // Perform potentially slow file I/O outside the registry mutex lock
-    TFile *f = TFile::Open(path, option);
-    if (!f || f->IsZombie()) {
-      delete f;
-      return false;
+  /// Opens the file and returns its handle; id is 0 when the file is unusable.
+  Handle open_file(const char *path, const char *option) {
+    TFile *raw = TFile::Open(path, option);
+    if (!raw || raw->IsZombie()) {
+      delete raw;
+      return {};
     }
 
-    std::unique_ptr<TFile> old_file;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      auto it = files_.find(file_id);
-      if (it != files_.end()) {
-        old_file = std::move(it->second);
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string full(path);
+    std::string name = short_name(full);
+    if (by_name_.count(name) != 0) {
+      // Same basename from another directory: keep both, tell them apart.
+      for (int suffix = 2;; ++suffix) {
+        std::string candidate = name + "~" + std::to_string(suffix);
+        if (by_name_.count(candidate) == 0) {
+          name = std::move(candidate);
+          break;
+        }
       }
-      files_[file_id] = std::unique_ptr<TFile>(f);
     }
 
-    // Safely close and destroy previous instance outside the critical section
-    if (old_file && !old_file->IsZombie()) {
-      old_file->Close();
-    }
-
-    return true;
+    const std::uint32_t id = next_id_++;
+    FileEntry entry;
+    entry.file.reset(raw);
+    entry.path = full;
+    entry.name = name;
+    files_.emplace(id, std::move(entry));
+    by_name_.emplace(name, id);
+    return {id, name};
   }
 
-  bool close_file(std::uint32_t file_id) {
-    std::unique_ptr<TFile> file_to_close;
+  /// Accepts a number or a name; 0 when neither matches.
+  std::uint32_t resolve(const std::string &token) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!token.empty() &&
+        token.find_first_not_of("0123456789") == std::string::npos) {
+      const std::uint32_t id =
+          static_cast<std::uint32_t>(std::strtoul(token.c_str(), nullptr, 10));
+      return (files_.count(id) != 0) ? id : 0;
+    }
+    auto it = by_name_.find(token);
+    return (it != by_name_.end()) ? it->second : 0;
+  }
+
+  bool close_file(std::uint32_t id) {
+    std::unique_ptr<TFile> closing;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      auto it = files_.find(file_id);
+      auto it = files_.find(id);
       if (it == files_.end()) {
         return false;
       }
-      file_to_close = std::move(it->second);
+      by_name_.erase(it->second.name);
+      closing = std::move(it->second.file);
       files_.erase(it);
     }
-
-    if (file_to_close && !file_to_close->IsZombie()) {
-      file_to_close->Close();
+    if (closing && !closing->IsZombie()) {
+      closing->Close();
     }
     return true;
   }
 
   void close_all() {
-    std::unordered_map<std::uint32_t, std::unique_ptr<TFile>> files_to_close;
+    std::unordered_map<std::uint32_t, FileEntry> closing;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      files_to_close.swap(files_);
+      closing.swap(files_);
+      by_name_.clear();
     }
-
-    for (auto &[id, file_ptr] : files_to_close) {
-      if (file_ptr && !file_ptr->IsZombie()) {
-        file_ptr->Close();
+    for (auto &[id, entry] : closing) {
+      if (entry.file && !entry.file->IsZombie()) {
+        entry.file->Close();
       }
     }
   }
 
-  bool save_file(std::uint32_t file_id) {
+  bool save_file(std::uint32_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = files_.find(file_id);
-    if (it == files_.end() || !it->second || it->second->IsZombie()) {
+    auto it = files_.find(id);
+    if (it == files_.end() || !it->second.file || it->second.file->IsZombie()) {
       return false;
     }
-    if (!it->second->IsWritable()) {
+    if (!it->second.file->IsWritable()) {
       return false; // opened READ; reporting success would be a lie
     }
-
-    // Execute flush/write command safely
-    return (it->second->Write(nullptr, TObject::kOverwrite) >= 0);
+    return (it->second.file->Write(nullptr, TObject::kOverwrite) >= 0);
   }
 
-  TFile *get_file(std::uint32_t file_id) {
+  TFile *get_file(std::uint32_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = files_.find(file_id);
-    if (it == files_.end() || !it->second || it->second->IsZombie()) {
+    auto it = files_.find(id);
+    if (it == files_.end() || !it->second.file || it->second.file->IsZombie()) {
       return nullptr;
     }
-    return it->second.get();
+    return it->second.file.get();
+  }
+
+  std::string list() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (files_.empty()) {
+      return "no file open";
+    }
+    std::vector<std::uint32_t> ids;
+    ids.reserve(files_.size());
+    for (const auto &[id, entry] : files_) {
+      ids.push_back(id);
+    }
+    std::sort(ids.begin(), ids.end());
+
+    std::string out;
+    for (const std::uint32_t id : ids) {
+      const FileEntry &entry = files_.at(id);
+      out += std::to_string(id);
+      out += "  ";
+      out += entry.name;
+      out += "  ";
+      out += entry.path;
+      const int keys = (entry.file && entry.file->GetListOfKeys() != nullptr)
+                           ? entry.file->GetListOfKeys()->GetSize()
+                           : 0;
+      out += "  " + std::to_string(keys) + " key(s)";
+      out += entry.file && entry.file->IsWritable() ? "  writable\n" : "\n";
+    }
+    if (!out.empty() && out.back() == '\n') {
+      out.pop_back();
+    }
+    return out;
   }
 
 private:
@@ -120,8 +199,10 @@ private:
   FileRegistry(const FileRegistry &) = delete;
   FileRegistry &operator=(const FileRegistry &) = delete;
 
-  std::mutex mutex_;
-  std::unordered_map<std::uint32_t, std::unique_ptr<TFile>> files_;
+  mutable std::mutex mutex_;
+  std::uint32_t next_id_{1};
+  std::unordered_map<std::uint32_t, FileEntry> files_;
+  std::unordered_map<std::string, std::uint32_t> by_name_;
 };
 
 /**
@@ -163,6 +244,44 @@ void send_response(ShmLayout &shm, const Proto::PacketHeader &req,
 }
 
 /**
+* Text reply through the shared heap: a handle, a list, or a reason.
+*/
+void send_text(ShmLayout &shm, const Proto::PacketHeader &req,
+               Proto::PacketType type, const std::string &text) {
+  if (shm.evt_ring == nullptr) {
+    return;
+  }
+
+  ScopedChunkWriter writer(shm, text.size() + 1);
+  if (!writer) {
+    std::cerr << "[CmdFile] Error: no room in the shared heap for the reply.\n";
+    return;
+  }
+  std::memcpy(writer.data(), text.data(), text.size() + 1);
+  writer.commit();
+
+  BridgeMessage msg{};
+  msg.type = MsgType::SHM_REF;
+  msg.cmd = static_cast<std::uint16_t>(type);
+  msg.job_id = req.job_id;
+  msg.req_id = req.req_id;
+  msg.shm_ref.offset = static_cast<std::uint32_t>(writer.offset());
+  msg.shm_ref.total_bytes = static_cast<std::uint32_t>(text.size() + 1);
+  msg.shm_ref.dtype = ShmDType::UInt8;
+  msg.shm_ref.ndim = 1;
+  msg.shm_ref.shape[0] = static_cast<std::uint32_t>(text.size() + 1);
+
+  for (int retry = 0; retry < 100; ++retry) {
+    if (shm.evt_ring->push(msg)) {
+      return;
+    }
+    std::this_thread::yield();
+  }
+  std::cerr << "[CmdFile] Error: event ring full, reply dropped for req_id "
+            << req.req_id << ".\n";
+}
+
+/**
 * Helper function to extract a string path from the shared payload.
 */
 std::string_view extract_path(ShmLayout &shm,
@@ -193,66 +312,78 @@ void handle_open(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) 
 
   const std::string_view path_view = extract_path(shm, pkt);
   if (path_view.empty()) {
-    std::cerr << "[CmdFile] Error: Invalid or empty file path provided.\n";
-    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
-                  1 /* ERR_INVALID_ARG */);
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: no path given. Usage: :root file open <path>");
     return;
   }
 
-  // Ensure path is null-terminated before passing to ROOT C-style APIs
   const std::string path(path_view);
-  const bool success =
-      FileRegistry::instance().open_file(pkt.req_id, path.c_str(), "READ");
+  const FileRegistry::Handle handle =
+      FileRegistry::instance().open_file(path.c_str(), "READ");
 
-  if (!success) {
-    std::cerr << "[CmdFile] Error: Failed to open ROOT file: " << path << "\n";
-    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
-                  2 /* ERR_FILE_NOT_FOUND */);
+  if (handle.id == 0) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: cannot open as a ROOT file: " + path);
     return;
   }
 
-  send_response(shm, pkt, Proto::PacketType::EVT_FILE_OPENED);
+  send_text(shm, pkt, Proto::PacketType::EVT_FILE_OPENED,
+            "FILE_OPENED  FILE_ID: " + std::to_string(handle.id) + "  " +
+                handle.name);
 }
 
 void handle_close(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
   (void)context;
 
-  const bool success = FileRegistry::instance().close_file(pkt.req_id);
-  if (!success) {
-    std::cerr << "[CmdFile] Warning: File handle not found for file_id: "
-              << pkt.req_id << "\n";
-    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
-                  3 /* ERR_HANDLE_INVALID */);
+  const std::string token(extract_path(shm, pkt));
+  const std::uint32_t id = FileRegistry::instance().resolve(token);
+  if (id == 0) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: no open file called '" + token +
+                  "'. Try :root file list");
     return;
   }
-
-  send_response(shm, pkt, Proto::PacketType::EVT_FILE_CLOSED);
+  if (!FileRegistry::instance().close_file(id)) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: could not close '" + token + "'");
+    return;
+  }
+  send_text(shm, pkt, Proto::PacketType::EVT_FILE_CLOSED,
+            "FILE_CLOSED  " + token);
 }
 
 void close_all_files() { FileRegistry::instance().close_all(); }
 
 void handle_close_all(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
   (void)context;
-
   FileRegistry::instance().close_all();
-
-  send_response(shm, pkt, Proto::PacketType::EVT_OK);
+  send_text(shm, pkt, Proto::PacketType::EVT_OK, "all files closed");
 }
 
 void handle_save(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
   (void)context;
 
-  const bool success = FileRegistry::instance().save_file(pkt.req_id);
-  if (!success) {
-    std::cerr
-        << "[CmdFile] Error: Failed to save changes to ROOT file [file_id: "
-        << pkt.req_id << "].\n";
-    send_response(shm, pkt, Proto::PacketType::EVT_ERROR,
-                  4 /* ERR_WRITE_FAILED */);
+  const std::string token(extract_path(shm, pkt));
+  const std::uint32_t id = FileRegistry::instance().resolve(token);
+  if (id == 0) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: no open file called '" + token +
+                  "'. Try :root file list");
     return;
   }
+  if (!FileRegistry::instance().save_file(id)) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: '" + token +
+                  "' was opened read-only, or the write failed");
+    return;
+  }
+  send_text(shm, pkt, Proto::PacketType::EVT_OK, "SAVED  " + token);
+}
 
-  send_response(shm, pkt, Proto::PacketType::EVT_OK);
+void handle_list(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+  (void)context;
+  send_text(shm, pkt, Proto::PacketType::EVT_OK,
+            FileRegistry::instance().list());
 }
 
 void register_all() {
@@ -262,6 +393,7 @@ void register_all() {
   registry.register_command(Proto::PacketType::CMD_CLOSE_ALL_FILES,
                             &handle_close_all);
   registry.register_command(Proto::PacketType::CMD_SAVE_FILE, &handle_save);
+  registry.register_command(Proto::PacketType::CMD_FILE_LIST, &handle_list);
 }
 
 } // namespace Sphere::cmd::file

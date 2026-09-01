@@ -95,12 +95,14 @@ public class CommandDefinitions {
         // --- ROOT Framework Bridge — Files & Directories ---
         register(":root file open", "Open a ROOT file handle. Usage: :root file open <path> [mode]", Handlers::rootOpenFile);
         register(":root file open-remote", "Open a remote ROOT file via web/XROOTD. Usage: :root file open-remote <url>", Handlers::rootOpenRemoteFile);
-        register(":root file close", "Close a specific ROOT file handle. Usage: :root file close <name>", Handlers::rootClose);
+        register(":root file list", "List the open ROOT files with their id and name", Handlers::rootFileList);
+        register(":root file close", "Close an open file. Usage: :root file close <id|name>", Handlers::rootClose);
         register(":root file close-all", "Close all opened ROOT file handles", Handlers::rootCloseAll);
         register(":root file ls", "List keys inside an opened ROOT file handle. Usage: :root file ls [file_id]", Handlers::rootLs);
         register(":root file info", "Display metadata info for an open file handle. Usage: :root file info <file_id>", Handlers::rootFileInfo);
-        register(":root file write", "Flush and write active objects to file handle", Handlers::rootFileWrite);
+        register(":root file write", "Flush and write an open file. Usage: :root file write <id|name>", Handlers::rootFileWrite);
         register(":root file keys", "List all key structures inside active ROOT directory", Handlers::rootFileKeys);
+        register(":root file scan", "Report a ROOT file's health, structure and basket layout. Usage: :root file scan <path> [--json]", Handlers::rootFileScan);
         register(":root file cd", "Change directory inside ROOT file. Usage: :root file cd <path>", Handlers::rootFileCd);
         register(":root file pwd", "Print current working directory inside active ROOT file", Handlers::rootFilePwd);
         register(":root file dir", "Display active ROOT directory contents", Handlers::rootFileDir);

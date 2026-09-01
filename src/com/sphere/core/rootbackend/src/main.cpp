@@ -7,6 +7,7 @@
 #include "RootBatchLoaderMultiFile.h"
 #include "commands/cmd_file.h"
 #include "commands/cmd_system.h"
+#include "commands/cmd_inspect.h"
 #include "commands/cmd_ttree.h"
 #include "logger.h"
 #include "platform.h"
@@ -671,6 +672,7 @@ int main(int argc, char **argv) {
   Sphere::cmd::sys::register_all();
   Sphere::cmd::file::register_all();
   Sphere::cmd::ttree::register_all();
+  Sphere::cmd::inspect::register_all();
 
   try {
     Sphere::RootRuntime runtime(true,

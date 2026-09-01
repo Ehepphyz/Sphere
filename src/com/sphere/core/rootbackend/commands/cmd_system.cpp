@@ -24,6 +24,8 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <fstream>
+#include <iterator>
 #include <thread>
 
 namespace Sphere {
@@ -491,51 +493,161 @@ static std::string read_payload(const ShmLayout &shm,
   return std::string(bytes, length);
 }
 
+/**
+* Captures what ROOT prints during one interpreter call. Held under
+* interpreter_mutex(), so the two cling calls never overlap.
+*/
+class OutputCapture {
+public:
+  OutputCapture() {
+    if (gSystem == nullptr) {
+      return;
+    }
+    path_ = std::string(gSystem->TempDirectory()) + "/sphere_cling_" +
+            std::to_string(gSystem->GetPid()) + ".txt";
+    active_ = (gSystem->RedirectOutput(path_.c_str(), "w", &handle_) == 0);
+  }
+
+  ~OutputCapture() { (void)stop(); }
+
+  OutputCapture(const OutputCapture &) = delete;
+  OutputCapture &operator=(const OutputCapture &) = delete;
+
+  std::string stop() {
+    if (!active_) {
+      return {};
+    }
+    active_ = false;
+    gSystem->RedirectOutput(nullptr, "", &handle_);
+
+    std::string text;
+    if (std::ifstream in(path_); in) {
+      text.assign(std::istreambuf_iterator<char>(in),
+                  std::istreambuf_iterator<char>());
+    }
+    gSystem->Unlink(path_.c_str());
+
+    constexpr std::size_t kMaxCapture = 60 * 1024;
+    if (text.size() > kMaxCapture) {
+      text.resize(kMaxCapture);
+      text += "\n[truncated]";
+    }
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+      text.pop_back();
+    }
+    return text;
+  }
+
+private:
+  std::string path_;
+  RedirectHandle_t handle_;
+  bool active_{false};
+};
+
 // A std::string inside the interpreter that handlers can read directly.
 std::mutex &interpreter_mutex() {
   static std::mutex mutex;
   return mutex;
 }
 
+/// Declares one block and, when it fails, says why instead of staying silent.
+bool declare_block(const char *what, const char *source) {
+  OutputCapture capture;
+  const bool ok = gInterpreter->Declare(source);
+  const std::string diagnostic = capture.stop();
+  if (!ok) {
+    std::cerr << "[cmd_system] The interpreter refused the " << what
+              << " declarations:\n"
+              << diagnostic << "\n";
+  }
+  return ok;
+}
+
 std::string *interpreter_result_slot() {
   static std::string *const slot = []() -> std::string * {
-  if (gInterpreter == nullptr) {
-    return nullptr;
-  }
+    if (gInterpreter == nullptr) {
+      return nullptr;
+    }
 
-  const bool declared = gInterpreter->Declare(
-      "#include <string>\n"
-      "#include <sstream>\n"
-      "#include <type_traits>\n"
-      "namespace SphereBridge {\n"
-      "  inline std::string last_result;\n"
-      "  template <typename T> std::string ToText(const T &value) {\n"
-      "    std::ostringstream out; out << value; return out.str();\n"
-      "  }\n"
-      "  inline std::string ToText(const char *value) {\n"
-      "    return (value != nullptr) ? std::string(value) : std::string();\n"
-      "  }\n"
-      // Run() accepts void calls too, so Print()/Draw() no longer need a
-      // failed ToText() compilation before the statement fallback.
-      "  template <typename F> std::string Run(F &&f) {\n"
-      "    if constexpr (std::is_void_v<decltype(f())>) { f(); return \"OK\"; }\n"
-      "    else { return ToText(f()); }\n"
-      "  }\n"
-      "}\n");
-  if (!declared) {
-    return nullptr;
-  }
+    // The core block must succeed: everything else in this file depends on it.
+    if (!declare_block("core",
+        "#include <string>\n"
+        "#include <sstream>\n"
+        "#include <type_traits>\n"
+        "namespace SphereBridge {\n"
+        "  inline std::string last_result;\n"
+        "  template <typename T> std::string ToText(const T &value) {\n"
+        "    std::ostringstream out; out << value; return out.str();\n"
+        "  }\n"
+        "  inline std::string ToText(const char *value) {\n"
+        "    return (value != nullptr) ? std::string(value) : std::string();\n"
+        "  }\n"
+        "  template <typename F> std::string Run(F &&f) {\n"
+        "    try {\n"
+        "      if constexpr (std::is_void_v<decltype(f())>) { f(); return \"OK\"; }\n"
+        "      else { return ToText(f()); }\n"
+        "    } catch (const std::exception &e) {\n"
+        "      return std::string(\"ERROR: \") + e.what();\n"
+        "    } catch (...) {\n"
+        "      return \"ERROR: the call raised an unknown exception\";\n"
+        "    }\n"
+        "  }\n"
+        "}\n")) {
+      return nullptr;
+    }
 
-  TInterpreter::EErrorCode error = TInterpreter::kNoError;
-  const Long_t address =
-      gInterpreter->ProcessLine("(void*)&SphereBridge::last_result", &error);
-  if (error != TInterpreter::kNoError || address == 0) {
-    return nullptr;
-  }
-
-  return reinterpret_cast<std::string *>(address);
+    TInterpreter::EErrorCode error = TInterpreter::kNoError;
+    Long_t address = 0;
+    {
+      OutputCapture capture;
+      address = gInterpreter->ProcessLine("(void*)&SphereBridge::last_result",
+                                          &error);
+      const std::string diagnostic = capture.stop();
+      if (error != TInterpreter::kNoError || address == 0) {
+        std::cerr << "[cmd_system] The interpreter could not hand back the "
+                     "result slot:\n"
+                  << diagnostic << "\n";
+        return nullptr;
+      }
+    }
+    return reinterpret_cast<std::string *>(address);
   }();
   return slot;
+}
+
+/**
+* Checked object lookup. Declared on its own: if a ROOT build refuses it, the
+* commands that name an object degrade, the interpreter itself keeps working.
+*/
+bool object_lookup_ready() {
+  static const bool ready = (gInterpreter != nullptr) &&
+      declare_block("object lookup",
+        "#include <stdexcept>\n"
+        "#include <string>\n"
+        "#include \"TROOT.h\"\n"
+        "#include \"TFile.h\"\n"
+        "#include \"TDirectory.h\"\n"
+        "namespace SphereBridge {\n"
+        "  template <typename T> T *Need(const char *name, const char *type) {\n"
+        "    TObject *found = gROOT->FindObject(name);\n"
+        "    if (found == nullptr && gDirectory != nullptr) {\n"
+        "      found = gDirectory->Get(name);\n"
+        "    }\n"
+        "    if (found == nullptr && gFile != nullptr) {\n"
+        "      found = gFile->Get(name);\n"
+        "    }\n"
+        "    if (found == nullptr) {\n"
+        "      throw std::runtime_error(std::string(\"no object named '\") + name + \"'\");\n"
+        "    }\n"
+        "    T *typed = dynamic_cast<T *>(found);\n"
+        "    if (typed == nullptr) {\n"
+        "      throw std::runtime_error(std::string(\"'\") + name + \"' is a \" +\n"
+        "                               found->ClassName() + \", not a \" + type);\n"
+        "    }\n"
+        "    return typed;\n"
+        "  }\n"
+        "}\n");
+  return ready;
 }
 
 // Runs one line through the ROOT interpreter and answers with its result.
@@ -566,44 +678,69 @@ void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt,
     return;
   }
 
+  if (command.find("SphereBridge::Need<") != std::string::npos &&
+      !object_lookup_ready()) {
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  "ERROR: this ROOT build refused the object-lookup helper; see "
+                  "rootbackend_error.log. Name the object through gDirectory or "
+                  "gFile directly in the meantime.");
+    return;
+  }
+
   slot->clear();
   const std::string statement =
       "SphereBridge::last_result = SphereBridge::Run([&]{ return (" + command +
       "); });";
 
+  // Each attempt is captured on its own: a failed first attempt must not put its
+  // diagnostic in front of a successful second one.
   TInterpreter::EErrorCode error = TInterpreter::kNoError;
-  try {
-    (void)gInterpreter->ProcessLine(statement.c_str(), &error);
-  } catch (const std::exception &ex) {
-    send_response(shm, pkt.job_id, pkt.req_id,
-                  std::string("ERROR: interpreter threw: ") + ex.what());
-    return;
-  } catch (...) {
-    send_response(shm, pkt.job_id, pkt.req_id,
-                  "ERROR: interpreter threw an unknown exception");
-    return;
+  std::string printed;
+  {
+    OutputCapture capture;
+    try {
+      (void)gInterpreter->ProcessLine(statement.c_str(), &error);
+    } catch (...) {
+      error = TInterpreter::kFatal;
+    }
+    printed = capture.stop();
   }
 
   if (error != TInterpreter::kNoError) {
+    // Not an expression: run it as a statement, as a ROOT prompt would.
     TInterpreter::EErrorCode bare_error = TInterpreter::kNoError;
-    try {
-      (void)gInterpreter->ProcessLine((command + ";").c_str(), &bare_error);
-    } catch (...) {
-      bare_error = TInterpreter::kFatal;
+    std::string bare_printed;
+    {
+      OutputCapture capture;
+      try {
+        (void)gInterpreter->ProcessLine((command + ";").c_str(), &bare_error);
+      } catch (...) {
+        bare_error = TInterpreter::kFatal;
+      }
+      bare_printed = capture.stop();
     }
 
     if (bare_error != TInterpreter::kNoError) {
+      const std::string &diagnostic = bare_printed.empty() ? printed : bare_printed;
       send_response(shm, pkt.job_id, pkt.req_id,
-                    "ERROR: interpreter refused: " + command);
+                    diagnostic.empty()
+                        ? "ERROR: interpreter refused: " + command
+                        : "ERROR: " + diagnostic);
       return;
     }
-    send_response(shm, pkt.job_id, pkt.req_id, "OK");
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  bare_printed.empty() ? "OK" : bare_printed);
     return;
   }
 
-  // Fallback default features
-  const std::string answer = slot->empty() ? std::string("OK") : *slot;
-  send_response(shm, pkt.job_id, pkt.req_id, answer);
+  // What the expression printed, then what it evaluated to.
+  const std::string value = slot->empty() ? std::string("OK") : *slot;
+  if (printed.empty()) {
+    send_response(shm, pkt.job_id, pkt.req_id, value);
+    return;
+  }
+  send_response(shm, pkt.job_id, pkt.req_id,
+                (value == "OK") ? printed : (printed + "\n" + value));
 }
 
 void handle_noop(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
@@ -636,14 +773,16 @@ void handle_system(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context
 // Installs the handlers above into the process-wide CommandRegistry.
 void warm_up() {
   (void)AdvancedRootConfigCache::instance();
-  // Instantiating Run()/ToText() here costs the autoparse once, on the main
-  // thread, instead of on the first client command.
+  
   if (interpreter_result_slot() != nullptr && gInterpreter != nullptr) {
+    (void)object_lookup_ready();
+    OutputCapture capture;
     TInterpreter::EErrorCode error = TInterpreter::kNoError;
     (void)gInterpreter->ProcessLine(
         "SphereBridge::last_result = "
         "SphereBridge::Run([&]{ return (gROOT->GetVersion()); });",
         &error);
+    (void)capture.stop();
   }
 }
 
