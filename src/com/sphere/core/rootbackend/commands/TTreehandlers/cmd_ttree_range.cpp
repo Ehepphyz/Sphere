@@ -142,6 +142,16 @@ void handle_read_column(ShmLayout &shm, const Proto::PacketHeader &pkt, void *co
     return;
   }
 
+  // count comes from the tree, elem_size from the leaf, but the product is what
+  // reaches the allocator: reject it here rather than let it wrap.
+  if (type_info.elem_size == 0 ||
+      static_cast<std::uint64_t>(count) >
+          0xFFFFFFFFULL / type_info.elem_size) {
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
+                  ResponseStatus::ERROR_SHM_OOM);
+    return;
+  }
+
   const std::size_t total_bytes =
       static_cast<std::size_t>(count) * type_info.elem_size;
 

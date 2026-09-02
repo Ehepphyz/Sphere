@@ -226,6 +226,13 @@ bool parse_options(int argc, char **argv, Options &options) {
         std::cerr << "[Main] --size must be a positive byte count.\n";
         return false;
       }
+      // ShmRef::offset is a uint32, so nothing past 4 GiB can be addressed in
+      // an event. Refusing here beats handing out truncated offsets later.
+      if (options.shm_size > 0xFFFFFFFFULL) {
+        std::cerr << "[Main] --size cannot exceed 4 GiB: a heap offset travels "
+                     "as a 32-bit field.\n";
+        return false;
+      }
     } else if (arg == "--ntuple") {
       if (!next(options.ntuple_name)) {
         return false;

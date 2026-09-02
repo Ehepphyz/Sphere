@@ -100,7 +100,7 @@ public class SettingsManager {
         // Iterate backwards to return the most recently assigned value for this key
         for (int i = s.size() - 1; i >= 0; i--) {
             if (s.get(i).getKey().equals(lookupKey)) {
-                return sanitizeValue(s.get(i).getValue());
+                return sanitizeValue(expand(s.get(i).getValue(), lookupKey, 0));
             }
         }
         return null;
@@ -114,12 +114,62 @@ public class SettingsManager {
             // Iterate backwards within the first section that contains the key
             for (int i = s.size() - 1; i >= 0; i--) {
                 if (s.get(i).getKey().equals(lookupKey)) {
-                    String v = sanitizeValue(s.get(i).getValue());
+                    String v = sanitizeValue(expand(s.get(i).getValue(), lookupKey, 0));
                     if (v != null) return v;
                 }
             }
         }
         return null;
+    }
+
+    /** Raw value of a key, without expansion, used while resolving references. */
+    private String rawProperty(String key) {
+        if (key == null) return null;
+        String lookupKey = key.toUpperCase().trim();
+        for (var s : sections.values()) {
+            for (int i = s.size() - 1; i >= 0; i--) {
+                if (s.get(i).getKey().equals(lookupKey)) {
+                    return s.get(i).getValue();
+                }
+            }
+        }
+        return null;
+    }
+
+    private static final java.util.regex.Pattern VAR_REFERENCE =
+        java.util.regex.Pattern.compile("\\$\\{?([A-Za-z_][A-Za-z0-9_]*)\\}?");
+
+    /**
+     * Resolves $NAME and ${NAME} against the other keys of this file, then against
+     * the environment. The file is written like a shell profile, so a value such as
+     * CPP_COMPILER_PATH=$GPP_DIR used to reach callers as the literal text.
+     *
+     * @param self  key being expanded, so PATH=$PATH takes the environment instead
+     *              of looping on itself
+     * @param depth guards against a cycle between two keys
+     */
+    private String expand(String value, String self, int depth) {
+        if (value == null || value.indexOf('$') < 0 || depth > 8) {
+            return value;
+        }
+        java.util.regex.Matcher m = VAR_REFERENCE.matcher(value);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String name = m.group(1);
+            String replacement = null;
+            if (!name.equalsIgnoreCase(self)) {
+                replacement = expand(rawProperty(name), name, depth + 1);
+            }
+            if (replacement == null) {
+                replacement = System.getenv(name);
+            }
+            if (replacement == null) {
+                replacement = m.group(0); // unknown reference stays visible
+            }
+            m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(out);
+        return out.toString();
     }
 
     /**
@@ -128,27 +178,199 @@ public class SettingsManager {
      * - Unix: Rejects C:\..., C:/...
      */
     private String sanitizeValue(String value) {
-        if (value == null) return null;
+        // Only trims. Judging a value by its path shape nulled anything that merely
+        // looked foreign -- a Windows path read under Linux, a /mnt/c path read under
+        // Windows, and any plain value containing a colon. Path shape is resolvePath's
+        // business, and a value the user wrote is returned as written.
+        return value == null ? null : value.trim();
+    }
 
-        String v = value.trim();
-        boolean isWin = System.getProperty("os.name").toLowerCase().contains("win");
+    /**
+     * Rewrites a path into the notation the running platform understands.
+     * Returns null when the path cannot mean anything here, for example a C: drive
+     * on a native Linux host.
+     */
+    public static String toNativePath(String raw) {
+        return toNativePath(raw, OSValidator.current());
+    }
 
-        if (isWin) {
-            if (v.startsWith("/")
-                    && !v.matches("^/[A-Za-z]/.*")      // Allows /c/... (MSYS2/Git Bash variants)
-                    && !v.matches("^/[A-Za-z]:/.*")     // Allows /C:/... notation
-                    && !v.matches("^[A-Za-z]:.*")) {    // Allows standard C:/... pathways
-                return null;
-            }
-            return v;
+    /**
+     * The declared path when it works here, otherwise the same tool found where
+     * this platform keeps it. A declaration always wins when it is usable, so the
+     * user keeps the hand; the search only runs when the declared path cannot work
+     * on the running system, which is what makes one settings.conf serve Windows,
+     * WSL, Linux and macOS without per-platform sections.
+     */
+    public String resolveTool(String key, String fallbackName) {
+        StringBuilder reason = new StringBuilder();
+        String declared = resolvePath(key, fallbackName, reason);
+        if (declared != null) {
+            return declared;
         }
+        String name = toolName(key, fallbackName);
+        if (name == null) {
+            return null;
+        }
+        // Finding the same tool elsewhere is the normal case for a settings.conf
+        // carried between systems, so it stays silent. Only an outright failure
+        // is worth the user's attention, and then it says what was tried.
+        String found = findOnSystemPath(name);
+        if (found == null && reason.length() > 0) {
+            AppLogger.error(key + ": " + reason + ", and " + name
+                            + " is not on this system's PATH.");
+        }
+        return found;
+    }
 
-        // Unix execution boundaries: Strip out native Windows partition assignments
-        if (v.matches("^[A-Za-z]:.*")) {
+    /**
+     * Tool name to look for, taken from the declared value so the search follows
+     * what the user asked for. The extension moves with the platform: a declared
+     * g++.exe is g++ on Unix, and g++ is g++.exe on Windows.
+     */
+    private String toolName(String key, String fallbackName) {
+        String raw = getProperty(key);
+        String name = null;
+        if (raw != null && !raw.isBlank()) {
+            String v = raw.trim().replace('\\', '/');
+            int slash = v.lastIndexOf('/');
+            name = slash >= 0 ? v.substring(slash + 1) : v;
+            if (name.isEmpty() || name.endsWith(":")) {
+                name = null;
+            }
+            // A key may name the directory holding the tool rather than the tool.
+            // Its last segment is then a folder name, not something to look for.
+            String here = toNativePath(v);
+            if (here != null && new File(here).isDirectory()) {
+                name = null;
+            }
+        }
+        if (name == null) {
+            name = fallbackName;
+        }
+        if (name == null) {
+            return null;
+        }
+        boolean windows = OSValidator.current() == OSValidator.Platform.WINDOWS;
+        if (windows && !name.toLowerCase().endsWith(".exe")) {
+            return name + ".exe";
+        }
+        if (!windows && name.toLowerCase().endsWith(".exe")) {
+            return name.substring(0, name.length() - 4);
+        }
+        return name;
+    }
+
+    private static String findOnSystemPath(String executableName) {
+        String env = System.getenv("PATH");
+        if (env == null || executableName == null) {
+            return null;
+        }
+        for (String dir : env.split(File.pathSeparator)) {
+            if (dir.isBlank()) {
+                continue;
+            }
+            File candidate = new File(dir, executableName);
+            if (candidate.isFile() && candidate.canExecute()) {
+                return candidate.getAbsolutePath();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Explains why a Windows path is out of reach from WSL, or null when it is
+     * fine. Neither case can be repaired from here -- both are system settings --
+     * so the point is to name the setting instead of reporting "not found".
+     */
+    private static String wslReachability(String nativePath) {
+        if (OSValidator.current() != OSValidator.Platform.WSL) {
+            return null;
+        }
+        String root = OSValidator.wslMountRoot();
+        if (!nativePath.startsWith(root + "/")) {
+            return null;
+        }
+        String drive = nativePath.substring(root.length() + 1, root.length() + 2);
+        if (!OSValidator.isDriveMounted(drive)) {
+            return "drive " + drive.toUpperCase() + ": is not mounted under " + root
+                 + ". Enable [automount] in /etc/wsl.conf, or point this key at a "
+                 + "Linux path.";
+        }
+        if (nativePath.toLowerCase().endsWith(".exe") && !OSValidator.isWindowsInteropEnabled()) {
+            return "WSL cannot launch Windows executables: [interop] is disabled in "
+                 + "/etc/wsl.conf. Point this key at a Linux build instead.";
+        }
+        return null;
+    }
+
+    /** Matches a path under a non-default WSL automount root such as /windows/c. */
+    private static String mountedDrivePrefix(String v) {
+        String root = OSValidator.wslMountRoot();
+        if ("/mnt".equals(root)) {
+            return null;
+        }
+        return v.matches("^" + java.util.regex.Pattern.quote(root) + "/[A-Za-z](/.*)?$")
+             ? root : null;
+    }
+
+    /** Same conversion against an explicit target, which is what the tests drive. */
+    public static String toNativePath(String raw, OSValidator.Platform target) {
+        if (raw == null) {
+            return null;
+        }
+        String v = raw.trim();
+        if (v.isEmpty()) {
             return null;
         }
 
-        return v;
+        // --- Read the source notation into (drive, remainder) or a pure POSIX path
+        String drive = null;
+        String rest = null;
+
+        if (v.matches("^[A-Za-z]:[\\\\/].*") || v.matches("^[A-Za-z]:$")) {
+            drive = v.substring(0, 1);                      // C:\x  or C:/x
+            rest = v.length() > 2 ? v.substring(2) : "";
+        } else if (v.matches("^/[A-Za-z]:/.*")) {
+            drive = v.substring(1, 2);                      // /C:/x
+            rest = v.substring(3);
+        } else if (v.matches("^/mnt/[A-Za-z](/.*)?$")) {
+            drive = v.substring(5, 6);                      // /mnt/c/x
+            rest = v.length() > 6 ? v.substring(6) : "";
+        } else if (mountedDrivePrefix(v) != null) {
+            String prefix = mountedDrivePrefix(v);          // custom automount root
+            drive = v.substring(prefix.length() + 1, prefix.length() + 2);
+            rest = v.length() > prefix.length() + 2 ? v.substring(prefix.length() + 2) : "";
+        } else if (v.matches("^/[A-Za-z](/.*)?$") && !v.startsWith("/mnt")) {
+            drive = v.substring(1, 2);                      // /c/x, MSYS2 and Git Bash
+            rest = v.length() > 2 ? v.substring(2) : "";
+        }
+
+        boolean windowsPath = drive != null;
+        rest = rest == null ? null : rest.replace('\\', '/');
+
+        switch (target) {
+            case WINDOWS:
+                if (windowsPath) {
+                    return (drive.toUpperCase() + ":" + rest).replace('/', '\\');
+                }
+                // A pure POSIX path has no meaning on a native Windows host.
+                return null;
+
+            case WSL:
+                if (windowsPath) {
+                    // The mount root is configurable, so /mnt is only a default.
+                    return OSValidator.wslMountRoot() + "/" + drive.toLowerCase() + rest;
+                }
+                return v.replace('\\', '/');
+
+            case LINUX:
+            case MACOS:
+            default:
+                if (windowsPath) {
+                    return null;
+                }
+                return v.replace('\\', '/');
+        }
     }
 
     public String getArgs(String toolKey) {
@@ -223,11 +445,34 @@ public class SettingsManager {
      * Windows/Unix directory structures.
      */
     public String resolvePath(String key, String executableName) {
+        return resolvePath(key, executableName, null);
+    }
+
+    /** Probe form: silent, and records why it failed for the caller to report. */
+    public String resolvePath(String key, String executableName, StringBuilder reason) {
         String raw = getProperty(key);
         if (raw == null || raw.isBlank()) return null;
+        // A null name used to reach toLowerCase() below and throw, which the outer
+        // catch reported as an invalid path: the caller never learned why.
+        if (executableName == null) {
+            java.io.File direct = new java.io.File(raw.trim());
+            return direct.isFile() ? direct.getAbsolutePath() : null;
+        }
 
-        // 1. Normalize cross-platform environment path string layouts
-        raw = normalizeCrossPlatformPath(raw);
+        // 1. Translate into this platform's notation. normalizeCrossPlatformPath
+        // rewrote everything toward Windows whatever the host, so a valid
+        // /mnt/c path under WSL came out as C:/ and was then discarded.
+        String native_ = toNativePath(raw);
+        if (native_ == null) {
+            note(reason, "the declared path has no meaning on this system");
+            return null;
+        }
+        String unreachable = wslReachability(native_);
+        if (unreachable != null) {
+            note(reason, unreachable);
+            return null;
+        }
+        raw = native_;
 
         // 2. Uniformly resolve system-specific file separator boundaries
         String localized = raw.replace("/", File.separator).replace("\\", File.separator);
@@ -262,6 +507,7 @@ public class SettingsManager {
                     }
                 }
 
+                note(reason, "the declared path does not lead to " + executableName);
                 return null;
             }
 
@@ -271,36 +517,21 @@ public class SettingsManager {
                 checkIfSymlink(match);
                 return match.toAbsolutePath().toString();
             }
+            note(reason, "the declared directory contains no " + executableName);
 
         } catch (Exception e) {
-            System.err.println("resolvePath(): Invalid path format for key " + key + ": " + raw);
+            note(reason, "the declared path could not be read");
         }
 
         return null;
     }
 
-    private String normalizeCrossPlatformPath(String raw) {
-        if (raw.matches("^/[A-Za-z]:/.*")) {
-            return raw.substring(1);
+    private static void note(StringBuilder sink, String text) {
+        if (sink != null && sink.length() == 0) {
+            sink.append(text);
         }
-
-        if (raw.startsWith("/mnt/") && raw.length() > 6) {
-            String drive = raw.substring(5, 6).toUpperCase();
-            return drive + ":" + raw.substring(6);
-        }
-
-        if (raw.matches("^/[A-Za-z]/.*")) {
-            String drive = raw.substring(1, 2).toUpperCase();
-            return drive + ":" + raw.substring(2);
-        }
-
-        // macOS volumes mount layer mapping pass-through
-        if (raw.startsWith("/Volumes/")) {
-            return raw;
-        }
-
-        return raw;
     }
+
 
     private boolean matchesExecutable(Path file, String exeName) {
         if (file.getFileName() == null) return false;

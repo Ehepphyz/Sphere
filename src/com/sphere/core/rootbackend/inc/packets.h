@@ -33,6 +33,9 @@ enum class PacketType : std::uint16_t {
   CMD_SYS_UPTIME = 12,
   CMD_SYS_CONFIG = 13,
   CMD_CLING_EXEC = 14,
+  // Returns one heap chunk to the allocator. The offset travels in job_id, so
+  // a release never allocates in order to free.
+  CMD_RELEASE_CHUNK = 15,
 
   // TTree commands
   CMD_TTREE_INSPECT = 20,

@@ -44,10 +44,15 @@ public class TagInterpreter {
             // Evaluate tag structure using the path locator system
             String resolved = SnippetResolver.resolve(snippet, activeProject);
 
-            out.append("[@ ").append(resolved).append(" ]");
+            // The arguments stay inside the brackets. Everything downstream tells
+            // a snippet argument from a command argument by which side of the
+            // bracket it sits on, so moving them out here turned every snippet
+            // argument into an argument of :cpp / ::py / ::jul itself.
+            out.append("[@ ").append(resolved);
             if (!internalArgs.isEmpty()) {
                 out.append(" ").append(internalArgs);
             }
+            out.append(" ]");
 
             i = end + 1;
         }

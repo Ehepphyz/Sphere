@@ -8,6 +8,7 @@ public class SecurityManager {
     private static final String CONFIG_DIR = "config";
     private static final String CONFIG_FILE = CONFIG_DIR + File.separator + "pyconfigparam.src";
     private static final String TRUSTED_FILE = CONFIG_DIR + File.separator + "trusted_commands.src";
+    private static final long PIP_TIMEOUT_SECONDS = 60L;
 
     /**
      * Initializes the security directory and configuration files.
@@ -101,8 +102,11 @@ public class SecurityManager {
         File file = new File(CONFIG_FILE);
         if (!file.exists()) refreshWhitelist();
 
-        try {
-            return Files.lines(Paths.get(CONFIG_FILE))
+        // Files.lines keeps the file open until the stream is closed. This runs on
+        // every command, so leaving it to the GC leaked one descriptor per call
+        // and held a lock on the file under Windows.
+        try (java.util.stream.Stream<String> lines = Files.lines(Paths.get(CONFIG_FILE))) {
+            return lines
                     .skip(1) // Skip [Python_param] header
                     .map(String::trim)
                     .anyMatch(line -> line.equalsIgnoreCase(module.trim()));
@@ -125,9 +129,10 @@ public class SecurityManager {
                 return false;
             }
 
-            return Files.lines(trustedFile.toPath())
-                    .anyMatch(line -> line.trim().equals(cleanedCode));
-                    
+            try (java.util.stream.Stream<String> lines = Files.lines(trustedFile.toPath())) {
+                return lines.anyMatch(line -> line.trim().equals(cleanedCode));
+            }
+
         } catch (IOException e) {
             AppLogger.error("Security: Failed to read trusted_commands.src: " + e.getMessage());
             return false;
@@ -146,10 +151,11 @@ public class SecurityManager {
             return;
         }
 
+        Process p = null;
         try {
             ProcessBuilder pb = new ProcessBuilder(pythonPath, "-m", "pip", "list", "--format=freeze");
             pb.redirectErrorStream(true);
-            Process p = pb.start();
+            p = pb.start();
 
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
                  PrintWriter writer = new PrintWriter(new BufferedWriter(
@@ -172,9 +178,22 @@ public class SecurityManager {
                     AppLogger.info("Whitelist successfully updated");
                 }
             }
-            p.waitFor();
-        } catch (IOException | InterruptedException e) {
+            // Bounded: a pip that never returns used to hang the caller here for
+            // good, and the process was left behind on any failure.
+            if (!p.waitFor(PIP_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+                AppLogger.error("Whitelist update timed out after "
+                                + PIP_TIMEOUT_SECONDS + "s: " + pythonPath);
+                p.destroyForcibly();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            AppLogger.error("Whitelist update interrupted.");
+        } catch (IOException e) {
             AppLogger.error("Failed to refresh whitelist: " + e.getMessage());
+        } finally {
+            if (p != null && p.isAlive()) {
+                p.destroyForcibly();
+            }
         }
     }
 }

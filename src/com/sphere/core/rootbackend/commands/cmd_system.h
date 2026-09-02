@@ -22,6 +22,10 @@ void handle_system(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context
 // Runs the request payload through the ROOT interpreter and answers with the
 void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
 
+// Hands one heap chunk back to the allocator, addressed by its payload offset
+// carried in pkt.job_id. Answers nothing.
+void handle_release_chunk(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
+
 // Builds every ROOT-backed resource these handlers use, on the calling thread.
 void warm_up();
 

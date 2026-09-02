@@ -379,7 +379,9 @@ public class WorkspaceManager {
             if (!f.exists()) return;
 
             String json = Files.readString(f.toPath());
-            Map<String, Object> root = (Map<String, Object>) MinimalJson.parse(json);
+            Object parsed = MinimalJson.parse(json);
+            if (!(parsed instanceof Map<?, ?>)) return;
+            Map<String, Object> root = (Map<String, Object>) parsed;
 
             boolean isModified = false;
             isModified |= ensurePresetEntry(root, "ATLAS", List.of("24"));
@@ -409,14 +411,14 @@ public class WorkspaceManager {
             return true;
         }
 
-        if (!(obj instanceof Map rawMap)) {
+        if (!(obj instanceof Map<?, ?> rawMap)) {
             return false;
         }
 
         Map<String, Object> entry = new LinkedHashMap<>();
-        for (Object keyObj : rawMap.keySet()) {
-            if (keyObj instanceof String key) {
-                entry.put(key, rawMap.get(key));
+        for (Map.Entry<?, ?> e : rawMap.entrySet()) {
+            if (e.getKey() instanceof String key) {
+                entry.put(key, e.getValue());
             }
         }
 

@@ -273,6 +273,19 @@ public class Sphere extends JFrame {
         // CONNECTIVE WIRING: Pre-stage the backend engine formatting pipeline with global user configs
         if (cppBackend != null) {
             cppBackend.initializeFormatter(this.settings);
+
+            // Compiler findings reach the editor: the backend fills the engine, the
+            // editor underlines whatever concerns the file it is showing.
+            cppBackend.setDiagnosticsEngine(diagnosticsEngine);
+            cppBackend.setDiagnosticsListener(source -> {
+                if (this.editorFrame == null || this.editorFrame.getEditor() == null) {
+                    return;
+                }
+                java.util.List<com.sphere.components.editor.EditorDiagnostic> found =
+                    com.sphere.components.editor.DiagnosticsBridge.forFile(diagnosticsEngine, source);
+                javax.swing.SwingUtilities.invokeLater(
+                    () -> this.editorFrame.getEditor().showDiagnostics(source, found));
+            });
         }
 
         // Pass the diagnostic engine, the shared backend instance, and the global settings context down to the console

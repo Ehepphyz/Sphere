@@ -20,6 +20,11 @@ public class CppBackend implements Backend {
     private final Map<String, CppToolchain> toolchains = new HashMap<>();
     private final Map<String, CppCommand> systemCommands = new HashMap<>();
     private final CppCommandParser commandParser = new CppCommandParser();
+
+    // Nothing used to feed the diagnostics engine: it was created, handed to the
+    // console and read by two menu items that always found it empty.
+    private CppDiagnosticsEngine diagnosticsEngine;
+    private java.util.function.Consumer<java.io.File> diagnosticsListener;
     private final CppProcessRunner processRunner = new CppProcessRunner();
     
     // Step 1: Integrated Metrics Hub
@@ -31,41 +36,57 @@ public class CppBackend implements Backend {
     private final SettingsManager settings;
     private CppFormatterEngine formatterEngine;
 
+    /**
+     * Registers one toolchain from the path settings.conf gives for it. Absent or
+     * blank keys are skipped: a value left empty disables that backend, which is
+     * what the file's own rules say.
+     */
+    private void registerToolchain(String name, String settingsKey,
+                                   String executableName, boolean wsl) {
+        String path = settings.resolveTool(settingsKey, executableName);
+        if (path != null) {
+            toolchains.put(name, new CppToolchain(name, path, executableName, wsl));
+        }
+    }
+
     public CppBackend() {
         this.settings = new SettingsManager();
         this.intellisenseBackend = new CppIntellisenseBackend();
         String os = System.getProperty("os.name").toLowerCase();
 
-        String msvcPath = settings.resolvePath("CPP_MSVC_CL", null);
-        String clangPath = settings.resolvePath("CPP_CLANG", null);
-        String clangxxPath = settings.resolvePath("CPP_CLANGXX", null);
-        String llvmPath = settings.resolvePath("CPP_LLVM_CLANG", null);
-        String gccPath = settings.resolvePath("CPP_GCC", null);
-        String wslGccPath = settings.resolvePath("CPP_WSL_GCC", null);
+        // resolvePath dereferences the executable name, so passing null threw and
+        // every lookup came back empty. Each key is asked for the binary it names.
+        // settings.conf is the reference: it declares which toolchains exist
+        // (CPP_TOOLCHAINS), which one is default (CPP_DEFAULT_TOOLCHAIN), and where
+        // the binaries are, under [SYSTEM_PATH]. The six CPP_GCC style keys read
+        // before are not in that file, so no toolchain was ever registered.
+        registerToolchain("g++",     "GPP_DIR",     "g++",     false);
+        registerToolchain("gcc",     "GCC_DIR",     "gcc",     false);
+        registerToolchain("clang++", "CLANGPP_DIR", "clang++", false);
+        registerToolchain("clang",   "CLANG_DIR",   "clang",   false);
+        registerToolchain("msvc",    "CPP_MSVC_CL", "cl.exe",  false);
+        registerToolchain("wsl-gcc", "CPP_WSL_GCC", "g++",     true);
 
-        if (msvcPath != null) {
-            toolchains.put("msvc", new CppToolchain("msvc", msvcPath, "cl.exe", false));
+        // A declared compiler path wins: it is the one the user pointed at.
+        String declared = settings.resolveTool("CPP_COMPILER_PATH", null);
+        String defaultToolchain = settings.getProperty("CPP_DEFAULT_TOOLCHAIN");
+        if (defaultToolchain != null) {
+            defaultToolchain = defaultToolchain.trim();
         }
-        if (clangPath != null) {
-            toolchains.put("clang", new CppToolchain("clang", clangPath, "clang", false));
-        }
-        if (clangxxPath != null) {
-            toolchains.put("clang++", new CppToolchain("clang++", clangxxPath, "clang++", false));
-        }
-        if (llvmPath != null) {
-            toolchains.put("llvm", new CppToolchain("llvm", llvmPath, "clang", false));
-        }
-        if (gccPath != null) {
-            toolchains.put("gcc", new CppToolchain("gcc", gccPath, "g++", false));
-        }
-        if (wslGccPath != null) {
-            toolchains.put("wsl-gcc", new CppToolchain("wsl-gcc", wslGccPath, "g++", true));
+        if (declared != null && defaultToolchain != null && !defaultToolchain.isEmpty()) {
+            toolchains.put(defaultToolchain,
+                new CppToolchain(defaultToolchain, declared, defaultToolchain, false));
         }
 
-        String defaultToolchain = settings.resolvePath("CPP_DEFAULT_TOOLCHAIN", "clang++");
-        activeToolchain = toolchains.getOrDefault(defaultToolchain, toolchains.get("clang++"));
-        if (activeToolchain == null && !toolchains.isEmpty()) {
+        if (defaultToolchain != null && toolchains.containsKey(defaultToolchain)) {
+            activeToolchain = toolchains.get(defaultToolchain);
+        } else if (!toolchains.isEmpty()) {
             activeToolchain = toolchains.values().iterator().next();
+        }
+
+        if (activeToolchain == null) {
+            AppLogger.error("No C++ toolchain resolved. Set CPP_COMPILER_PATH or GPP_DIR "
+                            + "in settings.conf.");
         }
 
         // Initialize Strategy Mappings
@@ -103,6 +124,39 @@ public class CppBackend implements Backend {
     @Override
     public void activate() {
         /* Silent initialization entrypoint */
+    }
+
+    /** Engine that receives compiler findings. Optional. */
+    public void setDiagnosticsEngine(CppDiagnosticsEngine engine) {
+        this.diagnosticsEngine = engine;
+    }
+
+    public CppDiagnosticsEngine getDiagnosticsEngine() {
+        return diagnosticsEngine;
+    }
+
+    /** Notified with the compiled source once its findings have been ingested. */
+    public void setDiagnosticsListener(java.util.function.Consumer<java.io.File> listener) {
+        this.diagnosticsListener = listener;
+    }
+
+    /**
+     * Parses one compilation's stderr into the engine and announces the file.
+     * Clearing first keeps a fixed error from lingering on screen.
+     */
+    private void publishDiagnostics(File source, String stderr) {
+        if (diagnosticsEngine == null || source == null) {
+            return;
+        }
+        String path = source.getAbsolutePath();
+        diagnosticsEngine.clearFile(path);
+        if (stderr != null && !stderr.isBlank()) {
+            diagnosticsEngine.ingestCompilerStderr(path,
+                java.util.Arrays.asList(stderr.split("\\R")));
+        }
+        if (diagnosticsListener != null) {
+            diagnosticsListener.accept(source);
+        }
     }
 
     public synchronized void cancelCurrentExecution() {
@@ -274,54 +328,117 @@ public class CppBackend implements Backend {
         }
     }
 
+    /// Source extensions the auto-compile pipeline recognises. ".cpp" alone left
+    /// ".cc", ".cxx" and the ".C" of ROOT macros falling through to the raw
+    /// compiler invocation, which builds a.out and never runs it.
+    private static final String[] CPP_SOURCE_EXTENSIONS =
+        { ".cpp", ".cc", ".cxx", ".c++", ".C" };
+
+    private static String sourceExtensionOf(String path) {
+        if (path == null) return null;
+        for (String ext : CPP_SOURCE_EXTENSIONS) {
+            if (path.endsWith(ext)) return ext;
+        }
+        return null;
+    }
+
+    /**
+     * Compiles one source file and runs the result. Flags reach the compiler,
+     * arguments reach the produced binary.
+     */
+    public CppProcessRunner.CppResult executeSource(String source,
+                                                    List<String> compileFlags,
+                                                    List<String> runtimeArgs,
+                                                    boolean logCommand,
+                                                    CppOutputListener listener) {
+        if (activeToolchain == null) {
+            AppLogger.error("No valid active C++ toolchain configured.");
+            return new CppProcessRunner.CppResult("", "No toolchain.", -1, false);
+        }
+
+        File sourceFile = new File(source);
+        if (!sourceFile.isFile()) {
+            AppLogger.error("C++ source not found: " + source);
+            return new CppProcessRunner.CppResult("", "Source not found.", -1, false);
+        }
+
+        String extension = sourceExtensionOf(sourceFile.getName());
+        if (extension == null) {
+            AppLogger.error("Unrecognised C++ source extension: " + sourceFile.getName());
+            return new CppProcessRunner.CppResult("", "Unrecognised extension.", -1, false);
+        }
+
+        final String os = System.getProperty("os.name").toLowerCase();
+        final boolean useWsl = activeToolchain.isWsl();
+        final boolean targetIsWindows = os.contains("win") && !useWsl;
+
+        String baseName = sourceFile.getName();
+        baseName = baseName.substring(0, baseName.length() - extension.length());
+        File outputBinary = new File(sourceFile.getAbsoluteFile().getParentFile(),
+                                     baseName + (targetIsWindows ? ".exe" : ""));
+
+        String sourcePath = normalizePathForToolchain(sourceFile.getAbsolutePath(), useWsl);
+        String binaryPath = normalizePathForToolchain(outputBinary.getAbsolutePath(), useWsl);
+
+        List<String> compileCmd = new ArrayList<>();
+        compileCmd.add(activeToolchain.getExecutable());
+        if (compileFlags != null) {
+            compileCmd.addAll(compileFlags);
+        }
+        compileCmd.add(sourcePath);
+        if ("msvc".equalsIgnoreCase(activeToolchain.getName())) {
+            compileCmd.add("/Fe:" + binaryPath);
+        } else {
+            compileCmd.add("-o");
+            compileCmd.add(binaryPath);
+        }
+
+        if (listener != null) {
+            listener.onStdoutLine("[Sphere Core] Auto-compiling targeting " + outputBinary.getName());
+        }
+        CppProcessRunner.CppResult compResult =
+            processRunner.run(compileCmd, logCommand, listener, activeToolchain, true);
+        publishDiagnostics(sourceFile, compResult.getStderr());
+        if (compResult.getExitCode() != 0) {
+            return compResult;
+        }
+
+        List<String> runCmd = new ArrayList<>();
+        runCmd.add(binaryPath);
+        if (runtimeArgs != null) {
+            runCmd.addAll(runtimeArgs);
+        }
+
+        if (listener != null) {
+            listener.onStdoutLine("[Sphere Core] Launching executable output...");
+        }
+        return processRunner.run(runCmd, logCommand, listener, activeToolchain, false);
+    }
+
     private CppProcessRunner.CppResult handleStandardSourcePipeline(String cleanArgs, boolean logCommand, CppOutputListener listener) {
         ParsedCppCommand parsed = commandParser.parse(cleanArgs, activeToolchain);
         if (parsed == null) {
             return new CppProcessRunner.CppResult("", "Command parsing failed.", -1, false);
         }
 
+        // Element 0 is the compiler the parser prepended; the rest is what was typed.
         List<String> rawTokens = parsed.getCommand();
-        String probableSource = rawTokens.size() > 1 ? rawTokens.get(1) : "";
+        List<String> typed = rawTokens.subList(Math.min(1, rawTokens.size()), rawTokens.size());
 
-        if (probableSource.endsWith(".cpp") && rawTokens.size() == 2) {
-            File sourceFile = new File(probableSource);
-            if (sourceFile.exists() && sourceFile.isFile()) {
-                String binaryName = probableSource.substring(0, probableSource.lastIndexOf(".cpp"));
-                String os = System.getProperty("os.name").toLowerCase();
-                boolean useWsl = activeToolchain.isWsl();
-                boolean targetIsWindows = os.contains("win") && !useWsl;
-                String exeExtension = targetIsWindows ? ".exe" : "";
-                
-                File outputBinary = new File(sourceFile.getParentFile(), binaryName + exeExtension);
-
-                List<String> smarterCompileCmd = new ArrayList<>();
-                smarterCompileCmd.add(activeToolchain.getExecutable());
-                
-                String sourcePath = normalizePathForToolchain(sourceFile.getAbsolutePath(), useWsl);
-                String binaryPath = normalizePathForToolchain(outputBinary.getAbsolutePath(), useWsl);
-
-                smarterCompileCmd.add(sourcePath);
-                
-                if ("msvc".equalsIgnoreCase(activeToolchain.getName())) {
-                    smarterCompileCmd.add("/Fe:" + binaryPath);
-                } else {
-                    smarterCompileCmd.add("-o");
-                    smarterCompileCmd.add(binaryPath);
-                }
-
-                if (listener != null) listener.onStdoutLine("[Sphere Core] Auto-compiling targeting " + outputBinary.getName());
-                
-                // Tagged as compilation step (true)
-                CppProcessRunner.CppResult compResult = processRunner.run(smarterCompileCmd, logCommand, listener, activeToolchain, true);
-                if (compResult.getExitCode() != 0) {
-                    return compResult;
-                }
-
-                if (listener != null) listener.onStdoutLine("[Sphere Core] Launching executable output...");
-                
-                // Tagged as runtime step (false)
-                return processRunner.run(List.of(binaryPath), logCommand, listener, activeToolchain, false);
+        int sourceIndex = -1;
+        for (int i = 0; i < typed.size(); i++) {
+            if (sourceExtensionOf(typed.get(i)) != null && new File(typed.get(i)).isFile()) {
+                sourceIndex = i;
+                break;
             }
+        }
+
+        if (sourceIndex >= 0) {
+            List<String> compileFlags = new ArrayList<>(typed.subList(0, sourceIndex));
+            List<String> trailing = new ArrayList<>(typed.subList(sourceIndex + 1, typed.size()));
+            compileFlags.addAll(trailing);
+            return executeSource(typed.get(sourceIndex), compileFlags,
+                                 java.util.Collections.emptyList(), logCommand, listener);
         }
 
         // Catch-all fallback guess: If the first command array parameter matches the compiler binary path, treat it as a build step
@@ -355,6 +472,13 @@ public class CppBackend implements Backend {
         String getExecutable() {
             if (basePath == null || basePath.isEmpty()) {
                 return executableName;
+            }
+            // basePath may already be the binary itself: settings.resolvePath hands
+            // back a full path, and appending the name again produced
+            // "/usr/bin/g++/g++", which the launcher reported as "Not a directory".
+            File base = new File(basePath);
+            if (base.isFile()) {
+                return base.getPath().replace("\\", "/");
             }
             return new File(basePath, executableName).getPath().replace("\\", "/");
         }
@@ -686,27 +810,21 @@ public class CppBackend implements Backend {
 
     /**
      * Retrieves the persistent Intellisense LSP backend instance managed by this core service layer.
-     * Prevents duplicate process allocations across disparate UI views.
-     *
-     * @return The active CppIntellisenseBackend server orchestrator.
+     * Prevents duplicate process allocations across disparate UI views
      */
     public CppIntellisenseBackend getIntellisenseBackend() {
         return this.intellisenseBackend;
     }
 
     /**
-     * Exposes the underlying C++ code formatting engine instance.
-     * @return The active CppFormatterEngine subsystem handle.
+     * Exposes the underlying C++ code formatting engine instance
      */
     public CppFormatterEngine getFormatterEngine() {
         return this.formatterEngine;
     }
 
     /**
-     * Executes file formatting with full telemetry result outputs.
-     * @param file The target file path on disk.
-     * @param dryRun true to perform a validation check, false to format in-place.
-     * @return A rich FormatResult instance containing output strings and exit states.
+     * Executes file formatting with full telemetry result outputs
      */
     public com.sphere.core.cpp.CppFormatterEngine.FormatResult formatFileVerbose(java.nio.file.Path file, boolean dryRun) {
         if (this.formatterEngine == null) {

@@ -425,7 +425,20 @@ void Engine::handle_message(const BridgeMessage &msg) {
     }
   }
 
-  if (!CommandRegistry::instance().dispatch(*shm_, header)) {
+  const bool dispatched = CommandRegistry::instance().dispatch(*shm_, header);
+
+  // Both staging paths end here: the chunk above, and the one the client
+  // allocated for a payload too long for the inline slot. The handler has read
+  // whatever it needed, so neither outlives this call. Without this the heap
+  // only ever grew.
+  if (inline_staging.has_value() && *inline_staging) {
+    shm_heap_retire_chunk(*shm_, inline_staging->offset());
+  } else if (msg.type == MsgType::SHM_REF && msg.shm_ref.offset != 0 &&
+             opcode != Proto::PacketType::CMD_RELEASE_CHUNK) {
+    shm_heap_retire_chunk(*shm_, msg.shm_ref.offset);
+  }
+
+  if (!dispatched) {
     if (Proto::is_command(opcode)) {
       emit_event(Proto::PacketType::EVT_ERROR, msg);
     }
@@ -594,7 +607,11 @@ std::size_t Engine::heap_defragment_tick() {
   if (shm_ == nullptr || shm_->data_heap == nullptr) {
     return 0;
   }
-  return shm_heap_compact_logical(*shm_);
+  // Unlinking retired chunks frees list slots but not one byte of the region;
+  // only the rewind moves the bump pointer back.
+  const std::size_t reclaimed = shm_heap_compact_logical(*shm_);
+  (void)shm_heap_rewind_if_idle(*shm_);
+  return reclaimed;
 }
 
 bool Engine::replay_next_journal_entry(BridgeMessage &msg) {

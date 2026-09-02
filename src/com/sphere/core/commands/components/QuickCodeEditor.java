@@ -13,7 +13,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.sphere.components.qeditorincludes.CodeTab;
+import com.sphere.components.editor.CodeTab;
 import com.sphere.components.FindReplaceDialog;
 import com.sphere.components.fileexplorerincludes.FlatFileChooser;
 import com.sphere.components.fileexplorerincludes.FlatFileFilter;
@@ -21,6 +21,7 @@ import com.sphere.components.TextLineNumber;
 import com.sphere.fonts.FontLoader;
 import com.sphere.theme.ThemeManager;
 import com.sphere.theme.ThemePalette;
+import com.sphere.components.editor.EditorTheme;
 import com.sphere.utils.AppLogger;
 import com.sphere.utils.IconManager;
 
@@ -36,23 +37,12 @@ public class QuickCodeEditor extends JPanel {
     private EditorMode currentMode = EditorMode.PLAIN_TEXT;
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
 
-    /* Legacy fields kept for API compatibility (no longer used as core UI) */
-    private final JTextArea editorArea;
-    private final JScrollPane scrollPane;
-    private final TextLineNumber lineNumbersArea;
-    private final JSplitPane splitPane;
-    private final JEditorPane previewArea;
-    private final JScrollPane previewScrollPane;
-
-    /* Legacy undo manager (real undo is per CodeTab) */
-    private final UndoManager undoManager = new UndoManager();
+    // The former "legacy" editor, preview pane and undo manager lived here and
+    // were built for every instance without ever being added to the layout.
+    // Editing state belongs to CodeTab, one per tab.
 
     // Transformed to follow strict Open-only isolation scope architecture
     private FlatFileChooser openFileChooser;
-
-    /* Legacy state kept for compatibility (real state is per CodeTab) */
-    private boolean isModified = false;
-    private boolean isLoading = false;
 
     /* UI optional items */
     private JLabel statusBar;
@@ -72,35 +62,9 @@ public class QuickCodeEditor extends JPanel {
         
         setLayout(new BorderLayout());
 
-        /* Legacy editor components (not used as main UI anymore, kept for API compatibility) */
-        editorArea = new JTextArea();
-        editorArea.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
-        editorArea.setTabSize(4);
-        editorArea.setLineWrap(false);
-        editorArea.getDocument().addUndoableEditListener(e -> undoManager.addEdit(e.getEdit()));
+        setBackground(EditorTheme.background());
 
-        scrollPane = new JScrollPane(editorArea);
-        lineNumbersArea = new TextLineNumber(editorArea);
-        scrollPane.setRowHeaderView(lineNumbersArea);
-
-        previewArea = new JEditorPane();
-        previewArea.setEditable(false);
-        previewArea.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
-        previewArea.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
-        HTMLEditorKit htmlKit = new HTMLEditorKit();
-        previewArea.setEditorKit(htmlKit);
-        previewArea.setContentType("text/html");
-        previewScrollPane = new JScrollPane(
-                previewArea,
-                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
-        );
-
-        splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, scrollPane, previewScrollPane);
-        splitPane.setResizeWeight(0.7);
-        splitPane.setContinuousLayout(true);
-
-        /* New main UI: tabbed pane with CodeTab instances */
+        /* Main UI: tabbed pane with CodeTab instances */
         tabbedPane = new JTabbedPane();
         styleTabbedPaneVSCode(tabbedPane);
 
@@ -195,6 +159,36 @@ public class QuickCodeEditor extends JPanel {
         tabs.setBackground(palette.getBackgroundSurface());
         tabs.setForeground(palette.getTextPrimary());
         tabs.setBorder(BorderFactory.createEmptyBorder());
+    }
+
+    /**
+     * Pushes findings onto the tab showing that file, so a compilation underlines
+     * its errors in the source rather than only listing them in the console.
+     */
+    public void showDiagnostics(File file, java.util.List<com.sphere.components.editor.EditorDiagnostic> diagnostics) {
+        if (file == null) {
+            return;
+        }
+        CodeTab target = findTabForFile(file);
+        if (target != null) {
+            target.setDiagnostics(diagnostics);
+        }
+    }
+
+    /** The tab holding that file, or null when it is not open. */
+    public CodeTab findTabForFile(File file) {
+        if (file == null) {
+            return null;
+        }
+        String wanted = file.getAbsolutePath();
+        for (int i = 0; i < tabbedPane.getTabCount(); i++) {
+            Component c = tabbedPane.getComponentAt(i);
+            if (c instanceof CodeTab tab && tab.getFile() != null
+                    && tab.getFile().getAbsolutePath().equals(wanted)) {
+                return tab;
+            }
+        }
+        return null;
     }
 
     /* Returns the active CodeTab, or null if none. */
@@ -297,12 +291,17 @@ public class QuickCodeEditor extends JPanel {
         CodeTab tab = getActiveTab();
         if (tab == null || statusBar == null) return;
 
-        JTextArea area = tab.getEditorArea();
+        com.sphere.components.editor.CodeTextPane area = tab.getEditorArea();
         try {
+            // A styled document has no getLineOfOffset, so the root element gives
+            // the line and its start offset gives the column.
             int caretPos = area.getCaretPosition();
-            int line = area.getLineOfOffset(caretPos);
-            int column = caretPos - area.getLineStartOffset(line);
-            statusBar.setText(" Line: " + (line + 1) + " | Column: " + (column + 1));
+            javax.swing.text.Element root = area.getDocument().getDefaultRootElement();
+            int line = root.getElementIndex(caretPos);
+            int column = caretPos - root.getElement(line).getStartOffset();
+            String language = tab.getLanguage().name;
+            statusBar.setText(" Line: " + (line + 1) + " | Column: " + (column + 1)
+                              + "   •   " + language);
         } catch (Exception ignored) {
             statusBar.setText(" Line: 1 | Column: 1");
         }
@@ -374,27 +373,6 @@ public class QuickCodeEditor extends JPanel {
     }
 
     /* Auto-indents the current line in the active tab. */
-    private void autoIndent() {
-        CodeTab tab = getActiveTab();
-        if (tab == null) return;
-        JTextArea area = tab.getEditorArea();
-        try {
-            int caret = area.getCaretPosition();
-            int line = area.getLineOfOffset(caret);
-            if (line <= 0) return;
-            int start = area.getLineStartOffset(line - 1);
-            int end = area.getLineEndOffset(line - 1);
-
-            String previousLine = area.getText(start, end - start);
-            StringBuilder indent = new StringBuilder();
-            for (char c : previousLine.toCharArray()) {
-                if (c == ' ' || c == '\t') indent.append(c);
-                else break;
-            }
-
-            area.insert(indent.toString(), caret);
-        } catch (Exception ignored) {}
-    }
 
     /* Sets the code of the active tab. */
     public void setCode(String code) {
@@ -412,9 +390,9 @@ public class QuickCodeEditor extends JPanel {
     }
 
     /* Returns the editor area of the active tab (for compatibility). */
-    public JTextArea getEditorArea() {
+    public javax.swing.text.JTextComponent getEditorArea() {
         CodeTab tab = getActiveTab();
-        return (tab != null) ? tab.getEditorArea() : editorArea;
+        return (tab != null) ? tab.getEditorArea() : null;
     }
 
     /**
@@ -749,7 +727,7 @@ public class QuickCodeEditor extends JPanel {
         CodeTab tab = getActiveTab();
         if (tab == null) return;
 
-        JTextArea area = tab.getEditorArea();
+        com.sphere.components.editor.CodeTextPane area = tab.getEditorArea();
         int index = area.getText().indexOf(text, area.getCaretPosition());
         if (index >= 0) {
             area.setCaretPosition(index);

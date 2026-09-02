@@ -49,7 +49,7 @@ public class WindowManager {
             if (editorFrame != null) {
                 // Look up the exact text key inside settings.conf (e.g., "PYTHON_EXEC")
                 String searchKey = backend.getConfigKey();
-                javax.swing.JTextArea area = editorFrame.getEditor().getEditorArea();
+                javax.swing.text.JTextComponent area = editorFrame.getEditor().getEditorArea();
                 
                 int index = area.getText().indexOf(searchKey);
                 if (index >= 0) {

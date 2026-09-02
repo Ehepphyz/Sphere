@@ -14,8 +14,7 @@ public class QuickCodeEditorFrame extends JFrame {
     private final QuickCodeEditor editor;
 
     /**
-     * Constructs a standalone code editor window wrapping a high-performance editor instance.
-     * @param targetFile The initial file resource asset to parse into the workspace editor viewport.
+     * Constructs a standalone code editor window wrapping a high-performance editor instance
      */
     public QuickCodeEditorFrame(File targetFile) {
         setTitle("Sphere Editor - " + (targetFile != null ? targetFile.getName() : "Untitled"));
@@ -37,9 +36,7 @@ public class QuickCodeEditorFrame extends JFrame {
 
     /**
      * Reuses the existing editor instance to load a new file internally,
-     * avoiding window duplication and updating the frame title dynamically.
-     * If the requested file is already open, focus is shifted straight to the editor window.
-     * @param file The target file to load into the workspace editor.
+     * avoiding window duplication and updating the frame title dynamically
      */
     public void openFileInternally(File file) {
         if (file == null || !file.exists()) {
@@ -69,8 +66,7 @@ public class QuickCodeEditorFrame extends JFrame {
     }
 
     /**
-     * Accesses the underlying editor panel instance.
-     * @return The active QuickCodeEditor component.
+     * Accesses the underlying editor panel instance
      */
     public QuickCodeEditor getEditor() {
         return editor;

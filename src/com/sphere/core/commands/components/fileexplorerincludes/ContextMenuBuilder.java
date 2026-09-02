@@ -394,20 +394,23 @@ public class ContextMenuBuilder {
     }
 
     private static void copyDirectoryRecursive(Path src, Path dest) throws IOException {
-        Files.walk(src).forEach(path -> {
-            try {
-                Path relative = src.relativize(path);
-                Path target = dest.resolve(relative);
+        // Files.walk holds a directory handle open per level until closed.
+        try (java.util.stream.Stream<Path> tree = Files.walk(src)) {
+            tree.forEach(path -> {
+                try {
+                    Path relative = src.relativize(path);
+                    Path target = dest.resolve(relative);
 
-                if (Files.isDirectory(path)) {
-                    Files.createDirectories(target);
-                } else {
-                    Files.copy(path, target, StandardCopyOption.REPLACE_EXISTING);
+                    if (Files.isDirectory(path)) {
+                        Files.createDirectories(target);
+                    } else {
+                        Files.copy(path, target, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
                 }
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        });
+            });
+        }
     }
 
     /* -------------------------------------------------------------

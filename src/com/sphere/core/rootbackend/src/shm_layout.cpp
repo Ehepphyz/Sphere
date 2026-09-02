@@ -440,6 +440,15 @@ std::uint64_t shm_heap_alloc(ShmLayout &layout, std::size_t size,
     return 0;
   }
 
+  // A size close to SIZE_MAX would wrap in the align_up below and slip past the
+  // capacity check as a small number. payload_size is a uint32 besides.
+  if (size > 0xFFFFFFFFULL) {
+    layout.header->last_error_code.store(
+        static_cast<std::uint32_t>(EngineError::OOM_HEAP),
+        std::memory_order_relaxed);
+    return 0;
+  }
+
   auto *heap_hdr = get_heap_header(layout);
   auto *heap_root = get_heap_root(layout);
 
@@ -1092,7 +1101,13 @@ shm_get_min_active_reader_epoch(const ShmLayout &layout) noexcept {
 
   const std::uint64_t current =
       get_heap_header(layout)->epoch.load(std::memory_order_acquire);
-  std::uint64_t min_epoch = current;
+
+  // Callers reclaim a chunk when its epoch is strictly older than this
+  // watermark. With no reader pinned nothing can still be looking at the
+  // current epoch, so the watermark sits one past it; returning `current`
+  // instead made the test `chunk->epoch < safe_epoch` unsatisfiable and no
+  // chunk was ever reclaimed.
+  std::uint64_t min_epoch = current + 1;
 
   for (std::size_t i = 0; i < MAX_RUNTIMES; ++i) {
     const std::uint64_t pinned =
@@ -1444,6 +1459,58 @@ std::size_t shm_heap_compact_logical(ShmLayout &layout) noexcept {
   }
 
   return reclaimed;
+}
+
+std::uint64_t shm_heap_rewind_if_idle(ShmLayout &layout) noexcept {
+  if (layout.base == nullptr || layout.data_heap == nullptr) {
+    return 0;
+  }
+
+  auto *heap_hdr = get_heap_header(layout);
+  auto *heap_root = get_heap_root(layout);
+
+  // Only when the heap holds nothing at all. Every live chunk may be the target
+  // of an offset a client is still holding, and unlike shm_heap_defragment this
+  // never moves one, so no client can be left pointing at relocated bytes.
+  if (heap_hdr->active_allocations.load(std::memory_order_acquire) != 0 ||
+      heap_root->off_first_chunk.load(std::memory_order_acquire) != 0 ||
+      shm_has_active_readers(layout)) {
+    return 0;
+  }
+
+  const std::uint64_t released =
+      heap_hdr->allocated_bytes.exchange(0, std::memory_order_acq_rel);
+  if (released == 0) {
+    return 0;
+  }
+
+  heap_hdr->reclaimable_bytes.store(0, std::memory_order_release);
+  heap_root->n_chunks.store(0, std::memory_order_release);
+  heap_root->off_last_chunk.store(0, std::memory_order_release);
+  heap_root->off_prefetch_head.store(0, std::memory_order_release);
+  heap_root->off_last_lvl2.store(0, std::memory_order_release);
+  heap_root->off_last_lvl4.store(0, std::memory_order_release);
+  heap_root->off_last_lvl8.store(0, std::memory_order_release);
+
+  for (std::size_t i = 0; i < KIND_BUCKETS; ++i) {
+    heap_root->off_first_by_kind[i].store(0, std::memory_order_release);
+    heap_root->off_last_by_kind[i].store(0, std::memory_order_release);
+    heap_root->off_prefetch_head_by_kind[i].store(0, std::memory_order_release);
+  }
+  for (std::size_t i = 0; i < PRODUCER_BUCKETS; ++i) {
+    heap_root->off_first_by_producer[i].store(0, std::memory_order_release);
+    heap_root->off_last_by_producer[i].store(0, std::memory_order_release);
+    heap_root->off_prefetch_head_by_producer[i].store(0,
+                                                      std::memory_order_release);
+  }
+
+  if (auto *stats = shm_engine_stats(layout); stats != nullptr) {
+    stats->heap_usage_bytes.store(0, std::memory_order_relaxed);
+    stats->heap_fragmentation_score.store(0, std::memory_order_relaxed);
+  }
+  layout.header->heap_fragmentation_score.store(0, std::memory_order_relaxed);
+
+  return released;
 }
 
 void shm_heap_defragment(ShmLayout &layout) noexcept {

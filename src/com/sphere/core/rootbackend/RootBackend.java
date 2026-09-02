@@ -181,6 +181,9 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final short CMD_SYS_UPTIME      = 12;
     public static final short CMD_SYS_CONFIG      = 13;
     public static final short CMD_CLING_EXEC      = 14;
+    // Hands a heap chunk back to the engine. The offset travels in jobId, so
+    // releasing never allocates a chunk of its own.
+    public static final short CMD_RELEASE_CHUNK   = 15;
     public static final short CMD_FILE_SCAN       = 27;
     public static final short CMD_FILE_LIST       = 28;
 
@@ -1029,8 +1032,14 @@ public final class RootBackend implements AutoCloseable, Backend {
         }
     }
 
+    // Backing off on elapsed quiet time rather than on a spin count: a counter
+    // reset by every event kept the pump spinning on a core forever under a
+    // steady trickle of telemetry, never reaching the sleeping band.
+    private static final long PUMP_SPIN_NANOS  = 200_000L;   // 200 us
+    private static final long PUMP_YIELD_NANOS = 2_000_000L; // 2 ms
+
     private static void pumpLoop() {
-        int idle = 0;
+        long lastEventNanos = System.nanoTime();
         while (pumping) {
             final RootBackend owner = pumpOwner;
             if (owner == null || owner.eventRingSegment == null) {
@@ -1039,10 +1048,10 @@ public final class RootBackend implements AutoCloseable, Backend {
             BridgeEvent event = pollEventMessage(owner.eventRingSegment,
                                                  owner.evtRingCapacityPow2);
             if (event == null) {
-                idle++;
-                if (idle < 1_000) {
+                final long quiet = System.nanoTime() - lastEventNanos;
+                if (quiet < PUMP_SPIN_NANOS) {
                     Thread.onSpinWait();
-                } else if (idle < 10_000) {
+                } else if (quiet < PUMP_YIELD_NANOS) {
                     Thread.yield();
                 } else {
                     try {
@@ -1054,7 +1063,7 @@ public final class RootBackend implements AutoCloseable, Backend {
                 }
                 continue;
             }
-            idle = 0;
+            lastEventNanos = System.nanoTime();
             route(owner, event);
         }
     }
@@ -1078,12 +1087,19 @@ public final class RootBackend implements AutoCloseable, Backend {
                     shmBaseSegment.asSlice(event.shmOffset(), event.shmBytes()));
             } catch (Exception ex) {
                 AppLogger.warn("Canvas renderer refused a payload: " + ex.getMessage());
+            } finally {
+                owner.releaseReferencedChunk(event.shmOffset());
             }
             return;
         }
 
         if (!unmatchedEvents.offer(event)) {
-            unmatchedEvents.poll();
+            // The queue is full and the oldest event is dropped: release its
+            // chunk here, because nobody will ever read it.
+            BridgeEvent dropped = unmatchedEvents.poll();
+            if (dropped != null && dropped.isShmRef()) {
+                owner.releaseReferencedChunk(dropped.shmOffset());
+            }
             unmatchedEvents.offer(event);
         }
     }
@@ -1121,7 +1137,34 @@ public final class RootBackend implements AutoCloseable, Backend {
         }
         byte[] out = new byte[(int) Math.min(length, Integer.MAX_VALUE)];
         MemorySegment.copy(shmBaseSegment, ValueLayout.JAVA_BYTE, regionOffset, out, 0, out.length);
+        // The bytes are ours now, so the chunk can go back. Nothing else frees a
+        // reply chunk, and the engine's heap only rewinds once none are left.
+        releaseReferencedChunk(regionOffset);
         return out;
+    }
+
+    /**
+     * Returns one reply chunk to the engine's heap. Idempotent on the C++ side,
+     * so releasing an offset twice, or one that was never handed out, is safe.
+     */
+    public boolean releaseReferencedChunk(long regionOffset) {
+        if (!isAvailable || commandRingSegment == null || regionOffset <= 0
+            || regionOffset > 0xFFFFFFFFL) {
+            return false;
+        }
+        return pushCommandMessage(commandRingSegment, cmdRingCapacityPow2,
+                                  CMD_RELEASE_CHUNK, (int) regionOffset,
+                                  nextReqId.incrementAndGet(), null);
+    }
+
+    /**
+     * Mints the next request id. Every producer that writes into this region's
+     * command ring must draw from here: the pump routes replies by request id
+     * through one table, so two counters would let one caller receive another's
+     * answer.
+     */
+    public static int nextRequestId() {
+        return nextReqId.incrementAndGet();
     }
 
     public MemorySegment commandRingSegment() { return commandRingSegment; }

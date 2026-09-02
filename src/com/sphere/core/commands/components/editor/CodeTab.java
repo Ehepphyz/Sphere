@@ -1,4 +1,4 @@
-package com.sphere.components.qeditorincludes;
+package com.sphere.components.editor;
 
 import javax.swing.*;
 import javax.swing.text.html.HTMLDocument;
@@ -9,19 +9,18 @@ import javax.swing.event.UndoableEditListener;
 import javax.swing.event.DocumentListener;
 import javax.swing.event.DocumentEvent;
 import java.awt.*;
-import java.awt.event.ActionEvent;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+import java.util.List;
 
-import com.sphere.components.TextLineNumber;
 import com.sphere.utils.AppLogger;
 import com.sphere.fonts.FontLoader;
 
 /**
- * Encapsulates an individual editor tab, including the text area,
- * preview pane, undo management, line numbers, scroll sync, and file state.
+ * One editor tab: a styled code surface with syntax colouring, a gutter carrying
+ * breakpoints and diagnostics, completion, and the markdown or LaTeX preview.
  */
 public class CodeTab extends JPanel {
 
@@ -29,9 +28,9 @@ public class CodeTab extends JPanel {
 
     private EditorMode currentMode = EditorMode.PLAIN_TEXT;
 
-    private final JTextArea editorArea;
+    private final CodeTextPane editorArea;
     private final JScrollPane editorScrollPane;
-    private final TextLineNumber lineNumbers;
+    private final EditorGutter gutter;
     private final JSplitPane splitPane;
     private final JEditorPane previewArea;
     private final JScrollPane previewScrollPane;
@@ -39,72 +38,87 @@ public class CodeTab extends JPanel {
     private final UndoManager undoManager = new UndoManager();
     private final UndoableEditListener undoListener;
 
+    private final BreakpointModel breakpoints = new BreakpointModel();
+    private final SyntaxHighlighter highlighter;
+    private final AutoIndenter indenter;
+    private final CompletionPopup completion;
+
+    private LanguageSpec language = LanguageSpec.NONE;
+    private Charset charset = StandardCharsets.UTF_8;
+
     private File currentFile;
     private boolean isModified = false;
     private boolean isLoading = false;
     private boolean syncScroll = true;
 
-    // Anti-lag debouncer
     private final Timer previewDebounceTimer;
 
     public CodeTab(File file) {
         this.currentFile = file;
         setLayout(new BorderLayout());
-        setBackground(new Color(30, 30, 30));
+        setBackground(EditorTheme.background());
 
-        /* --- 1. Edit Handler --- */
-        editorArea = new JTextArea();
-        editorArea.setFont(FontLoader.getTerminalFont(Font.PLAIN, 12));
-        editorArea.setTabSize(4);
-        editorArea.setLineWrap(false);
-        
-        // DYNAMIC ALIGNMENT: Zero out initial text margins to match plain text layouts perfectly
-        editorArea.setMargin(new Insets(0, 0, 0, 0));
+        /* --- 1. Code surface --- */
+        editorArea = new CodeTextPane();
+        editorArea.setFont(FontLoader.getTerminalFont(Font.PLAIN, 13));
+        editorArea.setTabWidth(4);
+        ToolTipManager.sharedInstance().registerComponent(editorArea);
 
-        /* --- 2. Undo/Redo Handler --- */
+        /* --- 2. Undo/Redo --- */
         undoListener = e -> undoManager.addEdit(e.getEdit());
         editorArea.getDocument().addUndoableEditListener(undoListener);
 
-        /* --- 3. Auto-Indent with KeyBindings --- */
-        setupAutoIndentAction();
+        /* --- 3. Language services --- */
+        highlighter = new SyntaxHighlighter(editorArea, language);
+        indenter = new AutoIndenter(editorArea, language, 4);
+        completion = new CompletionPopup(editorArea, new CompletionProvider.Buffer(language));
+        new BracketMatcher(editorArea);
 
-        /* --- 4. Preview Timer Debounce (300 ms) --- */
+        /* --- 4. Preview debounce --- */
         previewDebounceTimer = new Timer(300, e -> updatePreview());
         previewDebounceTimer.setRepeats(false);
 
-        /* --- 5. Modifications --- */
+        /* --- 5. Modification tracking --- */
         editorArea.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e) { triggerModification(); }
             public void removeUpdate(DocumentEvent e) { triggerModification(); }
-            public void changedUpdate(DocumentEvent e) { triggerModification(); }
+            public void changedUpdate(DocumentEvent e) { /* attribute-only */ }
         });
 
-        /* --- 6. ScrollPanes & Graph Components --- */
+        /* --- 6. Scroll panes and gutter --- */
         editorScrollPane = new JScrollPane(editorArea);
-        editorScrollPane.getViewport().setBackground(new Color(30, 30, 30));
+        editorScrollPane.getViewport().setBackground(EditorTheme.background());
         editorScrollPane.setBorder(BorderFactory.createEmptyBorder());
+        editorScrollPane.getVerticalScrollBar().setUnitIncrement(16);
 
-        lineNumbers = new TextLineNumber(editorArea);
-        lineNumbers.setForeground(new Color(120, 120, 120));
-        lineNumbers.setBackground(new Color(45, 45, 45));
-        editorScrollPane.setRowHeaderView(lineNumbers);
+        gutter = new EditorGutter(editorArea, breakpoints);
+        editorScrollPane.setRowHeaderView(gutter);
+
+        // Blit scrolling copies pixels instead of repainting them, so anything left
+        // in the row header from an earlier layout survived there. Both viewports
+        // repaint in full, which costs nothing at this size and leaves no residue.
+        editorScrollPane.getViewport().setScrollMode(JViewport.SIMPLE_SCROLL_MODE);
+        if (editorScrollPane.getRowHeader() != null) {
+            editorScrollPane.getRowHeader().setScrollMode(JViewport.SIMPLE_SCROLL_MODE);
+            editorScrollPane.getRowHeader().setOpaque(true);
+            editorScrollPane.getRowHeader().setBackground(EditorTheme.gutterBackground());
+        }
 
         previewArea = new JEditorPane();
         previewArea.setEditable(false);
-        
-        // ENHANCED LOOK AND FEEL DETACHMENT: Build an isolated stylesheet to control padding at pixel 0
         HTMLEditorKit htmlKit = new HTMLEditorKit();
         StyleSheet customStyle = new StyleSheet();
-        customStyle.addRule("body { margin: 0px; padding: 0px; background-color: #303030; }");
+        customStyle.addRule("body { margin: 0px; padding: 8px; background-color: "
+                            + hex(EditorTheme.background()) + "; color: "
+                            + hex(EditorTheme.foreground()) + "; }");
         customStyle.addRule("p, div, h1, h2 { margin: 0px; padding: 0px; }");
         htmlKit.setStyleSheet(customStyle);
-        
+
         previewArea.setEditorKit(htmlKit);
         previewArea.setContentType("text/html");
         previewArea.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
         previewArea.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
         previewArea.setBorder(BorderFactory.createEmptyBorder());
-        previewArea.setMargin(new Insets(0, 0, 0, 0));
 
         previewScrollPane = new JScrollPane(previewArea);
         previewScrollPane.setBorder(BorderFactory.createEmptyBorder());
@@ -118,13 +132,15 @@ public class CodeTab extends JPanel {
 
         add(splitPane, BorderLayout.CENTER);
 
-        /* --- 7. Scroll Sync --- */
         setupScrollSynchronization();
 
-        /* --- 8. Init Load --- */
         if (file != null) {
             loadFile(file);
         }
+    }
+
+    private static String hex(Color c) {
+        return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
     }
 
     private void triggerModification() {
@@ -134,25 +150,6 @@ public class CodeTab extends JPanel {
                 previewDebounceTimer.restart();
             }
         }
-    }
-
-    private void setupAutoIndentAction() {
-        InputMap inputMap = editorArea.getInputMap(JComponent.WHEN_FOCUSED);
-        ActionMap actionMap = editorArea.getActionMap();
-        
-        Object enterKeyStroke = inputMap.get(KeyStroke.getKeyStroke("ENTER"));
-        final Action defaultEnterAction = actionMap.get(enterKeyStroke);
-
-        actionMap.put(enterKeyStroke, new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                // First execute the standard line break action
-                if (defaultEnterAction != null) {
-                    defaultEnterAction.actionPerformed(e);
-                }
-                autoIndent();
-            }
-        });
     }
 
     private void setupScrollSynchronization() {
@@ -171,27 +168,6 @@ public class CodeTab extends JPanel {
         });
     }
 
-    private void autoIndent() {
-        try {
-            int pos = editorArea.getCaretPosition();
-            int line = editorArea.getLineOfOffset(pos);
-            if (line > 0) {
-                int start = editorArea.getLineStartOffset(line - 1);
-                int end = editorArea.getLineEndOffset(line - 1);
-                String prev = editorArea.getText(start, end - start);
-
-                StringBuilder indent = new StringBuilder();
-                for (char c : prev.toCharArray()) {
-                    if (c == ' ' || c == '\t') indent.append(c);
-                    else break;
-                }
-                if (indent.length() > 0) {
-                    editorArea.insert(indent.toString(), pos);
-                }
-            }
-        } catch (Exception ignored) {}
-    }
-
     private void updatePreview() {
         if (currentMode == EditorMode.PLAIN_TEXT) return;
 
@@ -201,19 +177,15 @@ public class CodeTab extends JPanel {
         if (currentMode == EditorMode.MARKDOWN) {
             renderedHtml = MarkdownRenderer.render(text);
         } else if (currentMode == EditorMode.LATEX) {
-            renderedHtml = "<html><body style='background-color:#1e1e1e;color:#d4d4d4;margin:0;padding:0;'>" +
-                    "<h1>LaTeX Mode</h1><p>" +
-                    text.replace("\n", "<br>") +
-                    "</p></body></html>";
+            renderedHtml = "<html><body style='background-color:" + hex(EditorTheme.background())
+                    + ";color:" + hex(EditorTheme.foreground()) + ";margin:0;padding:8px;'>"
+                    + "<h1>LaTeX Mode</h1><p>" + text.replace("\n", "<br>") + "</p></body></html>";
         } else {
             return;
         }
 
-        // UI safe update
         SwingUtilities.invokeLater(() -> {
-            // FORCE RENDERING LAYOUT: Bypasses native asynchronous paragraph injections
             previewArea.putClientProperty("AsynchronousLoadPriority", Integer.valueOf(-1));
-            
             HTMLDocument doc = (HTMLDocument) previewArea.getEditorKit().createDefaultDocument();
             previewArea.setDocument(doc);
             previewArea.setText(renderedHtml);
@@ -224,23 +196,86 @@ public class CodeTab extends JPanel {
     public void setEditorMode(EditorMode mode) {
         this.currentMode = mode;
         boolean showPreview = (mode != EditorMode.PLAIN_TEXT);
-        
+
         previewScrollPane.setVisible(showPreview);
         splitPane.setDividerSize(showPreview ? 5 : 0);
 
-        // BALANCING ADJUSTMENT: Safely pad down text area to force alignment match with hidden LookAndFeel headers
         if (showPreview) {
-            editorArea.setMargin(new Insets(10, 0, 0, 0));
             SwingUtilities.invokeLater(() -> {
                 splitPane.setDividerLocation(0.7);
                 updatePreview();
             });
-        } else {
-            editorArea.setMargin(new Insets(0, 0, 0, 0));
         }
         revalidate();
         repaint();
     }
+
+    // ---- Language ----------------------------------------------------------
+
+    /** Chooses the language from the file name and rewires the services to it. */
+    private void applyLanguage(File file) {
+        language = LanguageSpec.forFile(file);
+        highlighter.setLanguage(language);
+        indenter.setLanguage(language);
+        completion.setProvider(new CompletionProvider.Buffer(language));
+    }
+
+    public LanguageSpec getLanguage() {
+        return language;
+    }
+
+    /** Rebuilds colours after a theme switch. */
+    public void refreshTheme() {
+        setBackground(EditorTheme.background());
+        editorArea.applyTheme();
+        gutter.applyTheme();
+        editorScrollPane.getViewport().setBackground(EditorTheme.background());
+        highlighter.refreshTheme();
+        repaint();
+    }
+
+    // ---- Diagnostics and debugging ----------------------------------------
+
+    public void setDiagnostics(List<EditorDiagnostic> diagnostics) {
+        editorArea.setDiagnostics(diagnostics);
+        gutter.setDiagnostics(diagnostics);
+    }
+
+    public void clearDiagnostics() {
+        setDiagnostics(List.of());
+    }
+
+    public BreakpointModel getBreakpoints() {
+        return breakpoints;
+    }
+
+    /** Marks the line a debug session is stopped on, or -1 to clear it. */
+    public void setExecutionLine(int line) {
+        editorArea.setExecutionLine(line);
+        gutter.setExecutionLine(line);
+        if (line > 0) {
+            scrollToLine(line);
+        }
+    }
+
+    public void scrollToLine(int line) {
+        try {
+            javax.swing.text.Element root = editorArea.getDocument().getDefaultRootElement();
+            if (line < 1 || line > root.getElementCount()) {
+                return;
+            }
+            int offset = root.getElement(line - 1).getStartOffset();
+            editorArea.setCaretPosition(offset);
+            java.awt.geom.Rectangle2D r = editorArea.modelToView2D(offset);
+            if (r != null) {
+                editorArea.scrollRectToVisible(r.getBounds());
+            }
+        } catch (Exception ignored) {
+            // the buffer changed under the requested line
+        }
+    }
+
+    // ---- File --------------------------------------------------------------
 
     private void loadFile(File file) {
         isLoading = true;
@@ -248,16 +283,25 @@ public class CodeTab extends JPanel {
         try {
             editorArea.getDocument().removeUndoableEditListener(undoListener);
 
-            // UTF_8 Reader
-            String content = Files.readString(file.toPath(), StandardCharsets.UTF_8);
-            editorArea.setText(content);
+            EditorFileIO.Loaded loaded = EditorFileIO.read(file);
+            charset = loaded.charset;
+            editorArea.setText(loaded.text);
             editorArea.setCaretPosition(0);
+            editorArea.setTabWidth(4);
+
+            if (loaded.fellBack) {
+                AppLogger.warn("Not valid UTF-8, opened as ISO-8859-1: " + file.getName());
+            }
 
             undoManager.discardAllEdits();
             isModified = false;
+            applyLanguage(file);
             autoDetectModeFromFile();
+            highlighter.rehighlightAll();
             updatePreview();
 
+        } catch (EditorFileIO.TooLargeException tooBig) {
+            AppLogger.error(tooBig.getMessage());
         } catch (IOException e) {
             AppLogger.error("Failed to load file: " + e.getMessage());
         } finally {
@@ -269,7 +313,7 @@ public class CodeTab extends JPanel {
     public void saveFile() {
         if (currentFile == null) return;
         try {
-            Files.writeString(currentFile.toPath(), editorArea.getText(), StandardCharsets.UTF_8);
+            EditorFileIO.write(currentFile, editorArea.getText(), charset);
             isModified = false;
         } catch (IOException e) {
             AppLogger.error("Failed to save: " + e.getMessage());
@@ -294,7 +338,7 @@ public class CodeTab extends JPanel {
     }
 
     public void setLineNumbersVisible(boolean visible) {
-        editorScrollPane.setRowHeaderView(visible ? lineNumbers : null);
+        editorScrollPane.setRowHeaderView(visible ? gutter : null);
         editorScrollPane.revalidate();
         editorScrollPane.repaint();
     }
@@ -302,10 +346,10 @@ public class CodeTab extends JPanel {
     // Getters & Setters
     public boolean isModified() { return isModified; }
     public File getFile() { return currentFile; }
-    public void setFile(File file) { this.currentFile = file; autoDetectModeFromFile(); }
+    public void setFile(File file) { this.currentFile = file; applyLanguage(file); autoDetectModeFromFile(); }
     public EditorMode getCurrentMode() { return currentMode; }
     public void setSyncScroll(boolean enabled) { this.syncScroll = enabled; }
     public UndoManager getUndoManager() { return undoManager; }
-    public JTextArea getEditorArea() { return editorArea; }
+    public CodeTextPane getEditorArea() { return editorArea; }
     public void loadFileFromExternal(File file) { this.currentFile = file; loadFile(file); }
 }

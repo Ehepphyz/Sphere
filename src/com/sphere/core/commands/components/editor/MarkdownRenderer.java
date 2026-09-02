@@ -1,4 +1,4 @@
-package com.sphere.components.qeditorincludes;
+package com.sphere.components.editor;
 
 /**
  * Enhanced Markdown-to-HTML renderer optimized for modern WebKit (WebView) and Swing components.

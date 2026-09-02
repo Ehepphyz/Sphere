@@ -552,6 +552,15 @@ void shm_heap_set_snapshot_producer(ShmLayout &layout,
 void shm_heap_retire_chunk(ShmLayout &layout,
                            std::uint64_t payload_offset) noexcept;
 std::size_t shm_heap_compact_logical(ShmLayout &layout) noexcept;
+
+/**
+ * Returns the bump pointer to the start of the heap, but only while the heap
+ * holds no chunk at all and no reader is pinned. Never moves live data, so an
+ * offset already handed to a client stays valid until that client releases it.
+ * Returns the number of bytes handed back.
+ */
+std::uint64_t shm_heap_rewind_if_idle(ShmLayout &layout) noexcept;
+
 void shm_heap_defragment(ShmLayout &layout) noexcept;
 void shm_heap_update_prefetch(ShmLayout &layout, std::uint16_t kind) noexcept;
 void shm_relocate_chunk(ShmLayout &layout, std::uint64_t old_off,

@@ -173,12 +173,17 @@ public class CommandRouter {
         return t.matches("[^\\s]+\\.[A-Za-z0-9]{1,8}");
     }
 
-    private static boolean isFlag(String t) {
-        return t.startsWith("--") || (t.startsWith("-") && !t.matches("-?\\d+(\\.\\d+)?"));
+    // An option carries its value ("--seuil=3"), a flag is a bare switch ("-v").
+    // The two used to be swapped: "--seuil=3" landed in the flag list and a bare
+    // "seuil=3" in the option list.
+    private static boolean isOption(String t) {
+        return t != null && t.startsWith("-") && t.indexOf('=') > 0;
     }
 
-    private static boolean isOption(String t) {
-        return t.contains("=") && !t.startsWith("--");
+    private static boolean isFlag(String t) {
+        if (t == null || !t.startsWith("-")) return false;
+        if (isOption(t)) return false;
+        return !t.matches("-?\\d+(\\.\\d+)?"); // a negative number is a value
     }
 
     private static List<String> extractSnippetBlocks(String input) {
@@ -197,7 +202,37 @@ public class CommandRouter {
         return SNIPPET_PATTERN.matcher(input).replaceAll("").trim();
     }
 
+    /**
+     * Splits a line at the [@ ... ] block. What precedes it configures the
+     * interpreter or the compiler, what follows it belongs to the snippet, so
+     * both writings below mean the same thing:
+     *   ::py -v [@ a.py -x --seuil=2]
+     *   ::py -v [@ a.py] -x --seuil=2
+     * Deleting the block instead of cutting at it erased that position, and
+     * everything landed on the interpreter.
+     * Returns { before, after }.
+     */
+    private static String[] splitAtSnippet(String input) {
+        if (input == null) {
+            return new String[] { "", "" };
+        }
+        Matcher m = SNIPPET_PATTERN.matcher(input);
+        if (!m.find()) {
+            return new String[] { input.trim(), "" };
+        }
+        String before = input.substring(0, m.start()).trim();
+        String after = SNIPPET_PATTERN.matcher(input.substring(m.end()))
+                                      .replaceAll("").trim();
+        return new String[] { before, after };
+    }
+
     private static ParsedCommand parseCommandString(String rootPart, List<String> snippetBlocks) {
+        return parseCommandString(rootPart, snippetBlocks, "");
+    }
+
+    private static ParsedCommand parseCommandString(String rootPart,
+                                                    List<String> snippetBlocks,
+                                                    String trailingPart) {
         ParsedCommand pc = new ParsedCommand();
         Tokenizer tokenizer = Tokenizer.DEFAULT;
 
@@ -215,16 +250,24 @@ public class CommandRouter {
                     pc.languageOrApp = first.substring(1);
                 }
 
+                // When a [@ ... ] block is present it carries the script, so a
+                // path-looking token out here is an ordinary argument. Claiming it
+                // as pc.filepath put it ahead of everything on the command line
+                // and the interpreter ran it instead of the snippet.
+                final boolean snippetCarriesScript =
+                        snippetBlocks != null && !snippetBlocks.isEmpty();
+
                 // Route arguments and classify flags, options, and file paths
                 for (int i = 1; i < rootTokens.size(); i++) {
                     String token = rootTokens.get(i);
-                    if (isFlag(token)) {
-                        pc.macroFlags.add(token);
-                        pc.macroTokens.add(token);
-                    } else if (isOption(token)) {
+                    if (isOption(token)) {
                         pc.macroOptions.add(token);
                         pc.macroTokens.add(token);
-                    } else if (pc.filepath == null && isFilePath(token)) {
+                    } else if (isFlag(token)) {
+                        pc.macroFlags.add(token);
+                        pc.macroTokens.add(token);
+                    } else if (!snippetCarriesScript && pc.filepath == null
+                               && isFilePath(token)) {
                         pc.filepath = token;
                     } else {
                         pc.macroTokens.add(token);
@@ -254,15 +297,28 @@ public class CommandRouter {
                         continue;
                     }
 
-                    if (isFlag(token)) {
-                        pc.snippetFlags.add(token);
-                        pc.snippetTokens.add(token);
-                    } else if (isOption(token)) {
+                    if (isOption(token)) {
                         pc.snippetOptions.add(token);
+                        pc.snippetTokens.add(token);
+                    } else if (isFlag(token)) {
+                        pc.snippetFlags.add(token);
                         pc.snippetTokens.add(token);
                     } else {
                         pc.snippetTokens.add(token);
                     }
+                }
+            }
+
+            // 3. Whatever trailed the closing bracket belongs to the snippet too,
+            // appended after its own arguments so the order the user typed holds.
+            if (trailingPart != null && !trailingPart.isBlank()) {
+                for (String token : tokenizer.tokenize(trailingPart.trim())) {
+                    if (isOption(token)) {
+                        pc.snippetOptions.add(token);
+                    } else if (isFlag(token)) {
+                        pc.snippetFlags.add(token);
+                    }
+                    pc.snippetTokens.add(token);
                 }
             }
         }
@@ -274,7 +330,9 @@ public class CommandRouter {
         if (input == null || input.isBlank()) return;
 
         String command = history.expandMacros(input.trim());
-        command = com.sphere.core.snippets.TagInterpreter.resolve(command, null);
+        // Passing null here skipped SnippetResolver's third lookup, so a snippet
+        // living under WorkSpace/<project>/snippets/ never resolved to a path.
+        command = com.sphere.core.snippets.TagInterpreter.resolve(command, ctx.getActiveProject());
         history.add(command);
 
         String firstToken = command.split("\\s+")[0];
@@ -340,10 +398,96 @@ public class CommandRouter {
             || clean.startsWith("pushd ");
     }
 
+    /**
+     * Rejects snippet invocations that would silently run the wrong thing.
+     * Returns false once the reason has been reported.
+     */
+    private static boolean validateSnippetInvocation(ParsedCommand pc,
+                                                     List<String> snippetBlocks) {
+        if (pc == null || !pc.hasSnippet) {
+            return true;
+        }
+
+        // Every block was flattened into one argument list, so a second snippet
+        // silently became an argument of the first.
+        if (snippetBlocks.size() > 1) {
+            AppLogger.error("One snippet block per command: " + snippetBlocks.size()
+                            + " were given.");
+            return false;
+        }
+
+        if (pc.snippetTokens.isEmpty()) {
+            AppLogger.error("Empty snippet block.");
+            return false;
+        }
+
+        // TagInterpreter returns the name unchanged when it resolves nothing, and
+        // the interpreter then answered with its own stack trace instead of us.
+        String script = pc.snippetTokens.get(0);
+        File scriptFile = new File(script);
+        if (!scriptFile.isFile()) {
+            AppLogger.error("Snippet not found: " + script);
+            return false;
+        }
+
+        // The interpreter takes its first positional as the script, so a path
+        // sitting outside the brackets shadows the snippet. It is only reported,
+        // not refused: a bare word can legitimately be the value of the flag in
+        // front of it, and each interpreter spells its own options differently.
+        for (int i = 0; i < pc.macroTokens.size(); i++) {
+            String token = pc.macroTokens.get(i);
+            boolean followsFlag = i > 0 && pc.macroTokens.get(i - 1).startsWith("-");
+            if (!token.startsWith("-") && !followsFlag && isFilePath(token)) {
+                AppLogger.warn("'" + token + "' sits outside the brackets and will be"
+                               + " run instead of " + scriptFile.getName()
+                               + "; move it inside [@ ... ] to pass it to the snippet.");
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Compiles and runs a C++ snippet: what sat before the bracket configures the
+     * compiler, what sat inside or after it reaches the produced binary.
+     */
+    private void runCppSnippet(ParsedCommand pc) {
+        Backend backend = backends.get("cpp");
+        if (!(backend instanceof com.sphere.core.cpp.CppBackend cppBackend)) {
+            AppLogger.error("The C++ backend is not available.");
+            return;
+        }
+
+        final String source = pc.snippetTokens.get(0);
+        final List<String> compileFlags = new ArrayList<>(pc.macroTokens);
+        final List<String> runtimeArgs =
+            new ArrayList<>(pc.snippetTokens.subList(1, pc.snippetTokens.size()));
+
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                cppBackend.executeSource(source, compileFlags, runtimeArgs, false, null);
+                return null;
+            }
+        }.execute();
+    }
+
     public void executeHybridAsync(String rawInput) {
         List<String> snippetBlocks = extractSnippetBlocks(rawInput);
-        String rootPart = extractRootPart(rawInput);
-        ParsedCommand pc = parseCommandString(rootPart, snippetBlocks);
+        String[] halves = splitAtSnippet(rawInput);
+        ParsedCommand pc = parseCommandString(halves[0], snippetBlocks, halves[1]);
+
+        if (!validateSnippetInvocation(pc, snippetBlocks)) {
+            return;
+        }
+
+        // A compiled language has no single command line carrying both scopes:
+        // the flags configure the compiler and the arguments reach the binary it
+        // produces, in two separate processes. Its backend owns that pipeline.
+        if (pc.hasSnippet && "cpp".equalsIgnoreCase(pc.languageOrApp)) {
+            runCppSnippet(pc);
+            return;
+        }
 
         new SwingWorker<Void, String>() {
             @Override
@@ -371,6 +515,13 @@ public class CommandRouter {
                     if (pc.hasSnippet) {
                         cmd.addAll(pc.snippetTokens);
                     }
+                } else if (pc.hasSnippet) {
+                    // The raw line used to be handed to the shell here, prefix and
+                    // brackets included, so ::jul and any other language answered
+                    // "command not found" rather than saying what was missing.
+                    AppLogger.error("No runner for '" + pc.languageOrApp
+                                    + "' snippets; supported: py, cpp.");
+                    return null;
                 } else {
                     // Fallback directly to native OS shell processing layer
                     cmd.addAll(isWin ? List.of("cmd.exe", "/c", rawInput)

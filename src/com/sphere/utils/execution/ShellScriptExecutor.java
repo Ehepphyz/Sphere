@@ -20,11 +20,7 @@ public final class ShellScriptExecutor {
 
     /**
      * Inspects a command line payload, automatically manages scripts/permissions,
-     * and constructs an isolated execution environment.
-     *
-     * @param rawCommand      The raw command string (e.g., "source script.sh", "/path/to/script", "python3 tool.py").
-     * @param isolatedContext Optional environment overrides for sandboxing (merged into existing env).
-     * @return Configured ProcessBuilder ready to start.
+     * and constructs an isolated execution environment
      */
     public static ProcessBuilder prepareExecution(String rawCommand, Map<String, String> isolatedContext) {
         if (rawCommand == null || rawCommand.isBlank()) {

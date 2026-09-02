@@ -30,8 +30,6 @@ public final class RootProcessBridge implements AutoCloseable {
     private static final VarHandle LONG_HANDLE = ValueLayout.JAVA_LONG.varHandle();
 
     private int cmdRingCapacityPow2 = 10;
-    private final java.util.concurrent.atomic.AtomicInteger nextReqId =
-        new java.util.concurrent.atomic.AtomicInteger(0);
 
     public RootProcessBridge(String binaryPath, Map<String, String> environment) {
         this.binaryPath = binaryPath;
@@ -154,7 +152,12 @@ public final class RootProcessBridge implements AutoCloseable {
         if (command == null || command.isBlank()) {
             return false;
         }
-        byte[] payload = command.getBytes(StandardCharsets.UTF_8);        return pushCommand(RootBackend.CMD_CLING_EXEC, 0, nextReqId.incrementAndGet(), payload);
+        byte[] payload = command.getBytes(StandardCharsets.UTF_8);
+        // Same counter as RootBackend: both write into this region's command
+        // ring and the pump routes every reply through one table keyed by
+        // request id, so a second counter would misdeliver answers.
+        return pushCommand(RootBackend.CMD_CLING_EXEC, 0,
+                           RootBackend.nextRequestId(), payload);
     }
 
     public boolean pushCommand(short opcode, int jobId, int reqId, byte[] payload) {

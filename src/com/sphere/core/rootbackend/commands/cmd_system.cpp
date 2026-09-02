@@ -630,11 +630,15 @@ bool object_lookup_ready() {
         "namespace SphereBridge {\n"
         "  template <typename T> T *Need(const char *name, const char *type) {\n"
         "    TObject *found = gROOT->FindObject(name);\n"
-        "    if (found == nullptr && gDirectory != nullptr) {\n"
-        "      found = gDirectory->Get(name);\n"
+        // gDirectory is an adapter since 6.36, and comparing it to nullptr is
+        // ambiguous. Binding it to a plain pointer first works on every release.
+        "    TDirectory *here = gDirectory;\n"
+        "    if (found == nullptr && here != nullptr) {\n"
+        "      found = here->Get(name);\n"
         "    }\n"
-        "    if (found == nullptr && gFile != nullptr) {\n"
-        "      found = gFile->Get(name);\n"
+        "    TFile *current = gFile;\n"
+        "    if (found == nullptr && current != nullptr) {\n"
+        "      found = current->Get(name);\n"
         "    }\n"
         "    if (found == nullptr) {\n"
         "      throw std::runtime_error(std::string(\"no object named '\") + name + \"'\");\n"
@@ -773,7 +777,9 @@ void handle_system(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context
 // Installs the handlers above into the process-wide CommandRegistry.
 void warm_up() {
   (void)AdvancedRootConfigCache::instance();
-  
+  // Instantiating Run()/ToText() here costs the autoparse once, on the main
+  // thread, instead of on the first client command. Captured so the interpreter's
+  // own chatter stays out of the engine log.
   if (interpreter_result_slot() != nullptr && gInterpreter != nullptr) {
     (void)object_lookup_ready();
     OutputCapture capture;
@@ -786,8 +792,20 @@ void warm_up() {
   }
 }
 
+void handle_release_chunk(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                          void *context) {
+  (void)context;
+  // The offset rides in job_id so that freeing never has to allocate first.
+  // Retiring is idempotent, so a client releasing twice is harmless.
+  if (pkt.job_id != 0) {
+    shm_heap_retire_chunk(shm, pkt.job_id);
+  }
+}
+
 void register_all() {
   auto &registry = CommandRegistry::instance();
+  registry.register_command(Proto::PacketType::CMD_RELEASE_CHUNK,
+                            &handle_release_chunk);
   registry.register_command(Proto::PacketType::CMD_PING, &handle_noop);
   registry.register_command(Proto::PacketType::CMD_SYS_NOOP, &handle_noop);
   registry.register_command(Proto::PacketType::CMD_SYS_VERSION, &handle_version);
