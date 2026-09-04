@@ -126,7 +126,7 @@ public class PythonEnvs {
 
         // --- Tier 5: Fallback to SettingsManager (settings.conf parser switch layer) ---
         if (pythonBinary == null) {
-            String resolvedGlobal = sm.resolvePath("PYTHON_EXEC", isWin ? "python.exe" : "python3");
+            String resolvedGlobal = sm.resolveTool("PYTHON_EXEC", isWin ? "python.exe" : "python3");
             if (resolvedGlobal != null && !resolvedGlobal.isBlank()) {
                 // Force resolving to absolute file context to avoid unsafe/weird relative paths layout breaks
                 File resolvedFile = new File(resolvedGlobal).getAbsoluteFile();

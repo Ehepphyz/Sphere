@@ -177,7 +177,7 @@ public final class CppProjectManager {
     }
 
     private String resolveExecutablePath(String propertyKey, String defaultBinary) {
-        String resolved = settings.resolvePath(propertyKey, defaultBinary);
+        String resolved = settings.resolveTool(propertyKey, defaultBinary);
         if (resolved == null || !SecurityManager.isCommandSafe(resolved)) {
             return defaultBinary;
         }

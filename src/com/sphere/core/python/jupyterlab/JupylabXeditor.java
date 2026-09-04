@@ -31,14 +31,19 @@ public final class JupylabXeditor extends JFrame {
         int nbformat_minor = 5;
         Map<String, Object> metadata = new LinkedHashMap<>();
         List<Cell> cells = new ArrayList<>();
+        // Keys the format may gain, kept so a save does not strip them.
+        Map<String, Object> extra = new LinkedHashMap<>();
     }
 
     static class Cell {
         String cell_type;
+        // Required from nbformat 4.5 on, and dropped by the previous reader.
+        String id;
         Map<String, Object> metadata = new LinkedHashMap<>();
         Object source;
         Integer execution_count;
         List<Output> outputs = new ArrayList<>();
+        Map<String, Object> extra = new LinkedHashMap<>();
     }
 
     static class Output {
@@ -50,6 +55,7 @@ public final class JupylabXeditor extends JFrame {
         String ename;
         String evalue;
         List<String> traceback = new ArrayList<>();
+        Integer execution_count;
     }
 
     public enum KernelMode { DISABLED, LOCAL_PYTHON, CONNECTING }
@@ -62,6 +68,18 @@ public final class JupylabXeditor extends JFrame {
     private transient JLabel kernelIndicator;
     private transient JScrollPane cellsScrollPane;
     private boolean dirty = false;
+
+    // Kernel side: one live interpreter, its inspector and its completion popup.
+    private final transient com.sphere.utils.SettingsManager settings =
+        new com.sphere.utils.SettingsManager();
+    private transient NotebookExecutor executor;
+    private transient JLabel kernelStatusLabel;
+    private transient JTable variableTable;
+    private transient javax.swing.table.DefaultTableModel variableModel;
+    private transient JSplitPane bodySplit;
+    private transient JPopupMenu completionPopup;
+    private transient javax.swing.text.JTextComponent completionTarget;
+    private transient int completionAnchor = -1;
 
     public JupylabXeditor(Path ipynbPath) throws Exception {
         super("JupylabXeditor - " + (ipynbPath == null ? "untitled" : ipynbPath.getFileName()));
@@ -118,6 +136,11 @@ public final class JupylabXeditor extends JFrame {
             public void windowClosed(WindowEvent e) {
                 // Remove the global listener when the window is completely closed/disposed
                 Toolkit.getDefaultToolkit().removeAWTEventListener(mouseHoverListener);
+                // A kernel outliving its notebook would hold an interpreter per
+                // window that was ever opened.
+                if (executor != null) {
+                    executor.shutdown();
+                }
             }
         });
 
@@ -132,147 +155,15 @@ public final class JupylabXeditor extends JFrame {
     }
 
     private Notebook loadNotebook(Path path) throws Exception {
-        String json = Files.readString(path, StandardCharsets.UTF_8);
-        return parseNotebook(json);
-    }
-
-    @SuppressWarnings("unchecked")
-    private Notebook parseNotebook(String json) throws Exception {
-        JupylabXedParser parser = new JupylabXedParser(json);
-        Object root = parser.parse();
-        Map<String,Object> map = (Map<String,Object>) root;
-
-        Notebook nb = new Notebook();
-        nb.nbformat = ((Number)map.get("nbformat")).intValue();
-        nb.nbformat_minor = ((Number)map.get("nbformat_minor")).intValue();
-        nb.metadata = (Map<String,Object>) map.get("metadata");
-
-        List<Object> cells = (List<Object>) map.get("cells");
-        for (Object o : cells) {
-            Map<String,Object> cm = (Map<String,Object>) o;
-            Cell c = new Cell();
-            c.cell_type = (String) cm.get("cell_type");
-            c.metadata = (Map<String,Object>) cm.get("metadata");
-            c.source = cm.get("source");
-            c.execution_count = cm.get("execution_count") == null ? null : ((Number)cm.get("execution_count")).intValue();
-
-            List<Object> outs = (List<Object>) cm.get("outputs");
-            if (outs != null) {
-                for (Object oo : outs) {
-                    Map<String,Object> om = (Map<String,Object>) oo;
-                    Output out = new Output();
-                    out.output_type = (String) om.get("output_type");
-                    out.name = (String) om.get("name");
-                    out.text = om.get("text");
-                    out.data = (Map<String,Object>) om.get("data");
-                    out.metadata = (Map<String,Object>) om.get("metadata");
-                    out.ename = (String) om.get("ename");
-                    out.evalue = (String) om.get("evalue");
-                    Object tb = om.get("traceback");
-                    if (tb instanceof List<?> l) {
-                        for (Object t : l) out.traceback.add(t.toString());
-                    }
-                    c.outputs.add(out);
-                }
-            }
-            nb.cells.add(c);
-        }
-        return nb;
-    }
-
-    private String toJson(Object o) {
-        if (o == null) return "null";
-        if (o instanceof String s) return "\"" + escapeJson(s) + "\"";
-        if (o instanceof Number n) return n.toString();
-        if (o instanceof Boolean b) return b.toString();
-        if (o instanceof Map<?,?> m) {
-            StringBuilder sb = new StringBuilder("{");
-            boolean first = true;
-            for (var e : m.entrySet()) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append(toJson(e.getKey().toString())).append(":").append(toJson(e.getValue()));
-            }
-            return sb.append("}").toString();
-        }
-        if (o instanceof List<?> l) {
-            StringBuilder sb = new StringBuilder("[");
-            boolean first = true;
-            for (Object x : l) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append(toJson(x));
-            }
-            return sb.append("]").toString();
-        }
-        return "\"" + escapeJson(o.toString()) + "\"";
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\b", "\\b")
-                .replace("\f", "\\f")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+        return NotebookIO.read(path);
     }
 
     private void saveNotebook() throws Exception {
         if (currentPath == null) throw new IOException("No file path specified. Use Save As.");
-        Map<String,Object> root = new LinkedHashMap<>();
-        root.put("nbformat", notebook.nbformat);
-        root.put("nbformat_minor", notebook.nbformat_minor);
-        root.put("metadata", notebook.metadata);
-
-        List<Object> cells = new ArrayList<>();
-        for (Cell c : notebook.cells) {
-            Map<String,Object> cm = new LinkedHashMap<>();
-            cm.put("cell_type", c.cell_type);
-            cm.put("metadata", c.metadata);
-
-            if (c.source instanceof List<?>) {
-                cm.put("source", c.source);
-            } else if (c.source instanceof String) {
-                String s = (String) c.source;
-                String[] splitLines = s.split("\n", -1);
-                List<String> lines = new ArrayList<>();
-
-                for (int i = 0; i < splitLines.length; i++) {
-                    if (i < splitLines.length - 1) {
-                        lines.add(splitLines[i] + "\n");
-                    } else {
-                        lines.add(splitLines[i]);
-                    }
-                }
-                cm.put("source", lines);
-            } else {
-                cm.put("source", c.source);
-            }
-
-            cm.put("execution_count", c.execution_count);
-
-            List<Object> outs = new ArrayList<>();
-            for (Output o : c.outputs) {
-                Map<String,Object> om = new LinkedHashMap<>();
-                om.put("output_type", o.output_type);
-                om.put("name", o.name);
-                om.put("text", o.text);
-                om.put("data", o.data);
-                om.put("metadata", o.metadata);
-                om.put("ename", o.ename);
-                om.put("evalue", o.evalue);
-                om.put("traceback", o.traceback);
-                outs.add(om);
-            }
-            cm.put("outputs", outs);
-            cells.add(cm);
-        }
-        root.put("cells", cells);
-
-        Files.writeString(currentPath, toJson(root), StandardCharsets.UTF_8);
+        NotebookIO.write(currentPath, notebook);
         dirty = false;
     }
+
     // -----------------------------
     // UI Layout Initialization
     // -----------------------------
@@ -348,19 +239,61 @@ public final class JupylabXeditor extends JFrame {
         JButton addTextBtn = new JButton("Add Text");
         addTextBtn.addActionListener(e -> addNewCell("markdown"));
         toolbar.add(addTextBtn);
+        toolbar.addSeparator();
+
+        // Running the notebook is now a first-class action: the kernel keeps its
+        // state, so running the cells in order actually means something.
+        JButton runAllBtn = new JButton("Run All");
+        runAllBtn.setToolTipText("Run every code cell, in order");
+        runAllBtn.addActionListener(e -> runAllCells(0, notebook.cells.size()));
+        toolbar.add(runAllBtn);
+
+        JButton stopBtn = new JButton("Stop");
+        stopBtn.setToolTipText("Interrupt the running cell");
+        stopBtn.addActionListener(e -> executor().interrupt());
+        toolbar.add(stopBtn);
+
+        JButton restartBtn = new JButton("Restart");
+        restartBtn.setToolTipText("Restart the interpreter and forget every variable");
+        restartBtn.addActionListener(e -> restartKernel(false));
+        toolbar.add(restartBtn);
+
+        JButton restartRunBtn = new JButton("Restart & Run All");
+        restartRunBtn.addActionListener(e -> restartKernel(true));
+        toolbar.add(restartRunBtn);
+
+        toolbar.addSeparator();
+        JToggleButton varsBtn = new JToggleButton("Variables");
+        varsBtn.setToolTipText("Show the kernel's live namespace");
+        varsBtn.addActionListener(e -> {
+            setVariablePanelVisible(varsBtn.isSelected());
+            if (varsBtn.isSelected()) {
+                executor().requestVariables();
+            }
+        });
+        toolbar.add(varsBtn);
         toolbar.add(Box.createHorizontalGlue());
+
+        kernelStatusLabel = new JLabel("idle");
+        kernelStatusLabel.setForeground(palette.getTextSecondary());
+        kernelStatusLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 8));
 
         kernelSwitcher = new JComboBox<>(new String[] {"Disabled", "Local Python"});
         kernelSwitcher.setSelectedIndex(kernelMode == KernelMode.LOCAL_PYTHON ? 1 : 0);
         kernelSwitcher.setPreferredSize(new Dimension(120, 24));
         kernelSwitcher.addActionListener(e -> {
-            int idx = kernelSwitcher.getSelectedIndex();
-            if (idx == 1) {
+            if (kernelSwitcher.getSelectedIndex() == 1) {
                 setKernelMode(KernelMode.CONNECTING);
-                javax.swing.Timer t = new javax.swing.Timer(300, ev -> setKernelMode(KernelMode.LOCAL_PYTHON));
-                t.setRepeats(false);
-                t.start();
+                offEdt(() -> {
+                    try {
+                        executor().ensureStarted();
+                    } catch (IOException ex) {
+                        SwingUtilities.invokeLater(() -> setKernelMode(KernelMode.DISABLED));
+                        AppLogger.error("JupyLab kernel: " + ex.getMessage());
+                    }
+                });
             } else {
+                offEdt(() -> executor().shutdown());
                 setKernelMode(KernelMode.DISABLED);
             }
         });
@@ -373,6 +306,7 @@ public final class JupylabXeditor extends JFrame {
 
         JPanel kernelPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 2));
         kernelPanel.setOpaque(false);
+        kernelPanel.add(kernelStatusLabel);
         kernelPanel.add(kernelSwitcher);
         kernelPanel.add(kernelIndicator);
 
@@ -393,7 +327,13 @@ public final class JupylabXeditor extends JFrame {
         cellsScrollPane = new JScrollPane(cellsContainer,
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        add(cellsScrollPane, BorderLayout.CENTER);
+        bodySplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, cellsScrollPane,
+                                   createVariablePanel());
+        bodySplit.setResizeWeight(1.0);
+        bodySplit.setBorder(null);
+        bodySplit.setDividerSize(4);
+        setVariablePanelVisible(false);
+        add(bodySplit, BorderLayout.CENTER);
 
         rebuildCellsUI();
 
@@ -594,6 +534,8 @@ public final class JupylabXeditor extends JFrame {
         private final transient Border normalBorder = BorderFactory.createLineBorder(palette.getJupyLabXedNBorder(), 1);
         private final transient Border activeBorder = BorderFactory.createMatteBorder(0, 3, 0, 0, palette.getJupyLabXedActive());
         private boolean isCurrentlyHovered = false;
+        private boolean isRunning = false;
+        private long lastElapsedMs = -1;
 
         private JEditorPane previewPaneReference;
 
@@ -701,6 +643,54 @@ public final class JupylabXeditor extends JFrame {
             }
             revalidate();
             repaint();
+        }
+
+        /**
+         * Repaints this cell's outputs only. Rebuilding the whole notebook on every
+         * chunk of streamed text would make a printing loop unusable.
+         */
+        void refreshOutputs() {
+            if (!"code".equals(cell.cell_type)) {
+                return;
+            }
+            outputsPanel = cell.outputs.isEmpty() ? null : (JPanel) createOutputsPanel();
+            if (outputsPanel != null) {
+                outputsPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            }
+            updateCounterLabel();
+            rebuildCellStructure();
+            revalidate();
+            repaint();
+            if (cellsScrollPane != null) {
+                cellsScrollPane.revalidate();
+                cellsScrollPane.repaint();
+            }
+        }
+
+        /** The counter shows [*] while the cell holds the kernel, as Jupyter does. */
+        void setRunning(boolean running) {
+            this.isRunning = running;
+            if (running) {
+                this.lastElapsedMs = -1;
+            }
+            updateCounterLabel();
+        }
+
+        void setElapsed(long millis) {
+            this.lastElapsedMs = millis;
+            updateCounterLabel();
+        }
+
+        private void updateCounterLabel() {
+            if (countLbl == null) {
+                return;
+            }
+            countLbl.setText(isRunning ? "[*]"
+                : cell.execution_count == null ? "[ ]" : "[" + cell.execution_count + "]");
+            countLbl.setForeground(isRunning ? palette.getJupyLabXedActive()
+                                             : palette.getJupyCellCounter());
+            countLbl.setToolTipText(lastElapsedMs < 0 ? null
+                : "Last run: " + formatElapsed(lastElapsedMs));
         }
 
         private void rebuildCellStructure() {
@@ -1247,6 +1237,18 @@ public final class JupylabXeditor extends JFrame {
                                 cellsContainer.requestFocusInWindow();
                             }
                             e.consume();
+                            return;
+                        }
+                        // The shortcuts a notebook is expected to answer to.
+                        if (e.getKeyCode() == KeyEvent.VK_ENTER
+                                && (e.isShiftDown() || e.isControlDown())) {
+                            runPythonAsyncForCell(CellPanel.this);
+                            e.consume();
+                            return;
+                        }
+                        if (e.getKeyCode() == KeyEvent.VK_SPACE && e.isControlDown()) {
+                            requestCompletion(codeEditor);
+                            e.consume();
                         }
                     }
 
@@ -1533,7 +1535,23 @@ public final class JupylabXeditor extends JFrame {
                                 }
                             }
                         }
-                        // 2. Standard text formatting fallback framework 
+                        // 2. Rich text first: a DataFrame carries a table, a sympy
+                        // expression carries LaTeX, and both used to fall back to
+                        // the plain repr because only text and images were read.
+                        else if (out.data.containsKey("text/html")
+                                 || out.data.containsKey("text/latex")) {
+                            boolean html = out.data.containsKey("text/html");
+                            String body = joinMime(out.data.get(html ? "text/html" : "text/latex"));
+                            JEditorPane pane = new JEditorPane("text/html",
+                                html ? styledHtml(stripStyleBlocks(body))
+                                     : styledHtml("<pre>" + escapeHtml(body) + "</pre>"));
+                            pane.setEditable(false);
+                            pane.setOpaque(true);
+                            pane.setBackground(palette.getTerminalBackground());
+                            pane.setBorder(null);
+                            pane.setAlignmentX(Component.LEFT_ALIGNMENT);
+                            wrapper.add(pane);
+                        }
                         else if (out.data.containsKey("text/plain")) {
                             Object val = out.data.get("text/plain");
                             String txt = "";
@@ -1586,6 +1604,33 @@ public final class JupylabXeditor extends JFrame {
             return o.toString();
         }
 
+        private String joinMime(Object value) {
+            return NotebookIO.joinLines(value);
+        }
+
+        /** Wraps a rich fragment so it reads on the terminal background. */
+        private String styledHtml(String body) {
+            Color fg = palette.getTerminalForeground();
+            Color bg = palette.getTerminalBackground();
+            return "<html><body style=\"margin:0;color:rgb(" + fg.getRed() + "," + fg.getGreen()
+                 + "," + fg.getBlue() + ");background:rgb(" + bg.getRed() + "," + bg.getGreen()
+                 + "," + bg.getBlue() + ");font-family:sans-serif;font-size:11px\">"
+                 + body + "</body></html>";
+        }
+
+        /**
+         * Swing renders HTML 3.2 and shows a style element as plain text, which is
+         * how a pandas table arrived with its own stylesheet printed above it.
+         */
+        private String stripStyleBlocks(String html) {
+            return html.replaceAll("(?is)<style[^>]*>.*?</style>", "")
+                       .replaceAll("(?is)<script[^>]*>.*?</script>", "");
+        }
+
+        private String escapeHtml(String text) {
+            return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        }
+
         public Cell toCell() {
             return this.cell;
         }
@@ -1596,126 +1641,265 @@ public final class JupylabXeditor extends JFrame {
     }
 
     // -----------------------------
-    // Native Runtime Execution Engine
+    // Variable inspector, completion, kernel controls
     // -----------------------------
-    public static class PythonKernel {
 
-        private static String getAvailablePythonCommand() {
-            String[] commands = {"python3", "python"};
-            for (String cmd : commands) {
-                try {
-                    Process checkProc = new ProcessBuilder(cmd, "--version").start();
-                    if (checkProc.waitFor() == 0) {
-                        return cmd;
-                    }
-                } catch (Exception ignored) {}
-            }
-            return "python";
+    private JComponent createVariablePanel() {
+        variableModel = new javax.swing.table.DefaultTableModel(
+                new Object[] {"Name", "Type", "Value"}, 0) {
+            private static final long serialVersionUID = 1L;
+            @Override public boolean isCellEditable(int row, int column) { return false; }
+        };
+        variableTable = new JTable(variableModel);
+        variableTable.setFillsViewportHeight(true);
+        variableTable.setRowHeight(20);
+        variableTable.setShowGrid(false);
+        variableTable.setFont(FontLoader.getTerminalFont(Font.PLAIN, 12));
+        variableTable.setBackground(palette.getBackgroundSurface());
+        variableTable.setForeground(palette.getTextPrimary());
+        variableTable.getTableHeader().setReorderingAllowed(false);
+
+        JScrollPane scroll = new JScrollPane(variableTable);
+        scroll.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, palette.getBorder()));
+        scroll.setPreferredSize(new Dimension(300, 100));
+        return scroll;
+    }
+
+    private void setVariablePanelVisible(boolean visible) {
+        if (bodySplit == null) {
+            return;
         }
+        Component right = bodySplit.getRightComponent();
+        if (right != null) {
+            right.setVisible(visible);
+        }
+        bodySplit.setDividerSize(visible ? 4 : 0);
+        bodySplit.setDividerLocation(visible ? Math.max(200, getWidth() - 320) : Integer.MAX_VALUE);
+        bodySplit.revalidate();
+    }
 
-        public static String runProcess(String code) {
+    private void updateVariablePanel(List<Map<String, Object>> items) {
+        if (variableModel == null) {
+            return;
+        }
+        variableModel.setRowCount(0);
+        for (Map<String, Object> item : items) {
+            variableModel.addRow(new Object[] {
+                item.get("name"), item.get("type"), item.get("info")});
+        }
+    }
+
+    /**
+     * Asks the interpreter what the object really holds. A static word list cannot
+     * know the columns of a DataFrame that was loaded a second ago.
+     */
+    private void requestCompletion(javax.swing.text.JTextComponent editor) {
+        if (editor == null) {
+            return;
+        }
+        completionTarget = editor;
+        executor().requestCompletion(editor.getText(), editor.getCaretPosition());
+    }
+
+    private void showCompletion(int start, List<String> matches) {
+        if (completionPopup != null) {
+            completionPopup.setVisible(false);
+        }
+        javax.swing.text.JTextComponent editor = completionTarget;
+        if (editor == null || matches == null || matches.isEmpty()) {
+            return;
+        }
+        completionAnchor = start;
+        DefaultListModel<String> model = new DefaultListModel<>();
+        for (String match : matches) {
+            model.addElement(match);
+        }
+        JList<String> list = new JList<>(model);
+        list.setSelectedIndex(0);
+        list.setFont(FontLoader.getTerminalFont(Font.PLAIN, 12));
+        list.setBackground(palette.getPopupBackground());
+        list.setForeground(palette.getTextPrimary());
+        list.setVisibleRowCount(Math.min(10, model.size()));
+
+        Runnable accept = () -> {
+            String chosen = list.getSelectedValue();
+            if (chosen != null) {
+                applyCompletion(editor, chosen);
+            }
+            completionPopup.setVisible(false);
+        };
+        list.addMouseListener(new MouseAdapter() {
+            @Override public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) { accept.run(); }
+            }
+        });
+        list.addKeyListener(new KeyAdapter() {
+            @Override public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) { accept.run(); e.consume(); }
+                else if (e.getKeyCode() == KeyEvent.VK_ESCAPE) { completionPopup.setVisible(false); }
+            }
+        });
+
+        completionPopup = new JPopupMenu();
+        completionPopup.setBorder(BorderFactory.createLineBorder(palette.getPopupBorder()));
+        completionPopup.add(new JScrollPane(list));
+        try {
+            Rectangle caret = editor.modelToView2D(editor.getCaretPosition()).getBounds();
+            completionPopup.show(editor, caret.x, caret.y + caret.height);
+            list.requestFocusInWindow();
+        } catch (Exception ignored) {
+            // caret briefly out of the document
+        }
+    }
+
+    private void applyCompletion(javax.swing.text.JTextComponent editor, String chosen) {
+        try {
+            int caret = editor.getCaretPosition();
+            int from = Math.max(0, Math.min(completionAnchor, caret));
+            editor.getDocument().remove(from, caret - from);
+            String text = chosen.endsWith("(") ? chosen : chosen;
+            editor.getDocument().insertString(from, text, null);
+        } catch (javax.swing.text.BadLocationException ignored) {
+            // the buffer changed under the popup; the next request will be correct
+        }
+    }
+
+    private void restartKernel(boolean thenRunAll) {
+        offEdt(() -> {
             try {
-                String pythonCmd = getAvailablePythonCommand();
-                
-                // Inject a wrapper script to capture matplotlib figures as base64
-                String wrapper = 
-                    "import sys\n" +
-                    "try:\n" +
-                    "    import matplotlib\n" +
-                    "    matplotlib.use('Agg')\n" +
-                    "    import matplotlib.pyplot as plt\n" +
-                    "except:\n" +
-                    "    pass\n\n" +
-                    "def _jupylab_show_wrapper():\n" +
-                    "    import io, base64\n" +
-                    "    try:\n" +
-                    "        for i in plt.get_fignums():\n" +
-                    "            fig = plt.figure(i)\n" +
-                    "            buf = io.BytesIO()\n" +
-                    "            fig.savefig(buf, format='png', bbox_inches='tight')\n" +
-                    "            buf.seek(0)\n" +
-                    "            b64 = base64.b64encode(buf.read()).decode('utf-8')\n" +
-                    "            print('\\n##IMAGE_PNG##' + b64 + '##END_IMAGE##')\n" +
-                    "        plt.close('all')\n" +
-                    "    except:\n" +
-                    "        pass\n\n" +
-                    "try:\n" +
-                    "    exec(" + toJsonStringLiteral(code) + ")\n" +
-                    "finally:\n" +
-                    "    if 'plt' in globals() or 'matplotlib' in sys.modules:\n" +
-                    "        _jupylab_show_wrapper()\n";
-
-                ProcessBuilder pb = new ProcessBuilder(pythonCmd, "-c", wrapper);
-                pb.redirectErrorStream(true);
-                Process p = pb.start();
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                p.getInputStream().transferTo(baos);
-                return baos.toString(StandardCharsets.UTF_8);
-            } catch (Exception e) {
-                return "Error executing code: " + e.getMessage();
+                executor().restart();
+            } catch (IOException ex) {
+                AppLogger.error("JupyLab kernel restart failed: " + ex.getMessage());
+                return;
             }
-        }
+            SwingUtilities.invokeLater(() -> {
+                for (Cell cell : notebook.cells) {
+                    cell.execution_count = null;
+                }
+                rebuildCellsUI();
+                if (thenRunAll) {
+                    runAllCells(0, notebook.cells.size());
+                }
+            });
+        });
+    }
 
-        // Helper to safely escape string for Python exec statement
-        private static String toJsonStringLiteral(String s) {
-            return "\"\"\"" + s.replace("\\", "\\\\").replace("\"\"\"", "\\\"\\\"\\\"") + "\"\"\"";
+    private static String formatElapsed(long millis) {
+        if (millis < 1000) {
+            return millis + " ms";
         }
+        return String.format(java.util.Locale.ROOT, "%.2f s", millis / 1000.0);
+    }
+
+    // -----------------------------
+    // Kernel-backed execution
+    // -----------------------------
+
+    /** Created on first use so opening a notebook does not launch an interpreter. */
+    private NotebookExecutor executor() {
+        if (executor == null) {
+            executor = new NotebookExecutor(settings, new EditorView());
+        }
+        return executor;
+    }
+
+    /** Kernel work never runs on the event thread: starting a process is I/O. */
+    private void offEdt(Runnable task) {
+        Thread worker = new Thread(task, "jupylab-control");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     public void runPythonAsyncForCell(CellPanel cp) {
-        runPythonAsync(cp);
+        if (cp == null || cp.codeEditor == null) {
+            return;
+        }
+        cp.cell.source = cp.codeEditor.getText();
+        dirty = true;
+        offEdt(() -> executor().run(cp.cell));
     }
 
-    public void runPythonAsync(CellPanel cp) {
-        if (cp == null || cp.codeEditor == null) return;
-        String code = cp.codeEditor.getText();
-        String rawResult = PythonKernel.runProcess(code);
-
-        cp.cell.outputs.clear();
-        
-        // Parse the combined output to separate terminal text and base64 images
-        String remainingText = rawResult;
-        
-        while (remainingText.contains("##IMAGE_PNG##") && remainingText.contains("##END_IMAGE##")) {
-            int startIdx = remainingText.indexOf("##IMAGE_PNG##");
-            int endIdx = remainingText.indexOf("##END_IMAGE##");
-            
-            // Extract text before the image
-            String textBefore = remainingText.substring(0, startIdx);
-            if (!textBefore.trim().isEmpty()) {
-                Output streamOut = new Output();
-                streamOut.output_type = "stream";
-                streamOut.text = textBefore;
-                cp.cell.outputs.add(streamOut);
-            }
-            
-            // Extract the base64 data
-            String base64Data = remainingText.substring(startIdx + "##IMAGE_PNG##".length(), endIdx);
-            Output imgOut = new Output();
-            imgOut.output_type = "display_data"; // Or execute_result
-            imgOut.data.put("image/png", base64Data);
-            cp.cell.outputs.add(imgOut);
-            
-            remainingText = remainingText.substring(endIdx + "##END_IMAGE##".length());
+    /** Runs every code cell in order, each waiting for the one before it. */
+    private void runAllCells(int from, int to) {
+        syncUIToModel();
+        List<Cell> slice = new ArrayList<>();
+        for (int i = Math.max(0, from); i < Math.min(to, notebook.cells.size()); i++) {
+            slice.add(notebook.cells.get(i));
         }
-        
-        // Add any remaining text output
-        if (!remainingText.trim().isEmpty() || cp.cell.outputs.isEmpty()) {
-            Output streamOut = new Output();
-            streamOut.output_type = "stream";
-            streamOut.text = remainingText;
-            cp.cell.outputs.add(streamOut);
-        }
-
-        cp.cell.execution_count = (cp.cell.execution_count == null ? 1 : cp.cell.execution_count + 1);
-
         dirty = true;
-        rebuildCellsUI();
-        
-        // Request container to lay out components again to avoid blank image gaps
-        if (cellsScrollPane != null) {
-            cellsScrollPane.revalidate();
-            cellsScrollPane.repaint();
+        offEdt(() -> executor().runAll(slice));
+    }
+
+    private CellPanel panelFor(Cell cell) {
+        if (cellsContainer == null) {
+            return null;
+        }
+        for (Component c : cellsContainer.getComponents()) {
+            if (c instanceof CellPanel cp && cp.cell == cell) {
+                return cp;
+            }
+        }
+        return null;
+    }
+
+    /** Everything the kernel makes the editor do, in one place. */
+    private final class EditorView implements NotebookExecutor.View {
+
+        @Override
+        public void cellStarted(Cell cell) {
+            CellPanel cp = panelFor(cell);
+            if (cp != null) {
+                cp.setRunning(true);
+                cp.refreshOutputs();
+            }
+        }
+
+        @Override
+        public void cellOutputsChanged(Cell cell) {
+            CellPanel cp = panelFor(cell);
+            if (cp != null) {
+                cp.refreshOutputs();
+            }
+        }
+
+        @Override
+        public void cellFinished(Cell cell, Integer count, long millis) {
+            CellPanel cp = panelFor(cell);
+            if (cp != null) {
+                cp.setRunning(false);
+                cp.setElapsed(millis);
+                cp.refreshOutputs();
+            }
+        }
+
+        @Override
+        public void kernelState(String label, boolean alive) {
+            setKernelMode(alive ? KernelMode.LOCAL_PYTHON
+                                : KernelMode.DISABLED);
+            if (kernelIndicator != null) {
+                kernelIndicator.setToolTipText("Kernel: " + label);
+            }
+            if (kernelStatusLabel != null) {
+                kernelStatusLabel.setText(label);
+            }
+        }
+
+        @Override
+        public void inputRequested(Cell cell, String prompt) {
+            String answer = JOptionPane.showInputDialog(JupylabXeditor.this,
+                prompt.isEmpty() ? "Input:" : prompt, "Cell input",
+                JOptionPane.QUESTION_MESSAGE);
+            executor().answerInput(answer == null ? "" : answer);
+        }
+
+        @Override
+        public void completionReady(int start, List<String> matches) {
+            showCompletion(start, matches);
+        }
+
+        @Override
+        public void variablesReady(List<Map<String, Object>> items) {
+            updateVariablePanel(items);
         }
     }
 

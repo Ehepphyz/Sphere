@@ -151,9 +151,12 @@ public class SettingsEditorWindow extends JFrame {
      * Extracts and serializes the targeted SYSTEM_PATH category map to check for value updates.
      */
     private String getSystemPathDataSnapshot() {
-        if (file == null || file.getCategories() == null) return "";
-        Map<String, String> sysPathMap = file.getCategories().get("SYSTEM_PATH");
-        return sysPathMap != null ? sysPathMap.toString() : "";
+        if (file == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (var entry : file.entries("SYSTEM_PATH")) {
+            sb.append(entry.key()).append('=').append(entry.value()).append(';');
+        }
+        return sb.toString();
     }
 
     /**

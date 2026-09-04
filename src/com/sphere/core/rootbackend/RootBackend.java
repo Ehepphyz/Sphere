@@ -394,6 +394,39 @@ public final class RootBackend implements AutoCloseable, Backend {
         return INSTANCE;
     }
 
+    /**
+     * Brings the shared backend up from settings.conf. The startup path used to
+     * live only in Sphere.main, so the backend could not be cycled without
+     * restarting the application. Returns the live instance when one is already up.
+     *
+     * @throws IllegalStateException when ROOT_DIR is blank, which settings.conf
+     *                               defines as disabling this backend
+     */
+    public static synchronized RootBackend startShared(SettingsManager settings) throws Exception {
+        if (INSTANCE != null) {
+            return INSTANCE;
+        }
+        String rootDir = settings == null ? null : settings.getProperty("ROOT_DIR");
+        if (rootDir == null || rootDir.isBlank()) {
+            throw new IllegalStateException("ROOT_DIR is empty in settings.conf.");
+        }
+        String binaryPath = RootBridgeCompiler.getOrCompileBridge(settings);
+        if (binaryPath == null) {
+            throw new IllegalStateException("the ROOT bridge could not be built.");
+        }
+        RootBackend backend = new RootBackend(binaryPath);
+        backend.initialize();
+        return backend;
+    }
+
+    /** Closes the shared backend if one is up. Silent when there is nothing to close. */
+    public static synchronized void stopShared() {
+        RootBackend live = INSTANCE;
+        if (live != null) {
+            live.close();
+        }
+    }
+
     // --- CONSTRUCTORS ---
 
     public RootBackend(String binaryPath) throws Exception {

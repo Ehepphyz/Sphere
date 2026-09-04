@@ -22,6 +22,8 @@ import com.sphere.fonts.FontLoader;
 import com.sphere.theme.ThemeManager;
 import com.sphere.theme.ThemePalette;
 import com.sphere.components.editor.EditorTheme;
+import com.sphere.components.editor.BreakpointModel;
+import com.sphere.components.editor.debug.DebugPanel;
 import com.sphere.utils.AppLogger;
 import com.sphere.utils.IconManager;
 
@@ -58,6 +60,12 @@ public class QuickCodeEditor extends JPanel {
     private final List<File> recentFiles = new ArrayList<>();
     private JMenu recentMenu;
 
+    /* Debugging: breakpoints already existed, nothing consumed them. */
+    private final com.sphere.utils.SettingsManager settings = new com.sphere.utils.SettingsManager();
+    private DebugPanel debugPanel;
+    private JSplitPane debugSplit;
+    private JCheckBoxMenuItem debugPanelItem;
+
     public QuickCodeEditor() {
         
         setLayout(new BorderLayout());
@@ -81,7 +89,13 @@ public class QuickCodeEditor extends JPanel {
             }
         });
 
-        add(tabbedPane, BorderLayout.CENTER);
+        debugPanel = new DebugPanel(new EditorDebugHost(), settings);
+        debugSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tabbedPane, debugPanel);
+        debugSplit.setResizeWeight(1.0);
+        debugSplit.setBorder(null);
+        debugSplit.setDividerSize(4);
+        setDebugPanelVisible(false);
+        add(debugSplit, BorderLayout.CENTER);
 
         /* Create initial empty tab */
         addNewTab(null);
@@ -212,6 +226,7 @@ public class QuickCodeEditor extends JPanel {
     /* Adds a new tab, optionally bound to an existing file. */
     private void addNewTab(File file) {
         CodeTab tab = new CodeTab(file);
+        watchBreakpoints(tab);
         String tabTitle = file != null ? file.getName() : "Untitled";
         tabbedPane.addTab(tabTitle, tab);
 
@@ -648,6 +663,12 @@ public class QuickCodeEditor extends JPanel {
         });
         viewMenu.add(lineNumbersItem);
 
+        debugPanelItem = new JCheckBoxMenuItem("Show Debug Panel", false);
+        debugPanelItem.setForeground(palette.getTextPrimary());
+        debugPanelItem.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
+        debugPanelItem.addActionListener(e -> setDebugPanelVisible(debugPanelItem.isSelected()));
+        viewMenu.add(debugPanelItem);
+
         alwaysOnTopItem = new JCheckBoxMenuItem("Always on Top", false);
         alwaysOnTopItem.setForeground(palette.getTextPrimary());
         alwaysOnTopItem.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
@@ -835,5 +856,76 @@ public class QuickCodeEditor extends JPanel {
      */
     public File getCurrentFile() {
         return this.currentFile;
+    }
+
+    /* ---------------------------------------------------------------
+     * Debugging
+     * --------------------------------------------------------------- */
+
+    /** Shows or hides the debug panel without disturbing the editor's height. */
+    public void setDebugPanelVisible(boolean visible) {
+        if (debugSplit == null) {
+            return;
+        }
+        debugPanel.setVisible(visible);
+        debugSplit.setDividerSize(visible ? 4 : 0);
+        debugSplit.setDividerLocation(visible ? Math.max(120, getHeight() - 240)
+                                              : Integer.MAX_VALUE);
+        if (debugPanelItem != null) {
+            debugPanelItem.setSelected(visible);
+        }
+        debugSplit.revalidate();
+    }
+
+    /** Ends any live session, for when the editor window closes. */
+    public void shutdownDebugger() {
+        if (debugPanel != null) {
+            debugPanel.shutdown();
+        }
+    }
+
+    /** Follows the breakpoints of a tab so a live session stays in step with them. */
+    void watchBreakpoints(CodeTab tab) {
+        if (tab == null || debugPanel == null) {
+            return;
+        }
+        tab.getBreakpoints().addListener(model -> {
+            if (debugPanel.isSessionLive()) {
+                for (int line : model.lines()) {
+                    debugPanel.breakpointChanged(line, model.isEnabled(line));
+                }
+            }
+        });
+    }
+
+    private final class EditorDebugHost implements DebugPanel.Host {
+
+        @Override
+        public File activeFile() {
+            CodeTab tab = getActiveTab();
+            return tab == null ? null : tab.getFile();
+        }
+
+        @Override
+        public BreakpointModel activeBreakpoints() {
+            CodeTab tab = getActiveTab();
+            return tab == null ? new BreakpointModel() : tab.getBreakpoints();
+        }
+
+        @Override
+        public void showExecutionLine(File file, int line) {
+            for (int i = 0; i < tabbedPane.getTabCount(); i++) {
+                Component c = tabbedPane.getComponentAt(i);
+                if (c instanceof CodeTab tab) {
+                    File tabFile = tab.getFile();
+                    boolean same = file != null && tabFile != null
+                        && tabFile.getAbsolutePath().equals(file.getAbsolutePath());
+                    tab.setExecutionLine(same ? line : -1);
+                    if (same && line > 0) {
+                        tabbedPane.setSelectedIndex(i);
+                    }
+                }
+            }
+        }
     }
 }

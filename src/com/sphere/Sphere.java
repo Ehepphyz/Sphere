@@ -249,11 +249,9 @@ public class Sphere extends JFrame {
     private void initFrame() {
         setTitle("Sphere - HEP WorkStation");
         
-        // Insert main workbench icon window target
-        ImageIcon icon = (ImageIcon) IconManager.getIcon("cta_logo.png");
-        if (icon != null) {
-            setIconImage(icon.getImage());
-        }
+        // Every size at once: the window manager picks, instead of shrinking a
+        // single 256 pixel image down to 16.
+        IconManager.applyAppIcon(this);
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
 
@@ -391,11 +389,7 @@ public class Sphere extends JFrame {
         terminalComponent.setMinimumSize(new Dimension(200, 100));
 
         // Determine default system shell framework
-        String defaultShell = System.getProperty("os.name").toLowerCase().contains("win")
-                ? "cmd.exe"
-                : "/bin/bash";
-
-        terminalManager.newTerminal(defaultShell);
+        terminalManager.newTerminal(com.sphere.components.terminal.ShellSelector.defaultShell(settings));
         bottomTabs.addTab("Terminal", terminalComponent);
 
         leftVerticalSplit = new PersistentSplitPane(
@@ -679,14 +673,18 @@ public class Sphere extends JFrame {
             System.setProperty("apple.awt.application.name", "Sphere");
         }
         
-        // 3. Force theme parameters onto the system thread before any UI components load
+        // 3. Claim the icon before any window exists, so the dock entry and every
+        // window Sphere opens carry it rather than the Java default.
+        com.sphere.utils.IconManager.installApplicationIcon();
+
+        // 4. Force theme parameters onto the system thread before any UI components load
         try {
             ThemeManager.applyDarkTheme();
         } catch (Exception e) {
             System.err.println("Theme application failed: " + e.getMessage());
         }
 
-        // 4. Instantiate settings and synchronize configuration registry
+        // 5. Instantiate settings and synchronize configuration registry
         com.sphere.utils.SettingsManager settings = null;
         try {
             settings = new com.sphere.utils.SettingsManager();
@@ -695,30 +693,21 @@ public class Sphere extends JFrame {
             System.err.println("Settings initialization failed: " + e.getMessage());
         }
 
-        // 5. Initialize the ROOT backend (Completely silent unless configuration is active and fails)
-        if (settings != null) {
-            String rootDir = settings.getProperty("ROOT_DIR");
-            if (rootDir != null && !rootDir.trim().isEmpty()) {
-                try {
-                    String binaryPath = com.sphere.core.rootbackend.RootBridgeCompiler.getOrCompileBridge(settings);
-                    
-                    if (binaryPath != null) {
-                        rootBackend = new com.sphere.core.rootbackend.RootBackend(binaryPath);
-                        rootBackend.initialize();
-                        
-                        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                            if (rootBackend != null) {
-                                rootBackend.close();
-                            }
-                        }));
-                    }
-                } catch (Exception e) {
-                    com.sphere.utils.AppLogger.error("Failed to start ROOT backend: " + e.getMessage());
-                }
+        // 6. Initialize the ROOT backend (Completely silent unless configuration is active and fails)
+        // The same sequence is reachable from the console menu, so it lives in
+        // RootBackend.startShared rather than being written out twice.
+        if (settings != null && !settings.isDeclaredEmpty("ROOT_DIR")
+                && settings.getProperty("ROOT_DIR") != null) {
+            try {
+                rootBackend = com.sphere.core.rootbackend.RootBackend.startShared(settings);
+                Runtime.getRuntime().addShutdownHook(
+                    new Thread(com.sphere.core.rootbackend.RootBackend::stopShared));
+            } catch (Exception e) {
+                com.sphere.utils.AppLogger.error("Failed to start ROOT backend: " + e.getMessage());
             }
         }
 
-        // 6. Safely instantiate the GUI layout tree on the Event Dispatch Thread (EDT)
+        // 7. Safely instantiate the GUI layout tree on the Event Dispatch Thread (EDT)
         SwingUtilities.invokeLater(() -> {
             Sphere frame = new Sphere();
             frame.setVisible(true);

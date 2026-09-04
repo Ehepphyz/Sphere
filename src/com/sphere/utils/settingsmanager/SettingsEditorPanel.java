@@ -501,15 +501,13 @@ public class SettingsEditorPanel extends JPanel {
 
             pushSnapshot();
 
-            var map = model.getCategories().get(category);
-            if (kv.key().equals(newKey)) {
-                map.put(kv.key(), newVal);
-            } else {
-                map.remove(kv.key());
-                map.put(newKey, newVal);
+            var entries = model.entries(category);
+            if (kv.index() >= 0 && kv.index() < entries.size()) {
+                entries.get(kv.index()).setKey(newKey);
+                entries.get(kv.index()).setValue(newVal);
             }
 
-            node.setUserObject(new KeyValue(category, newKey, newVal));
+            node.setUserObject(new KeyValue(category, newKey, newVal, kv.index()));
             ((DefaultTreeModel) tree.getModel()).nodeChanged(node);
             updatePreview(previewLabel, newVal, node);
         });
@@ -556,13 +554,13 @@ public class SettingsEditorPanel extends JPanel {
         return k.contains("PATH") || c.contains("PATH") || k.contains("DIR");
     }
 
+    /**
+     * Says what the value will mean when Sphere reads it. The check used to test
+     * the raw text against the local filesystem, so a Windows path always read as
+     * broken under Linux and a /mnt/c path always read as broken under Windows,
+     * on a file meant to travel between both.
+     */
     private void updatePreview(JLabel label, String value, SettingsTreeNode node) {
-        if (value == null || value.isBlank()) {
-            label.setText("Empty mapping target");
-            if (palette != null) label.setForeground(palette.getTextSecondary());
-            return;
-        }
-
         String category = "";
         if (node != null) {
             javax.swing.tree.TreeNode parentNode = node.getParent();
@@ -571,48 +569,66 @@ public class SettingsEditorPanel extends JPanel {
             }
         }
 
-        if ("SYSTEM_PATH".equals(category) || "TERMINAL_CONFIG".equals(category) || "SYSTEM".equals(category)) {
-            String finalValue = value.trim();
-            
-            // Fixed worker thread conversion for background disk processing
-            new Thread(() -> {
-                String localText;
-                Color localColor;
-                try {
-                    String resolvedPath = finalValue;
-                    if (resolvedPath.startsWith("~")) {
-                        resolvedPath = System.getProperty("user.home") + resolvedPath.substring(1);
-                    }
+        if (value == null || value.isBlank()) {
+            label.setText(SettingsFile.isSingleValued(category)
+                ? "Empty: this backend is disabled"
+                : "Empty value");
+            if (palette != null) label.setForeground(palette.getTextSecondary());
+            return;
+        }
 
-                    Path p = Path.of(resolvedPath);
-                    if (Files.exists(p)) {
-                        localText = "Active resource link verified: " + finalValue;
-                        localColor = palette != null ? palette.getSuccess() : Color.GREEN;
-                    } else {
-                        localText = "Target not found or broken: " + finalValue;
-                        localColor = palette != null ? palette.getError() : Color.RED;
-                    }
-                } catch (InvalidPathException ex) {
-                    localText = "Malformed path syntax";
-                    localColor = palette != null ? palette.getError() : Color.RED;
-                } catch (Exception ex) {
-                    localText = "Path verification failed";
-                    localColor = palette != null ? palette.getError() : Color.RED;
-                }
-
-                final String uiText = localText;
-                final Color uiColor = localColor;
-
-                SwingUtilities.invokeLater(() -> {
-                    label.setText(uiText);
-                    label.setForeground(uiColor);
-                });
-            }).start();
-
-        } else {
+        boolean pathCategory = "SYSTEM_PATH".equals(category)
+                            || "TERMINAL_CONFIG".equals(category)
+                            || "SYSTEM".equals(category);
+        if (!pathCategory) {
             label.setText("Value literal assignment active");
             if (palette != null) label.setForeground(palette.getTextSecondary());
+            return;
         }
+
+        final String finalValue = value.trim();
+        if (finalValue.matches(".*\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?.*")) {
+            label.setText("Resolved when read, against the file and the environment");
+            if (palette != null) label.setForeground(palette.getTextSecondary());
+            return;
+        }
+
+        new Thread(() -> {
+            String localText;
+            Color localColor;
+            try {
+                // Translated into this platform's notation first, the same way the
+                // rest of Sphere reads it.
+                String here = com.sphere.utils.SettingsManager.toNativePath(finalValue);
+                if (here == null) {
+                    localText = "Valid elsewhere, no meaning on "
+                              + com.sphere.utils.OSValidator.current();
+                    localColor = palette != null ? palette.getLogWarnPrefix() : Color.ORANGE;
+                } else {
+                    String expanded = here.startsWith("~")
+                        ? System.getProperty("user.home") + here.substring(1) : here;
+                    localText = Files.exists(Path.of(expanded))
+                        ? "Found here: " + expanded
+                        : "Not found here: " + expanded;
+                    localColor = Files.exists(Path.of(expanded))
+                        ? (palette != null ? palette.getSuccess() : Color.GREEN)
+                        : (palette != null ? palette.getLogWarnPrefix() : Color.ORANGE);
+                }
+            } catch (InvalidPathException ex) {
+                localText = "Malformed path syntax";
+                localColor = palette != null ? palette.getError() : Color.RED;
+            } catch (Exception ex) {
+                localText = "Path verification failed";
+                localColor = palette != null ? palette.getError() : Color.RED;
+            }
+
+            final String uiText = localText;
+            final Color uiColor = localColor;
+            SwingUtilities.invokeLater(() -> {
+                label.setText(uiText);
+                label.setForeground(uiColor);
+            });
+        }).start();
     }
 
     private void styleButton(JButton b) {
@@ -640,13 +656,13 @@ public class SettingsEditorPanel extends JPanel {
 
         name = sanitizeIdentifier(name);
 
-        if (model.getCategories().containsKey(name)) {
+        if (model.hasCategory(name)) {
             JOptionPane.showMessageDialog(this, "Category already exists.", "Collision error", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
         pushSnapshot();
-        model.getCategories().put(name, new LinkedHashMap<>());
+        model.addCategory(name);
         reloadTree();
     }
 
@@ -768,7 +784,7 @@ public class SettingsEditorPanel extends JPanel {
         }
 
         pushSnapshot();
-        model.getCategories().get(category).put(key, value);
+        model.addEntry(category, key, value);
 
         reloadTree();
     }
@@ -783,8 +799,7 @@ public class SettingsEditorPanel extends JPanel {
         newName = sanitizeIdentifier(newName);
 
         pushSnapshot();
-        var map = model.getCategories().remove(oldName);
-        model.getCategories().put(newName, map);
+        model.renameCategory(oldName, newName);
         reloadTree();
     }
 
@@ -792,7 +807,7 @@ public class SettingsEditorPanel extends JPanel {
         String name = node.getUserObject().toString();
 
         pushSnapshot();
-        model.getCategories().remove(name);
+        model.removeCategory(name);
         reloadTree();
     }
 
@@ -808,10 +823,10 @@ public class SettingsEditorPanel extends JPanel {
 
         pushSnapshot();
         String category = parentNode.toString();
-        var map = model.getCategories().get(category);
-
-        String value = map.remove(kv.key());
-        map.put(newKey, value);
+        var entries = model.entries(category);
+        if (kv.index() >= 0 && kv.index() < entries.size()) {
+            entries.get(kv.index()).setKey(newKey);
+        }
         reloadTree();
     }
 
@@ -823,7 +838,7 @@ public class SettingsEditorPanel extends JPanel {
         String category = parentNode.toString();
 
         pushSnapshot();
-        model.getCategories().get(category).remove(kv.key());
+        model.removeEntry(category, kv.index());
         reloadTree();
     }
 

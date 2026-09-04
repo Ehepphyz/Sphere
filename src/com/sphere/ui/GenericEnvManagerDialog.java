@@ -170,7 +170,7 @@ public class GenericEnvManagerDialog extends JDialog {
                 } else {
                     try {
                         String defaultExeName = backend.getCheckCommand().split(" ")[0];
-                        verifiedPath = settings.resolvePath(configKey, defaultExeName);
+                        verifiedPath = settings.resolveTool(configKey, defaultExeName);
                     } catch (Exception ex) {
                         publish("[ERROR] Path resolution threw an exception: " + ex.getMessage());
                         verifiedPath = null;

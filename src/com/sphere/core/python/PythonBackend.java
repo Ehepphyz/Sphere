@@ -17,6 +17,8 @@ import com.sphere.core.Backend;
  */
 public class PythonBackend implements Backend {
     private final String pythonExecutable;
+    /** PYTHON_EXEC declared empty in [SYSTEM_PATH]: the user switched Python off. */
+    private final boolean interpreterDisabled;
     private final Map<String, PythonCommand> systemCommands = new HashMap<>();
     private final PythonCommandParser commandParser = new PythonCommandParser();
     private final PythonProcessRunner processRunner = new PythonProcessRunner();
@@ -30,7 +32,13 @@ public class PythonBackend implements Backend {
         String os = System.getProperty("os.name").toLowerCase();
         String executableName = os.contains("win") ? "python.exe" : "python";
 
-        String resolvedPath = settings.resolvePath("PYTHON_EXEC", executableName);
+        // resolveTool, not resolvePath: an absent key means nothing was declared,
+        // so the interpreter is looked for. A key left empty still disables it.
+        String resolvedPath = settings.resolveTool("PYTHON_EXEC", executableName);
+        // The field keeps a name so nothing downstream has to handle null, and the
+        // flag is what stops a command: falling back to the system interpreter
+        // would have run Python for a user who wrote down that they wanted it off.
+        this.interpreterDisabled = settings.isDeclaredEmpty("PYTHON_EXEC");
         this.pythonExecutable = (resolvedPath != null) ? resolvedPath : executableName;
 
         this.venvManager = new PythonVenvManager(this.pythonExecutable, settings);
@@ -485,6 +493,14 @@ public class PythonBackend implements Backend {
     }
 
     public PythonProcessRunner.PythonResult executeAndReturn(String args, boolean logCommand, PythonOutputListener listener) {
+        if (interpreterDisabled) {
+            String message = "PYTHON_EXEC is empty in settings.conf, which disables Python.";
+            if (listener != null) {
+                listener.onStderrLine(message);
+                listener.onProcessComplete(-1, false);
+            }
+            return new PythonProcessRunner.PythonResult("", message, -1, false);
+        }
         ParsedCommand parsed = commandParser.parse(args, getEffectivePythonExecutable(), systemCommands);
         if (parsed == null) {
             return new PythonProcessRunner.PythonResult("", "Command parsing failed.", -1, false);

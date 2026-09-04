@@ -32,6 +32,15 @@ public class QuickCodeEditorFrame extends JFrame {
         if (targetFile != null && targetFile.exists()) {
             editor.loadFile(targetFile);
         }
+
+        // A debug session outliving its window would leave gdb or the Python
+        // driver running with nothing to report to.
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                editor.shutdownDebugger();
+            }
+        });
     }
 
     /**

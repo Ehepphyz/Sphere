@@ -33,22 +33,30 @@ public final class SettingsTreeModel extends DefaultTreeModel {
         SettingsTreeNode root = new SettingsTreeNode("settings.conf", SettingsNodeType.ROOT);
         String criterion = (query != null) ? query.toLowerCase().trim() : "";
 
-        file.getCategories().forEach((cat, map) -> {
+        for (String cat : file.categories()) {
             SettingsTreeNode catNode = new SettingsTreeNode(cat, SettingsNodeType.CATEGORY);
-            
-            map.forEach((k, v) -> {
+
+            java.util.List<SettingsFile.Entry> entries = file.entries(cat);
+            for (int i = 0; i < entries.size(); i++) {
+                SettingsFile.Entry e = entries.get(i);
+                String k = e.key();
+                String v = e.value();
                 // If filter query is set, bypass node generation for mismatched terms
-                if (!criterion.isEmpty() && !k.toLowerCase().contains(criterion) && !v.toLowerCase().contains(criterion)) {
-                    return; 
+                if (!criterion.isEmpty() && !k.toLowerCase().contains(criterion)
+                        && !v.toLowerCase().contains(criterion)) {
+                    continue;
                 }
-                catNode.add(new SettingsTreeNode(new KeyValue(cat, k, v), SettingsNodeType.KEY));
-            });
+                // Each occurrence is its own leaf: a repeated key is not a duplicate
+                // to be collapsed, it is a second declaration.
+                catNode.add(new SettingsTreeNode(new KeyValue(cat, k, v, i), SettingsNodeType.KEY));
+            }
 
             // Only add categories that have valid leaves matching our criteria
-            if (criterion.isEmpty() || catNode.getChildCount() > 0 || cat.toLowerCase().contains(criterion)) {
+            if (criterion.isEmpty() || catNode.getChildCount() > 0
+                    || cat.toLowerCase().contains(criterion)) {
                 root.add(catNode);
             }
-        });
+        }
 
         return root;
     }

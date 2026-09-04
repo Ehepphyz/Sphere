@@ -21,6 +21,7 @@ PYTHON_EXEC=/home/phylabs/pynode/pylhc/bin/python3.11
 NODE_DIR=/usr/bin/node
 GCC_DIR=/usr/bin/gcc-12
 GPP_DIR=/usr/bin/g++-12
+GDB_DIR=
 FORTRAN_DIR=/usr/bin/gfortran-12
 CLANG_DIR=/usr/bin/clang
 CLANGPP_DIR=/usr/bin/clang++

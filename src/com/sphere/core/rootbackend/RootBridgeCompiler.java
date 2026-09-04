@@ -197,6 +197,9 @@ public final class RootBridgeCompiler {
     }
 
     public static synchronized String getOrCompileBridge(SettingsManager settings) {
+        if (settings != null && settings.isDeclaredEmpty("ROOT_DIR")) {
+            return null;
+        }
         String rootDir = settings != null ? settings.getProperty("ROOT_DIR") : null;
 
         if ((rootDir == null || rootDir.isBlank()) && !isRootInstalled(settings)) {
@@ -400,6 +403,12 @@ public final class RootBridgeCompiler {
     }
 
     public static String getRootConfigOutput(String flag, SettingsManager settings) {
+        // ROOT_DIR left empty disables this backend, so nothing is looked for.
+        // The fallbacks below used to run anyway and revive a ROOT the user had
+        // deliberately switched off.
+        if (settings != null && settings.isDeclaredEmpty("ROOT_DIR")) {
+            return "";
+        }
         String rootDirRaw = settings != null ? settings.getProperty("ROOT_DIR") : null;
 
         if (rootDirRaw != null && !rootDirRaw.isBlank()) {
@@ -451,6 +460,9 @@ public final class RootBridgeCompiler {
     }
 
     private static RootEnvironment resolveRootEnvironment(SettingsManager settings) {
+        if (settings != null && settings.isDeclaredEmpty("ROOT_DIR")) {
+            return null;
+        }
         String configuredRootDir = settings != null ? settings.getProperty("ROOT_DIR") : null;
 
         if (configuredRootDir != null && !configuredRootDir.isBlank()) {
@@ -633,7 +645,7 @@ public final class RootBridgeCompiler {
         }
 
         if ((compiler == null || compiler.isBlank()) && settings != null) {
-            compiler = settings.resolvePath("GPP_DIR", "g++");
+            compiler = settings.resolveTool("GPP_DIR", "g++");
         }
 
         if (compiler == null || compiler.isBlank()) {
@@ -1107,6 +1119,10 @@ public final class RootBridgeCompiler {
     }
 
     public static synchronized boolean forceRebuildBridge(SettingsManager settings) {
+        if (settings != null && settings.isDeclaredEmpty("ROOT_DIR")) {
+            AppLogger.error("ROOT_DIR is empty in settings.conf, which disables this backend.");
+            return false;
+        }
         AppLogger.info("Initiating manual ROOT bridge rebuild...");
 
         compilationAttempted = false;

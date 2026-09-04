@@ -2,8 +2,6 @@ package com.sphere.ui;
 
 import javax.swing.*;
 import javax.swing.text.*;
-import javax.swing.event.PopupMenuEvent;
-import javax.swing.event.PopupMenuListener;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -28,7 +26,7 @@ import com.sphere.core.cpp.CppDiagnosticsEngine;
 import com.sphere.core.cpp.CppDiagnosticsParser.Diagnostic;
 import com.sphere.core.cpp.CppBackend;
 import com.sphere.core.cpp.CppFormatterEngine;
-import com.sphere.core.rootbackend.RootBridgeCompiler;
+import com.sphere.ui.console.ConsoleContextMenu;
 
 
 /**
@@ -53,8 +51,6 @@ public class ConsoleUI extends JPanel {
     private final CppBackend cppBackend;
     
     private static final int MAX_LINE_COUNT = 5000;
-
-    private JCheckBox verboseFormatCheck;
 
     /**
      * High-Performance Explicit Log Levels
@@ -308,263 +304,89 @@ public class ConsoleUI extends JPanel {
     }
 
     /**
-     * Initializes the context menu for the console logging panel.
+     * Builds the console context menu. The assembly, the painting and the live
+     * state of each entry now live in com.sphere.ui.console, which took roughly
+     * 250 lines out of this class.
      */
     private void setupContextMenu() {
-        JPopupMenu popup = new JPopupMenu() {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                if (palette != null) {
-                    // Updated to match your exact Popup palette mappings:
-                    g2.setColor(palette.getPopupBackground());
-                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
-                    
-                    g2.setColor(palette.getPopupBorder());
-                    g2.setStroke(new BasicStroke(1.0f));
-                    g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
-                }
-                g2.dispose();
-            }
-        };
-        popup.setOpaque(false);
-        popup.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        new ConsoleContextMenu(new ConsoleMenuHost(), settings, diagnosticsEngine,
+                               intellisenseBackend).installOn(logArea);
+    }
 
-        JMenuItem editSettings       = createModernMenuItem("Edit Settings");
-        JMenuItem editSessions       = createModernMenuItem("Edit Sessions");
-        JMenuItem editWhitelist      = createModernMenuItem("Edit Python Modules Whitelist");
-        JMenuItem editTcommand       = createModernMenuItem("Edit Trusted Commands");
-        JMenuItem copy               = createModernMenuItem("Copy Selection");
-        JMenuItem copyLog            = createModernMenuItem("Copy Full Log");
-        JMenuItem killIntellisense   = createModernMenuItem("Restart Clangd LSP Server");
-        JMenuItem rebuildRootBridge  = createModernMenuItem("Rebuild ROOT Bridge");
-        JMenuItem clearLog           = createModernMenuItem("Clear Log View");
-        
-        // Code Analysis, Formatting, and Refactoring Actions
-        JMenuItem formatFile         = createModernMenuItem("Format Active Source File");
-        JMenuItem checkFormat        = createModernMenuItem("Check Format (Dry-Run)");
-        
-        // New interactive checkbox item inside the menu structure itself
-        JCheckBoxMenuItem verboseLogItem = new JCheckBoxMenuItem("Display Verbose [D]");
-        
-        // Inject our isolated, premium flat-styled UI delegate manager cleanly
-        verboseLogItem.setUI(new SPCheckBoxMenuItemUI());
-        verboseLogItem.setOpaque(false);
-        if (palette != null) {
-            verboseLogItem.setForeground(palette.getTextPrimary());
+    /** What the context menu is allowed to ask of this console. */
+    private final class ConsoleMenuHost implements ConsoleContextMenu.Host {
+
+        @Override public void log(LogLevel level, String message) {
+            ConsoleUI.this.log(level, message);
         }
-        
-        JMenuItem renameSymbol       = createModernMenuItem("Rename Symbol (LSP)");
-        JMenuItem viewAllDiagnostics = createModernMenuItem("Print Snapshot: Global Diagnostics");
-        JMenuItem viewFileDiagnostics = createModernMenuItem("Print Snapshot: Active File Diagnostics");
 
-        JSeparator sep = new JSeparator() {
-            @Override
-            public void paint(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setColor(palette.getPopupBorder());
-                g2.drawLine(6, 0, getWidth() - 6, 0);
-                g2.dispose();
-            }
-        };
+        @Override public void copySelection() {
+            logArea.copy();
+        }
 
-        // Core UI Actions
-        copy.addActionListener(e -> logArea.copy());
-        copyLog.addActionListener(e -> {
-            String allText = logArea.getText();
+        @Override public void copyFullLog() {
             Toolkit.getDefaultToolkit().getSystemClipboard()
-                .setContents(new java.awt.datatransfer.StringSelection(allText), null);
-        });
-        clearLog.addActionListener(e -> logArea.setText(""));
+                   .setContents(new java.awt.datatransfer.StringSelection(logArea.getText()), null);
+        }
 
-        // Configuration Hooks
-        editWhitelist.addActionListener(e -> launchInternalEditorAsync("Edit Python Modules Whitelist", "config/pyconfigparam.src"));
-        editTcommand.addActionListener(e -> launchInternalEditorAsync("Edit Trusted Commands", "config/trusted_commands.src"));
-        editSettings.addActionListener(e -> SettingsEditorLauncher.open(Path.of("settings.conf")));
+        @Override public void clearLogView() {
+            logArea.setText("");
+        }
 
-        // Refactoring and Formatting Pipeline Execution Mappings
-        formatFile.addActionListener(e -> triggerActiveFileFormatting(false)); 
-        checkFormat.addActionListener(e -> triggerActiveFileFormatting(true));   
-        renameSymbol.addActionListener(e -> triggerActiveSymbolRename());
+        @Override public void formatActiveFile(boolean dryRun) {
+            triggerActiveFileFormatting(dryRun);
+        }
 
-        // Sync local field reference so the execution worker thread knows its active state
-        verboseLogItem.addActionListener(e -> {
-            if (this.verboseFormatCheck != null) {
-                this.verboseFormatCheck.setSelected(verboseLogItem.isSelected());
+        @Override public void renameSymbol() {
+            triggerActiveSymbolRename();
+        }
+
+        @Override public void openConfigFile(String title, String relativePath) {
+            launchInternalEditorAsync(title, relativePath);
+        }
+
+        @Override public void openSettingsFile() {
+            SettingsEditorLauncher.open(Path.of(SettingsManager.CONFIG_FILENAME));
+        }
+
+        @Override public void chooseSession() {
+            File sessionDir = new File("sessions/");
+            File[] sessions = sessionDir.listFiles(
+                (dir, name) -> name.endsWith(".log") || name.endsWith(".txt"));
+            if (sessions == null || sessions.length == 0) {
+                JOptionPane.showMessageDialog(ConsoleUI.this,
+                    "No active log sessions discovered inside terminal storage.",
+                    "Information", JOptionPane.INFORMATION_MESSAGE);
+                return;
             }
-        });
+            SessionSelectionDialog dialog =
+                new SessionSelectionDialog((Frame) SwingUtilities.getWindowAncestor(ConsoleUI.this));
+            dialog.setVisible(true);
+            String selected = dialog.getSelectedSession();
+            if (selected != null) {
+                launchInternalEditorAsync("Editing: " + selected,
+                                          new File(sessionDir, selected).getPath());
+            }
+        }
 
-        killIntellisense.addActionListener(e -> {
+        @Override public void startClangd(String executable, String compileCommandsDir) {
+            startCppIntellisense(executable, compileCommandsDir, null);
+        }
+
+        @Override public void stopClangd() {
             if (intellisenseBackend.isRunning()) {
                 stopCppIntellisense();
             } else {
                 log(LogLevel.INFO, "No active language server found to cycle.");
             }
-        });
+        }
 
-        rebuildRootBridge.addActionListener(e -> {
-            new SwingWorker<Void, Void>() {
-                @Override
-                protected Void doInBackground() {
-                    // Triggers the compiler with explicit user logging feedback
-                    com.sphere.core.rootbackend.RootBridgeCompiler.forceRebuildBridge(settings);
-                    return null;
-                }
-            }.execute();
-        });
-
-        editSessions.addActionListener(e -> {
-            File sessionDir = new File("sessions/"); 
-            File[] sessions = sessionDir.listFiles((dir, name) -> name.endsWith(".log") || name.endsWith(".txt"));
-
-            if (sessions == null || sessions.length == 0) {
-                JOptionPane.showMessageDialog(this, "No active log sessions discovered inside terminal storage.", "Information", JOptionPane.INFORMATION_MESSAGE);
-                return;
+        @Override public File activeFile() {
+            if (editorFrame == null || editorFrame.getEditor() == null) {
+                return null;
             }
-
-            SessionSelectionDialog dialog = new SessionSelectionDialog((Frame) SwingUtilities.getWindowAncestor(this));
-            dialog.setVisible(true);
-
-            String selected = dialog.getSelectedSession();
-            if (selected != null) {
-                launchInternalEditorAsync("Editing: " + selected, new File(sessionDir, selected).getPath());
-            }
-        });
-
-        viewAllDiagnostics.addActionListener(e -> {
-            List<Diagnostic> diagnostics = diagnosticsEngine.getAllDiagnostics();
-            log(LogLevel.INFO, "--- Global Snapshot Reminder (" + diagnostics.size() + " issues) ---");
-            for (Diagnostic diag : diagnostics) {
-                boolean isError = diag.getSeverity() != null && diag.getSeverity().toLowerCase(Locale.ROOT).contains("error");
-                log(isError ? LogLevel.ERROR : LogLevel.WARN, 
-                    String.format("[%s : Line %d] %s", diag.getFile(), diag.getLine(), diag.getMessage()));
-            }
-        });
-
-        viewFileDiagnostics.addActionListener(e -> {
-            if (editorFrame == null || editorFrame.getEditor() == null) return;
-            File currentFile = editorFrame.getEditor().getCurrentFile();
-            if (currentFile == null) {
-                log(LogLevel.WARN, "Reminder Check Canceled: No source file active in current viewport.");
-                return;
-            }
-            
-            List<Diagnostic> diagnostics = diagnosticsEngine.getDiagnosticsForFile(currentFile.getAbsolutePath());
-            log(LogLevel.INFO, "--- Snapshot Reminder for " + currentFile.getName() + " (" + diagnostics.size() + " issues) ---");
-            for (Diagnostic diag : diagnostics) {
-                boolean isError = diag.getSeverity() != null && diag.getSeverity().toLowerCase(Locale.ROOT).contains("error");
-                log(isError ? LogLevel.ERROR : LogLevel.WARN, 
-                    String.format("[Line %d] %s", diag.getLine(), diag.getMessage()));
-            }
-        });
-        
-        // Structural Menu Assembly
-        popup.add(copy);
-        popup.add(copyLog);
-        popup.add(clearLog);
-        popup.add(createCustomSeparator());
-        popup.add(formatFile);
-        popup.add(checkFormat);
-        popup.add(verboseLogItem); // Injected directly below styling operations context loops
-        popup.add(renameSymbol);
-        popup.add(viewAllDiagnostics);
-        popup.add(viewFileDiagnostics);
-        popup.add(killIntellisense);
-        popup.add(rebuildRootBridge);
-        popup.add(createCustomSeparator());
-        popup.add(editSettings);
-        popup.add(editSessions);
-        popup.add(editWhitelist);
-        popup.add(editTcommand);
-
-        // Dynamically compute and enforce bounds constraints matching custom item text limits
-        popup.addPopupMenuListener(new PopupMenuListener() {
-            @Override
-            public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
-                // Ensure internal sync values reflect accurate tracking references prior to viewing layout updates
-                if (ConsoleUI.this.verboseFormatCheck != null) {
-                    verboseLogItem.setSelected(ConsoleUI.this.verboseFormatCheck.isSelected());
-                }
-                
-                SwingUtilities.invokeLater(() -> {
-                    int maxTextWidth = 160; 
-                    Font font = FontLoader.getGlobalFont(Font.PLAIN, 12);
-                    FontMetrics fm = popup.getFontMetrics(font);
-                    
-                    for (Component comp : popup.getComponents()) {
-                        if (comp instanceof JMenuItem && comp.isVisible()) {
-                            int textWidth = fm.stringWidth(((JMenuItem) comp).getText());
-                            if (textWidth > maxTextWidth) {
-                                maxTextWidth = textWidth;
-                            }
-                        }
-                    }
-
-                    int targetWidth = maxTextWidth + 32;
-                    popup.setPreferredSize(new Dimension(targetWidth, popup.getPreferredSize().height));
-                    popup.revalidate();
-                });
-            }
-
-            @Override public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {}
-            @Override public void popupMenuCanceled(PopupMenuEvent e) {}
-        });
-
-        logArea.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mousePressed(MouseEvent e) { if (e.isPopupTrigger()) showMenu(e); }
-            @Override
-            public void mouseReleased(MouseEvent e) { if (e.isPopupTrigger()) showMenu(e); }
-            
-            private void showMenu(MouseEvent e) {
-                popup.show(e.getComponent(), e.getX(), e.getY());
-            }
-        });
-    }
-
-    private JSeparator createCustomSeparator() {
-            return new JSeparator() {
-                @Override
-                public void paint(Graphics g) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setColor(palette.getPopupBorder());
-                    g2.drawLine(6, 0, getWidth() - 6, 0);
-                    g2.dispose();
-                }
-            };
-    }
-
-    private JMenuItem createModernMenuItem(String text) {
-        JMenuItem item = new JMenuItem(text) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                ButtonModel model = getModel();
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-                
-                if (model.isArmed() || model.isSelected()) {
-                    // Using getButtonPressed() which perfectly maps to your BTN_PRESSED variable
-                    g2.setColor(palette.getButtonPressed());
-                    g2.fillRoundRect(4, 2, getWidth() - 8, getHeight() - 4, 6, 6);
-                    g2.setColor(palette.getTextWhite());
-                } else {
-                    g2.setColor(palette.getTextPrimary());
-                }
-                
-                g2.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
-                FontMetrics fm = g2.getFontMetrics();
-                int textY = (getHeight() - fm.getHeight()) / 2 + fm.getAscent();
-                
-                g2.drawString(getText(), 12, textY);
-                g2.dispose();
-            }
-        };
-        
-        item.setOpaque(false);
-        item.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 12));
-        return item;
+            return editorFrame.getEditor().getCurrentFile();
+        }
     }
 
     private void launchInternalEditorAsync(String windowTitle, String relativeFilePath) {

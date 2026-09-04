@@ -25,6 +25,7 @@ NODE_DIR=D:\Engineering\nodejs\node.exe
 # Path to gcc, g++, clang, clang++
 GCC_DIR=C:\msys64\ucrt64\bin\gcc.exe
 GPP_DIR=C:\msys64\ucrt64\bin\g++.exe
+GDB_DIR=
 FORTRAN_DIR=C:\msys64\ucrt64\bin\gfortran.exe
 CLANG_DIR=C:\msys64\ucrt64\bin\clang.exe
 CLANGPP_DIR=C:\msys64\ucrt64\bin\clang++.exe

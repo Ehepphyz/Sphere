@@ -16,6 +16,13 @@ public class SettingsManager {
     private final Map<String, List<Map.Entry<String, String>>> sections = new LinkedHashMap<>();
     public static final String CONFIG_FILENAME = "settings.conf";
 
+    /**
+     * The file exactly as it was read. Saving rebuilds from these lines instead of
+     * from the parsed map, so the header, the comments and the original order
+     * survive a write; the previous writer regenerated the file and dropped them.
+     */
+    private final List<String> rawLines = new ArrayList<>();
+
     public SettingsManager() {
         loadSettings();
     }
@@ -29,15 +36,17 @@ public class SettingsManager {
         if (!file.exists()) return;
 
         sections.clear();
+        rawLines.clear();
         
         // Root tracking initialization: Avoid hardcoded magic section strings.
         // Unmapped keys at the top of the file automatically stream to a "GLOBAL" scope.
         String currentSection = null;
 
         try (BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
+            String raw;
+            while ((raw = reader.readLine()) != null) {
+                rawLines.add(raw);
+                String line = raw.trim();
                 if (line.isEmpty() || line.startsWith("#")) continue;
 
                 if (line.startsWith("[") && line.endsWith("]")) {
@@ -62,25 +71,207 @@ public class SettingsManager {
         } catch (IOException e) {
             System.err.println("Critical Error: Unable to read " + CONFIG_FILENAME);
         }
+        reportDuplicates();
     }
 
     public synchronized void saveSettings() {
+        List<String> out = rawLines.isEmpty() ? renderFromScratch() : merge();
         File file = new File(CONFIG_FILENAME);
         try (BufferedWriter writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8)) {
-            for (var section : sections.entrySet()) {
-                if (section.getValue().isEmpty()) continue;
-
-                writer.write("[" + section.getKey() + "]");
-                writer.newLine();
-                for (var kv : section.getValue()) {
-                    writer.write(kv.getKey() + "=" + kv.getValue());
-                    writer.newLine();
-                }
+            for (String line : out) {
+                writer.write(line);
                 writer.newLine();
             }
         } catch (IOException e) {
             System.err.println("Critical Error: Unable to save " + CONFIG_FILENAME);
+            return;
         }
+        rawLines.clear();
+        rawLines.addAll(out);
+    }
+
+    /** Used only when there is no file yet: everything comes from the parsed map. */
+    private List<String> renderFromScratch() {
+        List<String> out = new ArrayList<>();
+        for (var section : sections.entrySet()) {
+            if (section.getValue().isEmpty()) continue;
+            out.add("[" + section.getKey() + "]");
+            for (var kv : section.getValue()) {
+                out.add(kv.getKey() + "=" + kv.getValue());
+            }
+            out.add("");
+        }
+        return out;
+    }
+
+    /**
+     * Rewrites the file line by line: a changed value replaces the value of its own
+     * line, a new key is inserted after the last key of its section, a removed key
+     * drops its line, and everything else is copied through untouched.
+     */
+    /** A commented key line such as "#GDB_DIR=", as the key "#GDB_DIR". */
+    private static final java.util.regex.Pattern COMMENTED_KEY =
+        java.util.regex.Pattern.compile("^#\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=.*$");
+
+    /** Key a line declares, commented or not, or null when it declares nothing. */
+    private static String keyOf(String line) {
+        java.util.regex.Matcher commented = COMMENTED_KEY.matcher(line);
+        if (commented.matches()) {
+            return "#" + commented.group(1).toUpperCase();
+        }
+        if (line.startsWith("#")) {
+            return null;
+        }
+        int eq = line.indexOf('=');
+        return eq > 0 ? line.substring(0, eq).toUpperCase().trim() : null;
+    }
+
+    private List<String> merge() {
+        // Where each section's last key line sits, so an addition lands with its own
+        // kind rather than after the trailing comments of the section.
+        Map<String, Integer> lastKeyLine = new LinkedHashMap<>();
+        Map<String, Set<String>> present = new LinkedHashMap<>();
+        String current = "GLOBAL";
+        for (int i = 0; i < rawLines.size(); i++) {
+            String line = rawLines.get(i).trim();
+            if (line.startsWith("[") && line.endsWith("]")) {
+                current = line.substring(1, line.length() - 1).toUpperCase().trim();
+                lastKeyLine.put(current, i);
+                present.putIfAbsent(current, new LinkedHashSet<>());
+                continue;
+            }
+            // A placeholder already written as a comment counts as present, or it
+            // would be added again on every save.
+            String declared = keyOf(line);
+            if (declared != null) {
+                present.computeIfAbsent(current, k -> new LinkedHashSet<>()).add(declared);
+            }
+        }
+
+        // Each key the file does not carry is tied to the line of the key it comes
+        // after in the parsed order, or to its section header when it comes first.
+        Map<String, Integer> anchors = new LinkedHashMap<>();
+        Map<String, Integer> keyLine = new LinkedHashMap<>();
+        current = "GLOBAL";
+        for (int i = 0; i < rawLines.size(); i++) {
+            String line = rawLines.get(i).trim();
+            if (line.startsWith("[") && line.endsWith("]")) {
+                current = line.substring(1, line.length() - 1).toUpperCase().trim();
+                continue;
+            }
+            String declared = keyOf(line);
+            if (declared != null) {
+                keyLine.put(current + "\u0000" + declared, i);
+            }
+        }
+        for (var section : sections.entrySet()) {
+            Integer header = lastKeyLine.get(section.getKey());
+            Integer previous = header;
+            Set<String> already = present.getOrDefault(section.getKey(), Set.of());
+            for (var kv : section.getValue()) {
+                Integer own = keyLine.get(section.getKey() + "\u0000" + kv.getKey());
+                if (own != null) {
+                    previous = own;
+                } else if (already.contains(kv.getKey())) {
+                    continue;
+                } else if (previous != null) {
+                    anchors.put(section.getKey() + "\u0000" + kv.getKey(), previous);
+                }
+            }
+        }
+
+        List<String> out = new ArrayList<>();
+        Map<String, Integer> seen = new LinkedHashMap<>();
+        current = "GLOBAL";
+        for (int i = 0; i < rawLines.size(); i++) {
+            String raw = rawLines.get(i);
+            String line = raw.trim();
+
+            if (line.startsWith("[") && line.endsWith("]")) {
+                out.add(raw);
+                current = line.substring(1, line.length() - 1).toUpperCase().trim();
+                seen.put(current, 0);
+                appendNewKeys(out, current, present, anchors, i);
+                continue;
+            }
+
+            int eq = line.indexOf('=');
+            if (line.isEmpty() || line.startsWith("#") || eq <= 0) {
+                out.add(raw);
+                appendNewKeys(out, current, present, anchors, i);
+                continue;
+            }
+
+
+            String key = line.substring(0, eq).toUpperCase().trim();
+            String value = valueOf(current, key, seen.merge(current + "\u0000" + key, 1, Integer::sum) - 1);
+            if (value == null) {
+                // Removed through removeProperty: the line goes with it.
+                appendNewKeys(out, current, present, anchors, i);
+                continue;
+            }
+            // The left side is copied verbatim so spacing and case stay the user's.
+            out.add(raw.substring(0, raw.indexOf('=') + 1) + value);
+            appendNewKeys(out, current, present, anchors, i);
+        }
+
+        // Sections the file never carried.
+        for (var section : sections.entrySet()) {
+            if (present.containsKey(section.getKey()) || section.getValue().isEmpty()) {
+                continue;
+            }
+            if (!out.isEmpty() && !out.get(out.size() - 1).isBlank()) {
+                out.add("");
+            }
+            out.add("[" + section.getKey() + "]");
+            for (var kv : section.getValue()) {
+                out.add(kv.getKey() + "=" + kv.getValue());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Inserts the keys a section gained, each right after the key it follows in the
+     * parsed order. A new GDB_DIR declared after GPP_DIR lands under it rather than
+     * at the end of the section, among unrelated tools.
+     */
+    private void appendNewKeys(List<String> out, String section,
+                               Map<String, Set<String>> present,
+                               Map<String, Integer> anchors, int index) {
+        List<Map.Entry<String, String>> entries = sections.get(section);
+        if (entries == null) {
+            return;
+        }
+        Set<String> already = present.getOrDefault(section, Set.of());
+        Set<String> written = new LinkedHashSet<>();
+        for (var kv : entries) {
+            if (already.contains(kv.getKey()) || !written.add(kv.getKey())) {
+                continue;
+            }
+            Integer anchor = anchors.get(section + "\u0000" + kv.getKey());
+            if (anchor != null && anchor == index) {
+                out.add(kv.getKey() + "=" + kv.getValue());
+            }
+        }
+    }
+
+    /** The nth value recorded for a key, matching repeated keys such as PATH. */
+    private String valueOf(String section, String key, int occurrence) {
+        List<Map.Entry<String, String>> entries = sections.get(section);
+        if (entries == null) {
+            return null;
+        }
+        int seen = 0;
+        for (var kv : entries) {
+            if (kv.getKey().equals(key)) {
+                if (seen == occurrence) {
+                    return kv.getValue();
+                }
+                seen++;
+            }
+        }
+        return null;
     }
 
     public void save() {
@@ -93,31 +284,96 @@ public class SettingsManager {
 
     public String getProperty(String section, String key) {
         if (section == null || key == null) return null;
-        List<Map.Entry<String, String>> s = sections.get(section.toUpperCase().trim());
+        String targetSection = section.toUpperCase().trim();
+        List<Map.Entry<String, String>> s = sections.get(targetSection);
         if (s == null) return null;
-        
-        String lookupKey = key.toUpperCase().trim();
-        // Iterate backwards to return the most recently assigned value for this key
-        for (int i = s.size() - 1; i >= 0; i--) {
-            if (s.get(i).getKey().equals(lookupKey)) {
-                return sanitizeValue(expand(s.get(i).getValue(), lookupKey, 0));
-            }
-        }
-        return null;
+        return sanitizeValue(accumulate(s, targetSection, key.toUpperCase().trim(), 0));
     }
 
     public String getProperty(String key) {
         if (key == null) return null;
         String lookupKey = key.toUpperCase().trim();
-        
-        for (var s : sections.values()) {
-            // Iterate backwards within the first section that contains the key
-            for (int i = s.size() - 1; i >= 0; i--) {
-                if (s.get(i).getKey().equals(lookupKey)) {
-                    String v = sanitizeValue(expand(s.get(i).getValue(), lookupKey, 0));
-                    if (v != null) return v;
+
+        for (var s : sections.entrySet()) {
+            String v = sanitizeValue(accumulate(s.getValue(), s.getKey(), lookupKey, 0));
+            if (v != null) return v;
+        }
+        return null;
+    }
+
+    /**
+     * Replays every declaration of a key in file order, the way a shell profile
+     * does: two PATH= lines stack, each reading the value built so far, and the
+     * environment for the first one. Reading only the last line silently dropped
+     * every earlier declaration.
+     */
+    private String accumulate(List<Map.Entry<String, String>> entries, String section,
+                              String key, int depth) {
+        // SYSTEM_PATH and GENERAL hold one line per key, so a repeated key there is
+        // a mistake in the file rather than a second statement. The last declaration
+        // that carries a value wins: an empty duplicate left behind by a tool would
+        // otherwise silently disable a compiler that is declared right above it.
+        if (isSingleValued(section)) {
+            String last = null;
+            for (var kv : entries) {
+                if (kv.getKey().equals(key) && !kv.getValue().isBlank()) {
+                    last = kv.getValue();
                 }
             }
+            if (last == null) {
+                for (var kv : entries) {
+                    if (kv.getKey().equals(key)) {
+                        last = kv.getValue();
+                    }
+                }
+            }
+            return last == null ? null : expand(last, key, System.getenv(key), depth);
+        }
+        String value = null;
+        for (var kv : entries) {
+            if (!kv.getKey().equals(key)) {
+                continue;
+            }
+            String self = value != null ? value : System.getenv(key);
+            value = expand(kv.getValue(), key, self, depth);
+        }
+        return value;
+    }
+
+    /** Sections that are Sphere's own starting point, one declaration per key. */
+    private static boolean isSingleValued(String section) {
+        return "SYSTEM_PATH".equals(section) || "GENERAL".equals(section);
+    }
+
+    /** Says once what the file carries twice, so it can be cleaned up. */
+    private void reportDuplicates() {
+        for (var section : sections.entrySet()) {
+            if (!isSingleValued(section.getKey())) {
+                continue;
+            }
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            for (var kv : section.getValue()) {
+                counts.merge(kv.getKey(), 1, Integer::sum);
+            }
+            for (var count : counts.entrySet()) {
+                if (count.getValue() > 1) {
+                    AppLogger.warn("settings.conf: " + count.getKey() + " is declared "
+                                   + count.getValue() + " times in [" + section.getKey()
+                                   + "], which allows one line per key.");
+                }
+            }
+        }
+    }
+
+    /** A key referenced from another value, stacked the same way if repeated. */
+    private String resolveReference(String name, int depth) {
+        if (depth > 8) {
+            return null;
+        }
+        String lookup = name.toUpperCase().trim();
+        for (var s : sections.entrySet()) {
+            String v = accumulate(s.getValue(), s.getKey(), lookup, depth);
+            if (v != null) return v;
         }
         return null;
     }
@@ -149,6 +405,11 @@ public class SettingsManager {
      * @param depth guards against a cycle between two keys
      */
     private String expand(String value, String self, int depth) {
+        return expand(value, self, System.getenv(self == null ? "" : self), depth);
+    }
+
+    /** @param selfValue what a reference to the key being expanded resolves to */
+    private String expand(String value, String self, String selfValue, int depth) {
         if (value == null || value.indexOf('$') < 0 || depth > 8) {
             return value;
         }
@@ -156,9 +417,11 @@ public class SettingsManager {
         StringBuilder out = new StringBuilder();
         while (m.find()) {
             String name = m.group(1);
-            String replacement = null;
-            if (!name.equalsIgnoreCase(self)) {
-                replacement = expand(rawProperty(name), name, depth + 1);
+            String replacement;
+            if (name.equalsIgnoreCase(self)) {
+                replacement = selfValue;
+            } else {
+                replacement = resolveReference(name, depth + 1);
             }
             if (replacement == null) {
                 replacement = System.getenv(name);
@@ -195,6 +458,41 @@ public class SettingsManager {
     }
 
     /**
+     * True when the key is declared with nothing after the equals sign in
+     * [SYSTEM_PATH] or [GENERAL]. A key absent from both says nothing, so the
+     * automatic search may run for it; a key deliberately emptied there must not
+     * be second-guessed.
+     *
+     * Only those two sections give a blank line that meaning. They are where
+     * Sphere's own configuration starts, one line per key, so emptying one is a
+     * decision to switch that backend off. Everywhere else a key stacks the way a
+     * shell profile builds PATH: a blank declaration adds nothing to the stack, and
+     * cancels neither the lines around it nor the tool.
+     */
+    public boolean isDeclaredEmpty(String key) {
+        String value = declaredAtOrigin(key);
+        return value != null && value.isBlank();
+    }
+
+    /** The value a key carries in [SYSTEM_PATH] or [GENERAL], or null. */
+    private String declaredAtOrigin(String key) {
+        if (key == null) {
+            return null;
+        }
+        String lookupKey = key.toUpperCase().trim();
+        for (var s : sections.entrySet()) {
+            if (!isSingleValued(s.getKey())) {
+                continue;
+            }
+            String v = sanitizeValue(accumulate(s.getValue(), s.getKey(), lookupKey, 0));
+            if (v != null) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    /**
      * The declared path when it works here, otherwise the same tool found where
      * this platform keeps it. A declaration always wins when it is usable, so the
      * user keeps the hand; the search only runs when the declared path cannot work
@@ -202,6 +500,22 @@ public class SettingsManager {
      * WSL, Linux and macOS without per-platform sections.
      */
     public String resolveTool(String key, String fallbackName) {
+        return resolveTool(key, fallbackName, new String[0]);
+    }
+
+    /**
+     * Same, with keys whose folder is worth looking into when the tool is not on
+     * the PATH. A toolchain installs its pieces together, so a gdb missing from the
+     * PATH is usually sitting next to the g++ that settings.conf already declares.
+     *
+     * @param siblingKeys other settings.conf keys naming tools of the same family
+     */
+    public String resolveTool(String key, String fallbackName, String... siblingKeys) {
+        // settings.conf states that a key left blank disables that backend. Looking
+        // for the tool anyway would override a decision the user wrote down.
+        if (isDeclaredEmpty(key)) {
+            return null;
+        }
         StringBuilder reason = new StringBuilder();
         String declared = resolvePath(key, fallbackName, reason);
         if (declared != null) {
@@ -215,11 +529,45 @@ public class SettingsManager {
         // carried between systems, so it stays silent. Only an outright failure
         // is worth the user's attention, and then it says what was tried.
         String found = findOnSystemPath(name);
+        if (found == null) {
+            found = findBesideSibling(name, siblingKeys);
+        }
         if (found == null && reason.length() > 0) {
-            AppLogger.error(key + ": " + reason + ", and " + name
-                            + " is not on this system's PATH.");
+            // A warning, not an error: this method's answer is "not available", and
+            // whether that matters is the caller's business. The startup diagnostic
+            // knows which tools are optional and says CRITICAL only for the others,
+            // so raising an alarm here printed the same absence twice, once too loud.
+            AppLogger.warn(key + ": " + reason + ", and " + name
+                           + " is not on this system's PATH.");
         }
         return found;
+    }
+
+    /** Looks for the tool in the folder of an already resolved companion tool. */
+    private String findBesideSibling(String executableName, String[] siblingKeys) {
+        if (executableName == null || siblingKeys == null) {
+            return null;
+        }
+        for (String sibling : siblingKeys) {
+            String declared = getProperty(sibling);
+            if (declared == null || declared.isBlank()) {
+                continue;
+            }
+            String here = toNativePath(declared);
+            if (here == null) {
+                continue;
+            }
+            File file = new File(here);
+            File folder = file.isDirectory() ? file : file.getParentFile();
+            if (folder == null) {
+                continue;
+            }
+            File candidate = new File(folder, executableName);
+            if (candidate.isFile() && candidate.canExecute()) {
+                return candidate.getAbsolutePath();
+            }
+        }
+        return null;
     }
 
     /**
@@ -398,6 +746,55 @@ public class SettingsManager {
         if (!updated) {
             s.add(new AbstractMap.SimpleEntry<>(targetKey, value));
         }
+        saveSettings();
+    }
+
+    /**
+     * Writes a key as a comment, in its place, without declaring it. The file then
+     * names every key Sphere knows while leaving the three states intact: a
+     * commented key is still absent, so the automatic search runs; uncommented and
+     * left empty it disables the backend; filled in it wins.
+     */
+    public synchronized void declarePlaceholder(String section, String afterKey, String key) {
+        if (key == null) {
+            return;
+        }
+        String commented = "#" + key.toUpperCase().trim();
+        // Stored like any entry so it keeps its rank; the parser skips comment
+        // lines, so nothing ever reads it back as a declaration.
+        setPropertyAfter(section, afterKey, commented, "");
+    }
+
+    /**
+     * Adds a key immediately after another one, so a generated entry sits with the
+     * tools it belongs to. Falls back to the end of the section when the neighbour
+     * is not there, and behaves like setProperty when the key already exists.
+     */
+    public synchronized void setPropertyAfter(String section, String afterKey,
+                                              String key, String value) {
+        if (section == null || key == null) return;
+        String targetSection = section.toUpperCase().trim();
+        String targetKey = key.toUpperCase().trim();
+        List<Map.Entry<String, String>> s = sections.computeIfAbsent(targetSection,
+                                                                     k -> new ArrayList<>());
+        for (int i = s.size() - 1; i >= 0; i--) {
+            if (s.get(i).getKey().equals(targetKey)) {
+                s.set(i, new AbstractMap.SimpleEntry<>(targetKey, value));
+                saveSettings();
+                return;
+            }
+        }
+        int at = s.size();
+        if (afterKey != null) {
+            String neighbour = afterKey.toUpperCase().trim();
+            for (int i = s.size() - 1; i >= 0; i--) {
+                if (s.get(i).getKey().equals(neighbour)) {
+                    at = i + 1;
+                    break;
+                }
+            }
+        }
+        s.add(at, new AbstractMap.SimpleEntry<>(targetKey, value));
         saveSettings();
     }
 

@@ -25,6 +25,8 @@ public class TerminalManager {
     private final JTabbedPane tabbedPane;
     private final JPanel rootPanel;
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
+    /** Counts openings, not tabs: numbering by tab count repeated a name after a close. */
+    private int opened;
 
     public TerminalManager() {
         tabbedPane = new JTabbedPane();
@@ -50,8 +52,19 @@ public class TerminalManager {
     }
 
     public TerminalPanel newTerminal(String shellCommand) {
-        TerminalPanel panel = new TerminalPanel(shellCommand);
-        String title = "Terminal " + (tabbedPane.getTabCount() + 1);
+        return newTerminal(new ShellInfo(shellCommand, shellCommand,
+            com.sphere.components.terminal.ShellSelector.interactiveArguments(shellCommand), null));
+    }
+
+    public TerminalPanel newTerminal(ShellInfo shell) {
+        return newTerminal(shell, new java.io.File(System.getProperty("user.dir")));
+    }
+
+    /** Opens a shell in a folder: the project root, or the folder being worked in. */
+    public TerminalPanel newTerminal(ShellInfo shell, java.io.File workingDirectory) {
+        TerminalPanel panel = new TerminalPanel(shell, workingDirectory);
+        // The name says which shell it is, so three tabs are not three "Terminal".
+        String title = shell.name + " " + (++opened);
 
         tabbedPane.addTab(title, panel);
         int index = tabbedPane.indexOfComponent(panel);
@@ -72,7 +85,7 @@ public class TerminalManager {
         for (int i = 0; i < tabbedPane.getTabCount(); i++) {
             Component c = tabbedPane.getComponentAt(i);
             if (c instanceof TerminalPanel) {
-                ((TerminalPanel) c).getEngine().stop();
+                ((TerminalPanel) c).disposeTerminal();
             }
         }
     }
@@ -94,7 +107,9 @@ public class TerminalManager {
             JMenu newMenu = createModernMenu("New Terminal");
             
             for (ShellInfo shell : shells) {
-                newMenu.add(createModernMenuItem(shell.name, ev -> newTerminal(shell.command)));
+                JMenuItem item = createModernMenuItem(shell.name, ev -> newTerminal(shell));
+                item.setToolTipText(shell.command);
+                newMenu.add(item);
             }
             menu.add(newMenu);
         }
@@ -120,7 +135,7 @@ public class TerminalManager {
         frame.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosed(WindowEvent e) {
-                panel.getEngine().stop();
+                panel.disposeTerminal();
             }
         });
         frame.setVisible(true);
@@ -146,13 +161,18 @@ public class TerminalManager {
 
         menu.add(createModernMenuItem("Detach Terminal", ev -> detachTerminal(panel)));
         menu.add(createModernMenuItem("Close Terminal", ev -> {
-            panel.getEngine().stop();
+            panel.disposeTerminal();
             tabbedPane.remove(panel);
         }));
         menu.add(createModernMenuItem("Rename Terminal", ev -> renameTerminal(panel)));
-        menu.add(createModernMenuItem("Duplicate Terminal", ev -> newTerminal(panel.getEngine().getShellCommand())));
+        menu.add(createModernMenuItem("Duplicate Terminal",
+            ev -> newTerminal(panel.getEngine().getShell(), panel.getEngine().currentDirectory())));
         menu.add(sep);
+        // Stops the command without taking the shell with it, as Ctrl+C does.
+        menu.add(createModernMenuItem("Interrupt Command", ev -> panel.getEngine().interrupt()));
         menu.add(createModernMenuItem("Clear Output", ev -> panel.getView().clear()));
+        // Shows the palette on request, instead of at every opening as before.
+        menu.add(createModernMenuItem("Test Colours", ev -> panel.getView().printColourTest()));
 
         attachPopupMenuWidthResizer(menu);
         menu.show(e.getComponent(), e.getX(), e.getY());
@@ -370,7 +390,7 @@ public class TerminalManager {
         JButton closeBtn = new JButton(IconManager.getIcon("close.png"));
         styleTabButton(closeBtn, "Close Terminal");
         closeBtn.addActionListener(e -> {
-            panel.getEngine().stop();
+            panel.disposeTerminal();
             tabbedPane.remove(panel);
         });
 

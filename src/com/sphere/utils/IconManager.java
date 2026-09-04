@@ -326,4 +326,135 @@ public class IconManager {
         Image scaled = img.getScaledInstance(w, h, Image.SCALE_SMOOTH);
         return new ImageIcon(scaled);
     }
+
+    /* -------------------------------------------------------------------------
+     * Application Icon
+     * ------------------------------------------------------------------------- */
+
+    private static final String APP_ICON = "cta_logo.png";
+
+    /** Sizes Windows, GNOME and KDE pick from for the title bar, task bar and alt-tab. */
+    private static final int[] APP_ICON_SIZES = {16, 20, 24, 32, 40, 48, 64, 128, 256};
+
+    private static java.util.List<Image> appIconImages;
+
+    /**
+     * The application icon in every size a window manager may ask for. Handing over
+     * a single 256 pixel image leaves the system to shrink it to 16, which it does
+     * in one crude step; these are reduced by halving, so the small ones stay sharp.
+     */
+    public static synchronized java.util.List<Image> getAppIconImages() {
+        if (appIconImages != null) {
+            return appIconImages;
+        }
+        java.util.List<Image> images = new java.util.ArrayList<>();
+        // Loaded straight from the asset: the cached path stretches icons for HiDPI
+        // screens, and reducing an already stretched image only softens it.
+        Icon icon = loadIcon(BASE_PATH + APP_ICON, APP_ICON);
+        if (icon instanceof ImageIcon source && source.getIconWidth() > 0) {
+            BufferedImage master = toBufferedImage(source.getImage());
+            for (int size : APP_ICON_SIZES) {
+                if (size <= master.getWidth() || size == APP_ICON_SIZES[0]) {
+                    images.add(resample(master, size));
+                }
+            }
+            if (images.isEmpty()) {
+                images.add(master);
+            }
+        }
+        appIconImages = images;
+        return appIconImages;
+    }
+
+    /**
+     * Puts the application icon on one window. Sphere only ever set it on two of
+     * its windows, so every dialog, terminal and editor showed the Java default.
+     */
+    public static void applyAppIcon(Window window) {
+        if (window == null) {
+            return;
+        }
+        java.util.List<Image> images = getAppIconImages();
+        if (!images.isEmpty()) {
+            window.setIconImages(images);
+        }
+    }
+
+    /**
+     * Installs the icon for the whole application: the dock entry where the system
+     * has one, then every window as it opens. A listener covers windows created
+     * anywhere, including the dialogs built inline, and any added later.
+     */
+    public static void installApplicationIcon() {
+        java.util.List<Image> images = getAppIconImages();
+        if (images.isEmpty()) {
+            return;
+        }
+        Image largest = images.get(images.size() - 1);
+
+        // macOS and some Linux shells take the dock icon from here, not from the
+        // window: setIconImage alone leaves the Dock showing the Java default.
+        try {
+            if (Taskbar.isTaskbarSupported()) {
+                Taskbar taskbar = Taskbar.getTaskbar();
+                if (taskbar.isSupported(Taskbar.Feature.ICON_IMAGE)) {
+                    taskbar.setIconImage(largest);
+                }
+            }
+        } catch (UnsupportedOperationException | SecurityException ignored) {
+            // no dock on this platform
+        }
+
+        for (Window window : Window.getWindows()) {
+            applyAppIcon(window);
+        }
+        Toolkit.getDefaultToolkit().addAWTEventListener(event -> {
+            if (event.getID() == java.awt.event.WindowEvent.WINDOW_OPENED
+                    && event.getSource() instanceof Window window
+                    // Only real windows: heavyweight popups and tooltips are Windows
+                    // too, and giving them an icon serves nothing.
+                    && (window instanceof Frame || window instanceof Dialog)) {
+                applyAppIcon(window);
+            }
+        }, AWTEvent.WINDOW_EVENT_MASK);
+    }
+
+    private static BufferedImage toBufferedImage(Image image) {
+        if (image instanceof BufferedImage buffered
+                && buffered.getType() == BufferedImage.TYPE_INT_ARGB) {
+            return buffered;
+        }
+        int w = Math.max(1, image.getWidth(null));
+        int h = Math.max(1, image.getHeight(null));
+        BufferedImage copy = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = copy.createGraphics();
+        g2.drawImage(image, 0, 0, null);
+        g2.dispose();
+        return copy;
+    }
+
+    /** Halves the image until the target is close, then lands on it exactly. */
+    private static BufferedImage resample(BufferedImage source, int size) {
+        BufferedImage current = source;
+        int width = current.getWidth();
+        while (width / 2 > size) {
+            width /= 2;
+            current = draw(current, width);
+        }
+        return draw(current, size);
+    }
+
+    private static BufferedImage draw(BufferedImage source, int size) {
+        BufferedImage target = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = target.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                            RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING,
+                            RenderingHints.VALUE_RENDER_QUALITY);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                            RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.drawImage(source, 0, 0, size, size, null);
+        g2.dispose();
+        return target;
+    }
 }

@@ -144,7 +144,8 @@ public class SecurityManager {
      */
     public static void refreshWhitelist() {
         SettingsManager settings = new SettingsManager();
-        String pythonPath = settings.resolvePath("PYTHON_EXEC", "python.exe");
+        String pythonPath = settings.resolveTool("PYTHON_EXEC",
+            System.getProperty("os.name").toLowerCase().contains("win") ? "python.exe" : "python3");
 
         if (pythonPath == null) {
             AppLogger.error("Whitelist update aborted: Cannot resolve valid path for PYTHON_EXEC");

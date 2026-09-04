@@ -32,6 +32,9 @@ public interface DebugAdapter {
         void paused(StackFrame frame, List<StackFrame> callStack, Map<String, String> variables);
 
         void output(String line, boolean stderr);
+
+        /** gdb binds a breakpoint to the next line carrying code; the dot follows. */
+        default void breakpointMoved(int requested, int effective) { }
     }
 
     State state();

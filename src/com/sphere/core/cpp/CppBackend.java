@@ -43,6 +43,11 @@ public class CppBackend implements Backend {
      */
     private void registerToolchain(String name, String settingsKey,
                                    String executableName, boolean wsl) {
+        // A WSL toolchain is launched through wsl.exe, which only exists on Windows.
+        // Registering one elsewhere produced a compiler that could never run.
+        if (wsl && !com.sphere.utils.OSValidator.isWindows()) {
+            return;
+        }
         String path = settings.resolveTool(settingsKey, executableName);
         if (path != null) {
             toolchains.put(name, new CppToolchain(name, path, executableName, wsl));

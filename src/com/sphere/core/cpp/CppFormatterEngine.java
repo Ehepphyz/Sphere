@@ -64,10 +64,27 @@ public final class CppFormatterEngine {
         return CppToolchainDetector.detectOsType() == CppToolchainDetector.OsType.WSL;
     }
 
+    /**
+     * True when CLANG_FORMAT_EXEC is declared empty in [SYSTEM_PATH]: the user
+     * switched formatting off. Without this the last resort below ran whatever
+     * clang-format the PATH happened to hold, which is the opposite of the choice.
+     */
+    private boolean isDisabled() {
+        return explicitExecutablePath == null && settings != null
+               && settings.isDeclaredEmpty("CLANG_FORMAT_EXEC");
+    }
+
+    private static FormatResult disabledResult() {
+        return new FormatResult(false, "",
+            "[Formatter] CLANG_FORMAT_EXEC is empty in settings.conf, which turns "
+            + "formatting off.", -1);
+    }
+
     private String resolveExecutable() {
         if (isExecutableValid(explicitExecutablePath)) return explicitExecutablePath;
         if (settings != null) {
-            String resolved = settings.resolvePath("CLANG_FORMAT_EXEC", "clang-format");
+            String resolved = settings.resolveTool("CLANG_FORMAT_EXEC", "clang-format",
+                                                   "CLANGPP_DIR", "CLANG_DIR");
             if (isExecutableValid(resolved)) return resolved;
         }
         return "clang-format";
@@ -97,7 +114,11 @@ public final class CppFormatterEngine {
         } else {
             cmd.add(exe);
         }
-        cmd.add(String.format("-style=file:-fallback-style=%s", resolveStyle()));
+        // Two arguments, not one. "-style=file:X" tells clang-format to read the
+        // style file named X, so the fallback was handed over as a file name and
+        // every run died on "Error reading -fallback-style=LLVM".
+        cmd.add("-style=file");
+        cmd.add("-fallback-style=" + resolveStyle());
         return cmd;
     }
 
@@ -117,6 +138,9 @@ public final class CppFormatterEngine {
     public FormatResult formatFile(Path file, boolean dryRun, boolean mergeStreams) {
         if (file == null || !Files.isRegularFile(file)) {
             return new FormatResult(false, "", "[Formatter] Invalid file reference.", -1);
+        }
+        if (isDisabled()) {
+            return disabledResult();
         }
 
         try {
@@ -152,6 +176,9 @@ public final class CppFormatterEngine {
     public FormatResult formatCode(String code, boolean mergeStreams) {
         if (code == null || code.isEmpty()) {
             return new FormatResult(true, "", "", 0);
+        }
+        if (isDisabled()) {
+            return disabledResult();
         }
 
         String exe = resolveExecutable();

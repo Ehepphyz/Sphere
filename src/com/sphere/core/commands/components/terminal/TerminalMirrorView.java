@@ -1,41 +1,43 @@
 package com.sphere.components.terminal;
 
-import javax.swing.*;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
-import java.awt.*;
-import com.sphere.theme.ThemeManager;
-import com.sphere.fonts.FontLoader;
+import javax.swing.BorderFactory;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextPane;
 
+import java.awt.BorderLayout;
+
+/**
+ * A second view of a running terminal.
+ *
+ * It shares the source's document rather than copying its text: the mirror keeps
+ * the colours, stays in step for free, and no longer rebuilds the whole buffer on
+ * every character the shell writes.
+ */
 public class TerminalMirrorView extends JPanel {
 
     private final JTextPane mirror;
 
     public TerminalMirrorView(TerminalPanel source) {
-        
-        setLayout(new BorderLayout());
+        super(new BorderLayout());
+
+        JTextPane origin = source.getView().getTextPane();
 
         mirror = new JTextPane();
         mirror.setEditable(false);
-        mirror.setFont(FontLoader.getTerminalFont(Font.PLAIN, 12));
+        mirror.setDocument(origin.getDocument());
+        mirror.setFont(origin.getFont());
+        mirror.setBackground(origin.getBackground());
+        mirror.setForeground(origin.getForeground());
+        mirror.setCaretColor(origin.getCaretColor());
         mirror.putClientProperty("JTextPane.honorDisplayProperties", Boolean.TRUE);
 
-        // Initial sync
-        mirror.setText(source.getView().getText());
+        JScrollPane scroll = new JScrollPane(mirror);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        add(scroll, BorderLayout.CENTER);
+    }
 
-        // Live sync
-        source.getView().getDocument().addDocumentListener(new DocumentListener() {
-            private void sync() {
-                mirror.setText(source.getView().getText());
-                mirror.setCaretPosition(mirror.getDocument().getLength());
-            }
-
-            @Override public void insertUpdate(DocumentEvent e) { sync(); }
-            @Override public void removeUpdate(DocumentEvent e) { sync(); }
-            @Override public void changedUpdate(DocumentEvent e) { sync(); }
-        });
-
-        add(new JScrollPane(mirror), BorderLayout.CENTER);
+    public JTextPane getTextPane() {
+        return mirror;
     }
 }
-
