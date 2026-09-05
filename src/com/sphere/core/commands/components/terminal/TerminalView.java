@@ -22,6 +22,7 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
     private final StringBuilder carry = new StringBuilder();
     /** The theme actually read, or null when none was found. */
     private Path themeFile;
+    private int maxLines = 5000;
 
     private static class NoWrapTextPane extends JTextPane {
         @Override
@@ -71,7 +72,7 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
     private void updateAttributesFromAnsi(String sequence) {
         // The parameters between '[' and 'm', isolated by the caller: a single ls
         // sends dozens of sequences in one block, and reading only the first one
-        // painted the whole block in a single colour.
+        // painted the whole block in a single color.
         String[] codes = sequence.isEmpty() ? new String[]{"0"} : sequence.split(";");
 
         for (int i = 0; i < codes.length; i++) {
@@ -122,7 +123,7 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
         }
     }
 
-    /** The theme's colour for this code, or the standard one when it defines none. */
+    /** The theme's color for this code, or the standard one when it defines none. */
     private Color ansiColor(int code, int index) {
         Color themed = ansiColors.get(String.valueOf(code));
         return themed != null ? themed : XTERM[index];
@@ -156,7 +157,7 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
         return index + 1;
     }
 
-    /** The 8 standard and 8 bright colours, for the codes a theme leaves out. */
+    /** The 8 standard and 8 bright colors, for the codes a theme leaves out. */
     private static final Color[] XTERM = {
         new Color(0, 0, 0), new Color(205, 49, 49), new Color(13, 188, 121),
         new Color(229, 229, 16), new Color(36, 114, 200), new Color(188, 63, 188),
@@ -166,7 +167,7 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
         new Color(41, 184, 219), new Color(255, 255, 255)
     };
 
-    /** The 256-colour cube: 16 basic, a 6x6x6 cube, then 24 greys. */
+    /** The 256-color cube: 16 basic, a 6x6x6 cube, then 24 grays. */
     private static Color xterm256(int value) {
         if (value < 16) {
             return XTERM[value];
@@ -176,8 +177,8 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
             int n = value - 16;
             return new Color(levels[n / 36], levels[(n / 6) % 6], levels[n % 6]);
         }
-        int grey = 8 + (value - 232) * 10;
-        return new Color(grey, grey, grey);
+        int gray = 8 + (value - 232) * 10;
+        return new Color(gray, gray, gray);
     }
 
     @Override
@@ -192,8 +193,8 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
     }
 
     /**
-     * Walks the block sequence by sequence: each colour change applies to the
-     * text that follows it, and everything that is not a colour is dropped.
+     * Walks the block sequence by sequence: each color change applies to the
+     * text that follows it, and everything that is not a color is dropped.
      * A sequence cut between two blocks is held over to the next one.
      */
     private void write(String chunk) throws BadLocationException {
@@ -256,7 +257,17 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
         }
         doc.insertString(doc.getLength(), plain.toString(), currentAttrs);
         plain.setLength(0);
+        capLines(doc);
         output.setCaretPosition(doc.getLength());
+    }
+
+    /** Beyond this the oldest lines go: a find / in the terminal used to fill memory. */
+    private void capLines(StyledDocument doc) throws BadLocationException {
+        javax.swing.text.Element root = doc.getDefaultRootElement();
+        int extra = root.getElementCount() - maxLines;
+        if (extra > 0) {
+            doc.remove(0, root.getElement(extra - 1).getEndOffset());
+        }
     }
 
     private static boolean isFinalByte(char c) {
@@ -267,7 +278,7 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
      * Load a theme from /themes/*.json
      */
     public void loadTheme(String themeName) {
-        // The colours below come only from this file: without it ansiColors stays
+        // The colors below come only from this file: without it ansiColors stays
         // empty and every terminal is white on black. One relative path found
         // nothing whenever Sphere was started from anywhere but its own folder.
         Path path = findTheme(themeName);
@@ -390,6 +401,10 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
         return output.getDocument();
     }
 
+    public void setMaxLines(int lines) {
+        maxLines = Math.max(200, lines);
+    }
+
     public void clear() {
         output.setText("");
     }
@@ -397,9 +412,9 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
     /**
      * Shows the whole palette on request, from the terminal's context menu.
      * The first line names the theme actually loaded, which is what tells a
-     * missing file apart from a display that is not applying colours.
+     * missing file apart from a display that is not applying colors.
      */
-    public void printColourTest() {
+    public void printColorTest() {
         String esc = "\u001B[";
         StringBuilder out = new StringBuilder("\n");
         out.append("  theme      ")

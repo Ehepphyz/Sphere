@@ -62,7 +62,11 @@ public class ConsoleUI extends JPanel {
         PROMPT("[>]"),
         WARN("[W]"),
         CLEAR("[C]"),
-        NONE(""); // Used for raw external sub-process data streams
+        DEBUG("[D]"),      // Debug trace
+        DEBUG_ON("[D+]"),  // Debug tracing switched on
+        DEBUG_OFF("[D-]"), // Debug tracing switched off
+        PLAIN(""), // Text Sphere prints itself: listings, file contents. Never scanned.
+        NONE("");  // Used for raw external sub-process data streams
 
         private final String prefix;
         LogLevel(String prefix) { this.prefix = prefix; }
@@ -166,13 +170,15 @@ public class ConsoleUI extends JPanel {
     public void log(LogLevel level, final String message) {
         if (message == null) return;
 
-        // Automatically structure the saved logs file format 
-        String persistentMessage = level == LogLevel.NONE ? message : level.getPrefix() + " " + message;
+        // PLAIN and NONE both carry no marker, so neither gets one in the log file
+        boolean hasEnumPrefix = level != LogLevel.NONE && level != LogLevel.PLAIN;
+
+        // Automatically structure the saved logs file format
+        String persistentMessage = hasEnumPrefix ? level.getPrefix() + " " + message : message;
         session.log(persistentMessage);
 
         SwingUtilities.invokeLater(() -> {
             Color prefixColor = palette.getLogDefaultText();
-            boolean hasEnumPrefix = level != LogLevel.NONE;
 
             // O(1) Instant Enum Match Routine (Saves massive CPU cycles)
             switch (level) {
@@ -186,6 +192,15 @@ public class ConsoleUI extends JPanel {
                 case INFO:    prefixColor = palette.getLogInfoPrefix(); break;
                 case PROMPT:  prefixColor = palette.getLogPromptPrefix(); break;
                 case WARN:    prefixColor = palette.getLogWarnPrefix();  break;
+
+                // The three debug markers keep their own text and share one color
+                case DEBUG:
+                case DEBUG_ON:
+                case DEBUG_OFF:
+                    prefixColor = palette.getLogDebugPrefix(); break;
+
+                case PLAIN:
+                    break;
                 case NONE:
                     if (message.startsWith("[!]")) { return; }
                     break;
@@ -194,6 +209,8 @@ public class ConsoleUI extends JPanel {
             if (hasEnumPrefix) {
                 appendColoredText(level.getPrefix() + " ", prefixColor, true);
                 appendExplicitLevelText(message + "\n", level);
+            } else if (level == LogLevel.PLAIN) {
+                appendPlainText(message + "\n");
             } else {
                 appendSmartHighlightedText(message + "\n");
             }
@@ -228,6 +245,21 @@ public class ConsoleUI extends JPanel {
                 break;
         }
         insertDocumentStringSafely(doc, text, attributes);
+    }
+
+    /**
+     * Literal text insertion path, used for everything Sphere prints itself:
+     * the :help listing, directory listings, file contents, configuration dumps.
+     *
+     * The keyword scanner is deliberately skipped here. A command description
+     * that happens to contain "loaded" or "missing" is content, not a result,
+     * and must not be repainted as one. Only the level markers carry color.
+     */
+    private void appendPlainText(String text) {
+        SimpleAttributeSet attributes = new SimpleAttributeSet();
+        StyleConstants.setForeground(attributes, palette.getLogDefaultText());
+        StyleConstants.setBold(attributes, false);
+        insertDocumentStringSafely(logArea.getStyledDocument(), text, attributes);
     }
 
     /**
@@ -613,4 +645,4 @@ public class ConsoleUI extends JPanel {
             add(buttonPanel, BorderLayout.SOUTH);
         }
     }
-}
+}

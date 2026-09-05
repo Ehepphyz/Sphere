@@ -1,6 +1,6 @@
 package com.sphere.components.editor;
 
-/** Token classes the highlighter can colour. */
+/** Token classes the highlighter can color. */
 public enum TokenKind {
     DEFAULT,
     KEYWORD,

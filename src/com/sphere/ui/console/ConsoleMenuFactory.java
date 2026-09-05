@@ -24,7 +24,7 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 
 /**
- * Every painted piece of the console context menu, in one place. All colours come
+ * Every painted piece of the console context menu, in one place. All colors come
  * from the active ThemePalette, so changing a palette entry moves the whole menu
  * with it.
  */
@@ -67,7 +67,7 @@ public final class ConsoleMenuFactory {
     /**
      * A clickable entry. settings.conf states that a disabled target renders in
      * muted italics, so the painter needs the disabled branch the previous one
-     * lacked: without it setEnabled(false) changed behaviour but not appearance.
+     * lacked: without it setEnabled(false) changed behavior but not appearance.
      */
     public static JMenuItem item(String text) {
         JMenuItem item = new JMenuItem(text) {
@@ -98,8 +98,8 @@ public final class ConsoleMenuFactory {
 
     /**
      * A submenu carries its own popup, which Swing creates for it. It cannot be
-     * replaced, so it is given the popup colours directly: left alone it fell back
-     * to the look and feel's surface grey, a visibly different shade from the menu
+     * replaced, so it is given the popup colors directly: left alone it fell back
+     * to the look and feel's surface gray, a visibly different shade from the menu
      * it hangs off.
      */
     private static void stylePopupOf(JMenu menu) {
@@ -111,8 +111,8 @@ public final class ConsoleMenuFactory {
             BorderFactory.createEmptyBorder(4, 4, 4, 4)));
 
         // Nimbus paints popups through its own painter and ignores setBackground,
-        // which is why the submenu came out in the look and feel's surface grey
-        // while the menu above it used the palette's popup colour. Nimbus.Overrides
+        // which is why the submenu came out in the look and feel's surface gray
+        // while the menu above it used the palette's popup color. Nimbus.Overrides
         // is the documented way to redirect that painter for one component.
         UIDefaults overrides = new UIDefaults();
         overrides.put("PopupMenu[Enabled].backgroundPainter",

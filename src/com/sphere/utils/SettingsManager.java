@@ -767,7 +767,7 @@ public class SettingsManager {
 
     /**
      * Adds a key immediately after another one, so a generated entry sits with the
-     * tools it belongs to. Falls back to the end of the section when the neighbour
+     * tools it belongs to. Falls back to the end of the section when the neighbor
      * is not there, and behaves like setProperty when the key already exists.
      */
     public synchronized void setPropertyAfter(String section, String afterKey,
@@ -786,9 +786,9 @@ public class SettingsManager {
         }
         int at = s.size();
         if (afterKey != null) {
-            String neighbour = afterKey.toUpperCase().trim();
+            String neighbor = afterKey.toUpperCase().trim();
             for (int i = s.size() - 1; i >= 0; i--) {
-                if (s.get(i).getKey().equals(neighbour)) {
+                if (s.get(i).getKey().equals(neighbor)) {
                     at = i + 1;
                     break;
                 }

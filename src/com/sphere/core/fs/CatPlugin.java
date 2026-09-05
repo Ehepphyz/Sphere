@@ -181,7 +181,9 @@ public class CatPlugin implements CommandRouter.CommandPlugin {
                     int count = 0;
 
                     if (finalHead != null) {
-                        while ((line = reader.readLine()) != null && count < finalHead) {
+                        // Count first: the other order read one extra line and threw
+                        // it away, without ever reporting the truncation.
+                        while (count < finalHead && (line = reader.readLine()) != null) {
                             publish(line);
                             count++;
                         }
@@ -246,21 +248,28 @@ public class CatPlugin implements CommandRouter.CommandPlugin {
             byte[] buf = new byte[BINARY_DETECT_BYTES];
             int read = in.read(buf);
             if (read <= 0) return false;
-            int nonPrintable = 0;
-            int printable = 0;
             for (int i = 0; i < read; i++) {
-                byte b = buf[i];
-                if (b == 0) return true; 
-                int ub = b & 0xFF;
-                if (ub >= 0x20 && ub <= 0x7E) {
-                    printable++;
-                } else if (ub == 0x09 || ub == 0x0A || ub == 0x0D) {
-                    printable++;
-                } else {
-                    nonPrintable++;
-                }
+                if (buf[i] == 0) return true;        // a null byte is never text
             }
-            return nonPrintable > 0 && ((double) nonPrintable / (nonPrintable + printable)) > 0.30;
+            // Counting bytes called everything non-ASCII binary: a table drawn with
+            // box characters reaches 85 percent. What matters is whether the UTF-8
+            // decodes, and what the resulting characters are.
+            java.nio.charset.CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
+            java.nio.CharBuffer decoded;
+            try {
+                decoded = decoder.decode(java.nio.ByteBuffer.wrap(buf, 0, read));
+            } catch (java.nio.charset.CharacterCodingException malformed) {
+                // The read window can cut the last character in half.
+                if (read < BINARY_DETECT_BYTES) return true;
+                return false;
+            }
+            int suspect = 0;
+            for (int i = 0; i < decoded.length(); i++) {
+                char c = decoded.charAt(i);
+                if (c == '\t' || c == '\n' || c == '\r') continue;
+                if (Character.isISOControl(c)) suspect++;
+            }
+            return decoded.length() > 0 && ((double) suspect / decoded.length()) > 0.10;
         }
     }
 }

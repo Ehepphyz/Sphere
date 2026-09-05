@@ -12,6 +12,21 @@ import com.sphere.core.fs.LsPlugin;
 import com.sphere.core.fs.CatPlugin;
 import com.sphere.core.fs.MkdirPlugin;
 import com.sphere.core.fs.SymlinkPlugin;
+import com.sphere.core.fs.CopyMovePlugin;
+import com.sphere.core.fs.RemovePlugin;
+import com.sphere.core.fs.GrepPlugin;
+import com.sphere.core.fs.FindPlugin;
+import com.sphere.core.fs.HeadTailPlugin;
+import com.sphere.core.fs.WcPlugin;
+import com.sphere.core.fs.DiskUsagePlugin;
+import com.sphere.core.fs.TreePlugin;
+import com.sphere.core.fs.StatPlugin;
+import com.sphere.core.fs.HashPlugin;
+import com.sphere.core.fs.DiffPlugin;
+import com.sphere.core.fs.TouchPlugin;
+import com.sphere.core.fs.WhichPlugin;
+import com.sphere.core.fs.WatchPlugin;
+import com.sphere.core.fs.RootFilePlugin;
 import com.sphere.utils.PythonEnvs;
 
 import javax.swing.*;
@@ -56,6 +71,15 @@ public class CommandRouter {
     private Consumer<String> modeUpdater;
 
     private Path currentDirectory = Paths.get(System.getProperty("user.dir"));
+
+    /**
+     * Keeps com.sphere.core.fs.WorkingDirectory in step. It holds a second current
+     * directory read by SmartDispatcher, and it never moved, so "open last file"
+     * looked in the folder Sphere started in rather than the one the user is in.
+     */
+    private void setWorkingDirectory() {
+        com.sphere.core.fs.WorkingDirectory.changeTo(currentDirectory.toString());
+    }
     private final Deque<Path> dirStack = new ArrayDeque<>();
     private Path previousDirectory = null;
 
@@ -87,6 +111,21 @@ public class CommandRouter {
         this.registerPlugin(new CatPlugin(this));
         this.registerPlugin(new MkdirPlugin(this));
         this.registerPlugin(new SymlinkPlugin(this));
+        this.registerPlugin(new CopyMovePlugin(this));
+        this.registerPlugin(new RemovePlugin(this));
+        this.registerPlugin(new GrepPlugin(this));
+        this.registerPlugin(new FindPlugin(this));
+        this.registerPlugin(new HeadTailPlugin(this));
+        this.registerPlugin(new WcPlugin(this));
+        this.registerPlugin(new DiskUsagePlugin(this));
+        this.registerPlugin(new TreePlugin(this));
+        this.registerPlugin(new StatPlugin(this));
+        this.registerPlugin(new HashPlugin(this));
+        this.registerPlugin(new DiffPlugin(this));
+        this.registerPlugin(new TouchPlugin(this));
+        this.registerPlugin(new WhichPlugin(this));
+        this.registerPlugin(new WatchPlugin(this));
+        this.registerPlugin(new RootFilePlugin(this));
 
         // Register default execution backends
         backends.put("py", new PythonBackend());
@@ -128,9 +167,12 @@ public class CommandRouter {
         com.sphere.core.commands.CommandDefinitions.all().keySet().forEach(knownCommands::add);
 
         knownCommands.addAll(List.of(
-            "cd", "pwd", "pushd", "popd",
-            ":cd", ":pwd", ":pushd", ":popd",
-            ":cpp", ":root", "::root"
+            "cd", "pwd", "pushd", "popd", "dirs",
+            ":cd", ":pwd", ":pushd", ":popd", ":dirs",
+            ":cpp", ":root", "::root",
+            ":cp", ":mv", ":rm", ":grep", ":find", ":head", ":tail", ":tail-stop",
+            ":wc", ":du", ":df", ":tree", ":stat", ":sha256", ":md5", ":diff",
+            ":touch", ":which", ":env", ":watch", ":watch-stop"
         ));
     }
 
@@ -340,7 +382,8 @@ public class CommandRouter {
             knownCommands.add(firstToken);
         }
 
-        if (handleCd(command) || handlePwd(command) || handlePushd(command) || handlePopd(command)) {
+        if (handleCd(command) || handlePwd(command) || handlePushd(command)
+                || handlePopd(command) || handleDirs(command)) {
             return;
         }
 
@@ -392,10 +435,13 @@ public class CommandRouter {
         }
         return clean.equals("pwd")
             || clean.equals("popd")
+            || clean.startsWith("popd ")
             || clean.equals("cd")
             || clean.startsWith("cd ")
             || clean.equals("pushd")
-            || clean.startsWith("pushd ");
+            || clean.startsWith("pushd ")
+            || clean.equals("dirs")
+            || clean.startsWith("dirs ");
     }
 
     /**
@@ -646,6 +692,7 @@ public class CommandRouter {
                 if (Files.isDirectory(target)) {
                     previousDirectory = currentDirectory;
                     currentDirectory = target;
+                    setWorkingDirectory();
                     updateStatus();
                 } else {
                     AppLogger.error("Invalid directory.");
@@ -662,25 +709,21 @@ public class CommandRouter {
             } else {
                 Path temp = currentDirectory;
                 currentDirectory = previousDirectory;
+                setWorkingDirectory();
                 previousDirectory = temp;
                 updateStatus();
             }
             return true;
         }
 
-        Path target;
-        if (path.equals("~")) {
-            target = Paths.get(System.getProperty("user.home"));
-        } else {
-            Path p = Paths.get(path);
-            target = p.isAbsolute() ? p : currentDirectory.resolve(p);
-        }
+        Path target = resolveUserPath(path);
 
         try {
             target = target.toRealPath();
             if (Files.isDirectory(target)) {
                 previousDirectory = currentDirectory;
                 currentDirectory = target;
+                setWorkingDirectory();
                 updateStatus();
             } else {
                 AppLogger.error("Invalid directory.");
@@ -707,23 +750,37 @@ public class CommandRouter {
         if (clean.startsWith("::")) return false;
         if (clean.startsWith(":")) clean = clean.substring(1).trim();
 
-        if (!clean.startsWith("pushd")) return false;
+        // Exact match only: "pushdfoo" used to be accepted as "pushd foo"
+        if (!clean.equals("pushd") && !clean.startsWith("pushd ")) return false;
 
         String arg = clean.length() > 5 ? clean.substring(5).trim() : "";
+
+        // Bare pushd swaps the top of the stack with the current directory
         if (arg.isEmpty()) {
-            AppLogger.error("pushd requires a target directory.");
+            if (dirStack.isEmpty()) {
+                AppLogger.error("Directory stack empty. Use  pushd <directory>");
+                return true;
+            }
+            Path top = dirStack.pop();
+            dirStack.push(currentDirectory);
+            previousDirectory = currentDirectory;
+            currentDirectory = top;
+            setWorkingDirectory();
+            updateStatus();
+            printStack();
             return true;
         }
 
-        Path p = Paths.get(arg);
-        Path target = p.isAbsolute() ? p : currentDirectory.resolve(p).normalize();
+        Path target = resolveUserPath(arg);
         if (Files.isDirectory(target)) {
             dirStack.push(currentDirectory);
             previousDirectory = currentDirectory;
             currentDirectory = target;
+            setWorkingDirectory();
             updateStatus();
+            printStack();
         } else {
-            AppLogger.error("Directory not found.");
+            AppLogger.error("Directory not found: " + target);
         }
         return true;
     }
@@ -733,15 +790,127 @@ public class CommandRouter {
         if (clean.startsWith("::")) return false;
         if (clean.startsWith(":")) clean = clean.substring(1).trim();
 
-        if (!clean.equalsIgnoreCase("popd")) return false;
+        if (!clean.equalsIgnoreCase("popd") && !clean.toLowerCase(Locale.ROOT).startsWith("popd ")) {
+            return false;
+        }
+
+        String arg = clean.length() > 4 ? clean.substring(4).trim() : "";
+
         if (dirStack.isEmpty()) {
             AppLogger.error("Directory stack empty.");
-        } else {
-            previousDirectory = currentDirectory;
-            currentDirectory = dirStack.pop();
-            updateStatus();
+            return true;
         }
+
+        // popd +N drops the Nth entry without moving, exactly like a shell.
+        // Anything else is answered here rather than leaking to the host shell,
+        // which would report on a stack of its own.
+        if (!arg.isEmpty()) {
+            int index;
+            try {
+                index = Integer.parseInt(arg.startsWith("+") ? arg.substring(1) : arg);
+            } catch (NumberFormatException nfe) {
+                AppLogger.error("Usage: popd [+N]");
+                return true;
+            }
+            if (index < 0 || index > dirStack.size()) {
+                AppLogger.error("popd: +" + index + ": directory stack index out of range");
+                return true;
+            }
+            if (index > 0) {
+                java.util.List<Path> entries = new ArrayList<>(dirStack);
+                entries.remove(index - 1);
+                dirStack.clear();
+                for (int i = entries.size() - 1; i >= 0; i--) dirStack.push(entries.get(i));
+                printStack();
+                return true;
+            }
+        }
+
+        previousDirectory = currentDirectory;
+        currentDirectory = dirStack.pop();
+        setWorkingDirectory();
+        updateStatus();
+        printStack();
         return true;
+    }
+
+    /**
+     * dirs, the third member of the family. Without it the stack can be pushed
+     * and popped but never seen, and the name falls through to the host shell,
+     * which answers about its own stack -- or, under cmd.exe, not at all.
+     */
+    private boolean handleDirs(String cmd) {
+        String clean = cmd.trim();
+        if (clean.startsWith("::")) return false;
+        if (clean.startsWith(":")) clean = clean.substring(1).trim();
+
+        if (!clean.equals("dirs") && !clean.startsWith("dirs ")) return false;
+
+        String arg = clean.length() > 4 ? clean.substring(4).trim() : "";
+        switch (arg) {
+            case "":
+                printStack();
+                return true;
+            case "-c":
+                dirStack.clear();
+                printStack();
+                return true;
+            case "-v": {
+                int index = 0;
+                AppLogger.raw(String.format("%2d  %s", index++, abbreviate(currentDirectory)));
+                for (Path p : dirStack) {
+                    AppLogger.raw(String.format("%2d  %s", index++, abbreviate(p)));
+                }
+                return true;
+            }
+            default:
+                AppLogger.error("Usage: dirs [-v | -c]");
+                return true;
+        }
+    }
+
+    /** The stack on one line, current directory first, as a shell prints it. */
+    private void printStack() {
+        StringBuilder line = new StringBuilder(abbreviate(currentDirectory));
+        for (Path p : dirStack) {
+            line.append("  ").append(abbreviate(p));
+        }
+        AppLogger.raw(line.toString());
+    }
+
+    /** Shortens the user home to ~, so the stack stays readable on one line. */
+    private static String abbreviate(Path path) {
+        String home = System.getProperty("user.home");
+        String text = path.toString();
+        if (home != null && !home.isBlank() && text.startsWith(home)) {
+            return "~" + text.substring(home.length());
+        }
+        return text;
+    }
+
+    /**
+     * Resolves a directory argument the way the fs plugins already do: a bare ~,
+     * ~/sub and ~\sub on every platform, then relative against the current
+     * directory, then normalized so ".." never reaches the prompt.
+     */
+    private Path resolveUserPath(String path) {
+        String cleaned = path.trim();
+        if (cleaned.length() > 1
+                && ((cleaned.charAt(0) == '"' && cleaned.endsWith("\""))
+                 || (cleaned.charAt(0) == '\'' && cleaned.endsWith("'")))) {
+            cleaned = cleaned.substring(1, cleaned.length() - 1);
+        }
+
+        Path target;
+        if (cleaned.equals("~")) {
+            target = Paths.get(System.getProperty("user.home"));
+        } else if (cleaned.startsWith("~/") || cleaned.startsWith("~\\")) {
+            target = Paths.get(System.getProperty("user.home")).resolve(cleaned.substring(2));
+        } else {
+            Path p = Paths.get(cleaned);
+            target = p.isAbsolute() ? p : currentDirectory.resolve(p);
+        }
+        return target.toAbsolutePath().normalize();
     }
 
     private void updateStatus() {

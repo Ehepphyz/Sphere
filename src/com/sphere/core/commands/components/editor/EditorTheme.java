@@ -6,8 +6,8 @@ import com.sphere.theme.ThemePalette;
 import java.awt.Color;
 
 /**
- * Single source of colour for the code surface. Everything below the seed block
- * is derived, so moving one seed moves every colour that depends on it instead
+ * Single source of color for the code surface. Everything below the seed block
+ * is derived, so moving one seed moves every color that depends on it instead
  * of leaving the rest behind.
  */
 public final class EditorTheme {
@@ -107,7 +107,7 @@ public final class EditorTheme {
         return mix(new Color(120, 150, 60), background(), 0.72f);
     }
 
-    // ---- Markers: severity colours come from the palette, so an application
+    // ---- Markers: severity colors come from the palette, so an application
     // ---- wide change of "error red" reaches the editor too.
 
     public static Color errorSquiggle() {
@@ -164,7 +164,7 @@ public final class EditorTheme {
     }
 
     // =======================================================================
-    // Colour arithmetic
+    // Color arithmetic
     // =======================================================================
 
     /** Darkens a seed stated for a dark surface when the surface turns light. */
@@ -172,7 +172,7 @@ public final class EditorTheme {
         return isDarkSurface() ? seed : shift(seed, -0.45f);
     }
 
-    /** Moves a colour toward white for a positive amount, toward black otherwise. */
+    /** Moves a color toward white for a positive amount, toward black otherwise. */
     public static Color shift(Color base, float amount) {
         Color pole = amount >= 0f ? Color.WHITE : Color.BLACK;
         return mix(pole, base, clamp(amount));

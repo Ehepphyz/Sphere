@@ -119,7 +119,7 @@ public final class CodeTextPane extends JTextPane {
 
     @Override
     protected void paintComponent(Graphics g) {
-        // Own copy: the decorations below change hints and colours, and mutating
+        // Own copy: the decorations below change hints and colors, and mutating
         // the caller's Graphics leaks that state into whatever paints next.
         Graphics2D g2 = (Graphics2D) g.create();
         try {

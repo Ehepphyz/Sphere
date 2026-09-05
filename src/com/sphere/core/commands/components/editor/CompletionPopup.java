@@ -87,7 +87,7 @@ public final class CompletionPopup {
 
     /**
      * Only intercepts a key while the list is up, so Enter, arrows and Escape keep
-     * their editor behaviour the rest of the time.
+     * their editor behavior the rest of the time.
      */
     private void bind(JComponent c, int keyCode, String name, Runnable action) {
         final Object previous = c.getInputMap(JComponent.WHEN_FOCUSED)

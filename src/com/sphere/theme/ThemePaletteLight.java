@@ -41,6 +41,7 @@ public final class ThemePaletteLight implements ThemePalette {
     private static final Color CLEAR_CLEAN_PREFIX   = new Color(145, 155, 165);
     
     private static final Color LOG_WARN_PREFIX    = new Color(200, 150, 20);
+    private static final Color LOG_DEBUG_PREFIX   = new Color(120, 90, 165);
 
     private static final Color LOG_ERROR_TEXT     = new Color(220, 60, 60);
     private static final Color LOG_WARN_TEXT      = new Color(200, 150, 20);
@@ -153,6 +154,7 @@ public final class ThemePaletteLight implements ThemePalette {
     @Override public Color getLogPromptPrefix()        { return LOG_PROMPT_PREFIX; }
     @Override public Color getClearCleanPrefix()       { return CLEAR_CLEAN_PREFIX; }
     @Override public Color getLogWarnPrefix()          { return LOG_WARN_PREFIX; }
+    @Override public Color getLogDebugPrefix()         { return LOG_DEBUG_PREFIX; }
 
     @Override public Color getLogErrorText()           { return LOG_ERROR_TEXT; }
     @Override public Color getLogWarnText()            { return LOG_WARN_TEXT; }

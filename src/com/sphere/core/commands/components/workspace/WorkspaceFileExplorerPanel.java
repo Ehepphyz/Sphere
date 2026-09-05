@@ -904,7 +904,7 @@ public class WorkspaceFileExplorerPanel extends JPanel {
 
         // Process final result string if user confirmed
         String newName = result[0];
-        if (newName == null) return; // Action cancelled
+        if (newName == null) return; // Action canceled
 
         // Validate that the input is not empty and contains only allowed characters
         if (newName.trim().isEmpty() || !newName.matches("^[a-zA-Z0-9._-]+$")) {

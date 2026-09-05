@@ -28,53 +28,272 @@ public class Handlers {
     }
 
     public static void editNfile(String input, CommandExecutionContext c) {
-        AppLogger.info("[edit] Edit file execution (placeholder)");
+        String[] args = c.getArgs();
+        if (args.length == 0) {
+            AppLogger.error("Usage: :edit <file>");
+            return;
+        }
+        java.nio.file.Path target = java.nio.file.Path.of(String.join(" ", args));
+        if (!target.isAbsolute() && c.ctx != null && c.ctx.router != null) {
+            target = c.ctx.router.getCurrentDirectory().resolve(target);
+        }
+        if (!java.nio.file.Files.isRegularFile(target)) {
+            AppLogger.error("File not found: " + target.toAbsolutePath());
+            return;
+        }
+        java.nio.file.Path opened = target.toAbsolutePath().normalize();
+        SwingUtilities.invokeLater(() -> {
+            try {
+                com.sphere.ui.QuickCodeEditorFrame frame = com.sphere.Sphere.editorWindow();
+                if (frame == null) {
+                    AppLogger.error("The editor window is not open yet.");
+                    return;
+                }
+                frame.openFileInternally(opened.toFile());
+                frame.setVisible(true);
+            } catch (Throwable t) {
+                AppLogger.error("Editor did not open " + opened + ": " + t.getMessage());
+            }
+        });
     }
 
     public static void createNew(String input, CommandExecutionContext c) {
-        AppLogger.info("[create] Create new item execution (placeholder)");
+        String[] args = c.getArgs();
+        if (args.length == 0) {
+            AppLogger.error("Usage: :create new <file>");
+            return;
+        }
+        java.nio.file.Path target = java.nio.file.Path.of(String.join(" ", args));
+        if (!target.isAbsolute() && c.ctx != null && c.ctx.router != null) {
+            target = c.ctx.router.getCurrentDirectory().resolve(target);
+        }
+        target = target.toAbsolutePath().normalize();
+        if (java.nio.file.Files.exists(target)) {
+            AppLogger.error("Already exists: " + target);
+            return;
+        }
+        try {
+            if (target.getParent() != null) {
+                java.nio.file.Files.createDirectories(target.getParent());
+            }
+            java.nio.file.Files.createFile(target);
+            AppLogger.raw("Created " + target);
+        } catch (java.io.IOException ex) {
+            AppLogger.error("Could not create " + target + ": " + ex.getMessage());
+        }
     }
 
     // --- Project Commands ---
     public static void projectNew(String input, CommandExecutionContext c) {
-        AppLogger.info("[project] Create new project (placeholder)");
+        // The folder layout has one owner, the creator window; a second copy here
+        // would drift from it at the first change.
+        SwingUtilities.invokeLater(() -> {
+            try {
+                new com.sphere.components.workspace.ProjectCreatorWindow(null).setVisible(true);
+            } catch (Throwable t) {
+                AppLogger.error("Project creator did not open: " + t.getMessage());
+            }
+        });
     }
 
     public static void projectOpen(String input, CommandExecutionContext c) {
-        AppLogger.info("[project] Open existing project (placeholder)");
+        setActiveProject(c, "open");
     }
 
     public static void projectClose(String input, CommandExecutionContext c) {
-        AppLogger.info("[project] Close current project (placeholder)");
+        if (c.ctx == null || c.ctx.getActiveProject() == null) {
+            AppLogger.raw("No active project.");
+            return;
+        }
+        String previous = c.ctx.getActiveProject();
+        c.ctx.setActiveProject(null);
+        AppLogger.raw("Closed " + previous);
     }
 
     public static void projectSet(String input, CommandExecutionContext c) {
-        AppLogger.info("[project] Set active project (placeholder)");
+        setActiveProject(c, "set");
     }
 
     public static void projectInfo(String input, CommandExecutionContext c) {
-        AppLogger.info("[project] Display current project info (placeholder)");
+        String name = c.ctx == null ? null : c.ctx.getActiveProject();
+        String[] args = c.getArgs();
+        if (args.length > 0) {
+            name = String.join(" ", args);
+        }
+        if (name == null) {
+            AppLogger.raw("No active project. Use  :project open <name>");
+            return;
+        }
+        java.nio.file.Path project = workspaceRoot().resolve(name);
+        if (!java.nio.file.Files.isDirectory(project)) {
+            AppLogger.error("No project named " + name + " under " + workspaceRoot().toAbsolutePath());
+            return;
+        }
+        long[] tally = tallyTree(project);
+        AppLogger.raw("  name       " + name);
+        AppLogger.raw("  path       " + project.toAbsolutePath());
+        AppLogger.raw("  files      " + tally[0] + " in " + tally[1] + " folders");
+        AppLogger.raw("  size       " + humanBytes(tally[2]));
+        for (String marker : new String[]{".projectsettings", ".workflow", ".presets",
+                                          "CMakeLists.txt", "README.md"}) {
+            AppLogger.raw(String.format("  %-10s %s", marker,
+                java.nio.file.Files.isRegularFile(project.resolve(marker)) ? "yes" : "no"));
+        }
     }
 
     public static void projectList(String input, CommandExecutionContext c) {
-        AppLogger.info("[project] List available projects (placeholder)");
+        java.util.List<java.nio.file.Path> projects = workspaceProjects();
+        if (projects == null) {
+            return;
+        }
+        if (projects.isEmpty()) {
+            AppLogger.raw("No project under " + workspaceRoot().toAbsolutePath());
+            return;
+        }
+        String active = c.ctx == null ? null : c.ctx.getActiveProject();
+        for (java.nio.file.Path project : projects) {
+            String name = project.getFileName().toString();
+            AppLogger.raw(String.format("  %s %-28s %s",
+                name.equals(active) ? "*" : " ", name,
+                java.nio.file.Files.isRegularFile(project.resolve(".projectsettings"))
+                    ? "" : "(no .projectsettings)"));
+        }
     }
 
     public static void projectDelete(String input, CommandExecutionContext c) {
-        AppLogger.info("[project] Delete project (placeholder)");
+        String[] args = c.getArgs();
+        if (args.length == 0) {
+            AppLogger.error("Usage: :project delete <name> --confirm");
+            return;
+        }
+        boolean confirmed = java.util.Arrays.asList(args).contains("--confirm");
+        String name = args[0];
+        java.nio.file.Path project = workspaceRoot().resolve(name);
+        if (!java.nio.file.Files.isDirectory(project)) {
+            AppLogger.error("No project named " + name);
+            return;
+        }
+        if (!confirmed) {
+            long[] tally = tallyTree(project);
+            AppLogger.raw("This deletes " + project.toAbsolutePath());
+            AppLogger.raw(tally[0] + " files, " + humanBytes(tally[2]) + ", permanently.");
+            AppLogger.raw("Type  :project delete " + name + " --confirm  to go ahead.");
+            return;
+        }
+        try (java.util.stream.Stream<java.nio.file.Path> walk =
+                java.nio.file.Files.walk(project)) {
+            java.util.List<java.nio.file.Path> all =
+                walk.sorted(java.util.Comparator.reverseOrder()).toList();
+            for (java.nio.file.Path f : all) {
+                java.nio.file.Files.deleteIfExists(f);
+            }
+            if (c.ctx != null && name.equals(c.ctx.getActiveProject())) {
+                c.ctx.setActiveProject(null);
+            }
+            AppLogger.raw("Deleted " + project.toAbsolutePath());
+        } catch (java.io.IOException ex) {
+            AppLogger.error("Deletion stopped: " + ex.getMessage());
+        }
     }
 
     // --- Workspace Commands ---
     public static void workspaceScan(String input, CommandExecutionContext c) {
-        AppLogger.info("[workspace] Scan workspace for projects (placeholder)");
+        java.util.List<java.nio.file.Path> projects = workspaceProjects();
+        if (projects == null) {
+            return;
+        }
+        int complete = 0;
+        int loose = 0;
+        for (java.nio.file.Path project : projects) {
+            if (java.nio.file.Files.isRegularFile(project.resolve(".projectsettings"))) {
+                complete++;
+            } else {
+                loose++;
+                AppLogger.raw("  untracked  " + project.getFileName()
+                    + "  (no .projectsettings)");
+            }
+        }
+        AppLogger.raw("  " + complete + " tracked, " + loose + " untracked, in "
+            + workspaceRoot().toAbsolutePath());
     }
 
     public static void workspaceClean(String input, CommandExecutionContext c) {
-        AppLogger.info("[workspace] Clean temporary files (placeholder)");
+        java.util.List<java.nio.file.Path> projects = workspaceProjects();
+        if (projects == null) {
+            return;
+        }
+        boolean confirmed = java.util.Arrays.asList(c.getArgs()).contains("--confirm");
+        java.util.List<java.nio.file.Path> victims = new java.util.ArrayList<>();
+        long bytes = 0;
+        for (java.nio.file.Path project : projects) {
+            try (java.util.stream.Stream<java.nio.file.Path> walk =
+                    java.nio.file.Files.walk(project)) {
+                for (java.nio.file.Path f : walk.toList()) {
+                    String name = f.getFileName().toString();
+                    boolean junk = name.equals("__pycache__") || name.equals(".pytest_cache")
+                        || name.endsWith(".o") || name.endsWith(".obj") || name.endsWith(".class")
+                        || name.endsWith(".pyc") || name.endsWith(".d")
+                        || (java.nio.file.Files.isDirectory(f)
+                            && (name.equals("build") || name.equals("bin")));
+                    if (junk) {
+                        victims.add(f);
+                        long[] tally = java.nio.file.Files.isDirectory(f)
+                            ? tallyTree(f) : new long[]{1, 0, java.nio.file.Files.size(f)};
+                        bytes += tally[2];
+                    }
+                }
+            } catch (java.io.IOException ex) {
+                AppLogger.error(project.getFileName() + ": " + ex.getMessage());
+            }
+        }
+        if (victims.isEmpty()) {
+            AppLogger.raw("Nothing to clean.");
+            return;
+        }
+        if (!confirmed) {
+            for (java.nio.file.Path v : victims) {
+                AppLogger.raw("  " + workspaceRoot().relativize(v));
+            }
+            AppLogger.raw(victims.size() + " entries, " + humanBytes(bytes)
+                + ". Type  :workspace clean --confirm  to remove them.");
+            return;
+        }
+        int removed = 0;
+        for (java.nio.file.Path v : victims) {
+            try (java.util.stream.Stream<java.nio.file.Path> walk =
+                    java.nio.file.Files.walk(v)) {
+                for (java.nio.file.Path f : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                    if (java.nio.file.Files.deleteIfExists(f)) {
+                        removed++;
+                    }
+                }
+            } catch (java.io.IOException ex) {
+                AppLogger.error("Could not remove " + v + ": " + ex.getMessage());
+            }
+        }
+        AppLogger.raw(removed + " entries removed, " + humanBytes(bytes) + " freed.");
     }
 
     public static void workspaceDiag(String input, CommandExecutionContext c) {
-        AppLogger.info("[workspace] Run workspace diagnostics (placeholder)");
+        java.nio.file.Path root = workspaceRoot();
+        if (!java.nio.file.Files.isDirectory(root)) {
+            AppLogger.error("No WorkSpace folder at " + root.toAbsolutePath());
+            return;
+        }
+        AppLogger.raw("  root       " + root.toAbsolutePath());
+        AppLogger.raw("  writable   " + java.nio.file.Files.isWritable(root));
+        java.util.List<java.nio.file.Path> projects = workspaceProjects();
+        long[] tally = tallyTree(root);
+        AppLogger.raw("  projects   " + (projects == null ? 0 : projects.size()));
+        AppLogger.raw("  files      " + tally[0] + " in " + tally[1] + " folders");
+        AppLogger.raw("  size       " + humanBytes(tally[2]));
+        try {
+            java.nio.file.FileStore store = java.nio.file.Files.getFileStore(root);
+            AppLogger.raw("  free space " + humanBytes(store.getUsableSpace())
+                + " of " + humanBytes(store.getTotalSpace()));
+        } catch (java.io.IOException ex) {
+            AppLogger.error("Free space unknown: " + ex.getMessage());
+        }
     }
 
     // --- Environment Commands ---
@@ -96,41 +315,158 @@ public class Handlers {
 
     // --- Backend Commands ---
     public static void backendList(String input, CommandExecutionContext c) {
-        AppLogger.info("[backend] List available backends (placeholder)");
+        if (c == null || c.ctx == null || c.ctx.backends == null || c.ctx.backends.isEmpty()) {
+            AppLogger.error("No backend is registered.");
+            return;
+        }
+        c.ctx.backends.forEach((name, backend) -> AppLogger.raw(String.format("  %-10s %s",
+            name, backend == null ? "not loaded" : backend.getClass().getSimpleName())));
     }
 
     public static void backendDiag(String input, CommandExecutionContext c) {
-        AppLogger.info("[backend] Run backend diagnostics (placeholder)");
+        if (c == null || c.ctx == null || c.ctx.backends == null) {
+            AppLogger.error("No backend is registered.");
+            return;
+        }
+        com.sphere.utils.SettingsManager sm = new com.sphere.utils.SettingsManager();
+        String[][] probes = {
+            {"python", "PYTHON_EXEC", "python3"},
+            {"cpp", "GPP_DIR", "g++"},
+            {"js", "NODE_DIR", "node"},
+        };
+        for (String[] probe : probes) {
+            Object backend = c.ctx.backends.get(probe[0]);
+            String tool = sm.isDeclaredEmpty(probe[1]) ? null : sm.resolveTool(probe[1], probe[2]);
+            AppLogger.raw(String.format("  %-8s %-14s %s", probe[0],
+                backend == null ? "not loaded" : "loaded",
+                tool == null ? (sm.isDeclaredEmpty(probe[1])
+                    ? probe[1] + " is empty in settings.conf" : probe[2] + " not found")
+                    : tool));
+        }
     }
 
     public static void backendReload(String input, CommandExecutionContext c) {
-        AppLogger.info("[backend] Reload backend configurations (placeholder)");
+        com.sphere.utils.SettingsManager sm = new com.sphere.utils.SettingsManager();
+        com.sphere.components.terminal.ConfigLoader.load(sm);
+        AppLogger.raw("settings.conf reread. Backends already running keep their current tools;");
+        AppLogger.raw("a new terminal or a restarted backend picks up the new values.");
     }
 
     // --- Configuration Commands ---
     public static void configShow(String input, CommandExecutionContext c) {
-        AppLogger.info("[config] Display configurations (placeholder)");
+        com.sphere.utils.SettingsManager sm = new com.sphere.utils.SettingsManager();
+        java.util.Map<String, java.util.List<java.util.Map.Entry<String, String>>> all =
+            sm.getSequentialStructure();
+        if (all.isEmpty()) {
+            AppLogger.error("No settings.conf found in " + java.nio.file.Path.of("").toAbsolutePath());
+            return;
+        }
+        for (java.util.Map.Entry<String, java.util.List<java.util.Map.Entry<String, String>>> section
+                : all.entrySet()) {
+            AppLogger.raw("[" + section.getKey() + "]");
+            for (java.util.Map.Entry<String, String> kv : section.getValue()) {
+                String value = kv.getValue();
+                AppLogger.raw("  " + kv.getKey() + " = "
+                    + (value == null || value.isBlank() ? "(disabled)" : value));
+            }
+        }
     }
 
     public static void configEdit(String input, CommandExecutionContext c) {
-        AppLogger.info("[config] Edit configurations (placeholder)");
+        java.nio.file.Path conf = java.nio.file.Path.of(
+            com.sphere.utils.SettingsManager.CONFIG_FILENAME).toAbsolutePath();
+        if (!java.nio.file.Files.isReadable(conf)) {
+            AppLogger.error("No settings.conf to edit at " + conf);
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
+            try {
+                new com.sphere.utils.settingsmanager.SettingsEditorWindow(conf).setVisible(true);
+            } catch (Exception ex) {
+                AppLogger.error("Settings editor did not open: " + ex.getMessage());
+            }
+        });
     }
 
     public static void configReset(String input, CommandExecutionContext c) {
-        AppLogger.info("[config] Reset configurations to defaults (placeholder)");
+        // Destructive: the file is only moved aside, and only when asked twice.
+        java.nio.file.Path conf = java.nio.file.Path.of(
+            com.sphere.utils.SettingsManager.CONFIG_FILENAME).toAbsolutePath();
+        String[] args = c.getArgs();
+        boolean confirmed = args.length > 0 && args[0].equals("--confirm");
+        if (!confirmed) {
+            AppLogger.raw("This moves " + conf + " aside and lets Sphere rebuild it at the");
+            AppLogger.raw("next start. Your declared paths are kept in the backup file.");
+            AppLogger.raw("Type  :config reset --confirm  to go ahead.");
+            return;
+        }
+        try {
+            if (!java.nio.file.Files.exists(conf)) {
+                AppLogger.error("Nothing to reset: " + conf + " does not exist.");
+                return;
+            }
+            java.nio.file.Path backup = conf.resolveSibling("settings.conf.reset-"
+                + java.time.LocalDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
+            java.nio.file.Files.move(conf, backup);
+            AppLogger.raw("Moved to " + backup + ". Restart Sphere to rebuild a fresh file.");
+        } catch (java.io.IOException ex) {
+            AppLogger.error("Reset failed: " + ex.getMessage());
+        }
     }
 
     // --- Logging Commands ---
     public static void logLevel(String input, CommandExecutionContext c) {
-        AppLogger.info("[log] Set logging severity level (placeholder)");
+        String[] args = c.getArgs();
+        if (args.length == 0) {
+            AppLogger.raw("Logging level: " + (AppLogger.isDebugEnabled() ? "debug" : "normal"));
+            AppLogger.raw("Use  :log level debug  or  :log level normal");
+            return;
+        }
+        String wanted = args[0].toLowerCase(java.util.Locale.ROOT);
+        if (wanted.equals("debug") || wanted.equals("verbose")) {
+            AppLogger.setDebugEnabled(true);
+            AppLogger.raw("Logging level: debug");
+        } else if (wanted.equals("normal") || wanted.equals("info") || wanted.equals("off")) {
+            AppLogger.setDebugEnabled(false);
+            AppLogger.raw("Logging level: normal");
+        } else {
+            AppLogger.error("Unknown level: " + args[0] + ". Use debug or normal.");
+        }
     }
 
     public static void logTail(String input, CommandExecutionContext c) {
-        AppLogger.info("[log] Tail live log output (placeholder)");
+        java.util.List<java.nio.file.Path> sessions = com.sphere.utils.SessionManager.getAllSessions();
+        if (sessions.isEmpty()) {
+            AppLogger.error("No session log found.");
+            return;
+        }
+        java.nio.file.Path latest = sessions.get(sessions.size() - 1);
+        int count = 40;
+        String[] args = c.getArgs();
+        if (args.length > 0) {
+            try {
+                count = Math.max(1, Integer.parseInt(args[0]));
+            } catch (NumberFormatException ex) {
+                AppLogger.error("Not a number: " + args[0]);
+                return;
+            }
+        }
+        try {
+            java.util.List<String> lines = java.nio.file.Files.readAllLines(
+                latest, java.nio.charset.StandardCharsets.UTF_8);
+            AppLogger.raw(latest.getFileName() + ", last " + Math.min(count, lines.size())
+                          + " of " + lines.size() + " lines:");
+            for (String line : lines.subList(Math.max(0, lines.size() - count), lines.size())) {
+                AppLogger.raw("  " + line);
+            }
+        } catch (java.io.IOException ex) {
+            AppLogger.error("Session log could not be read: " + ex.getMessage());
+        }
     }
 
     public static void logClear(String input, CommandExecutionContext c) {
-        AppLogger.info("[log] Clear target log files (placeholder)");
+        AppLogger.clear();
     }
 
     public static void clearConsole(String input, CommandExecutionContext ctx) {
@@ -227,8 +563,8 @@ public class Handlers {
         switchMode(c, null, ""); 
     }
 
-    public static void pyDiag(String input, CommandExecutionContext c) { 
-        AppLogger.info("[py] Running diagnostics (placeholder)"); 
+    public static void pyDiag(String input, CommandExecutionContext c) {
+        reportTool("python", "PYTHON_EXEC", "python3", "--version");
     }
 
     public static void pyVars(String input, CommandExecutionContext c) { 
@@ -253,8 +589,8 @@ public class Handlers {
         AppLogger.info("[cpp] Inspecting memory structure definitions (placeholder)"); 
     }
 
-    public static void cppDiag(String input, CommandExecutionContext c) { 
-        AppLogger.info("[cpp] Running environment toolchain diagnostic check (placeholder)"); 
+    public static void cppDiag(String input, CommandExecutionContext c) {
+        reportTool("cpp", "GPP_DIR", "g++", "--version");
     }
 
     // --- JS Engine ---
@@ -271,37 +607,221 @@ public class Handlers {
         switchMode(c, null, ""); 
     }
 
-    public static void jsEnv(String input, CommandExecutionContext c) { 
-        AppLogger.info("[js] Dumping engine configuration parameters (placeholder)"); 
+    public static void jsEnv(String input, CommandExecutionContext c) {
+        reportTool("js", "NODE_DIR", "node", "-p", "process.versions.v8");
     }
 
-    public static void jsDiag(String input, CommandExecutionContext c) { 
-        AppLogger.info("[js] Checking active ECMAScript interpreter states (placeholder)"); 
+    public static void jsDiag(String input, CommandExecutionContext c) {
+        reportTool("js", "NODE_DIR", "node", "--version");
     }
 
     // --- Snippet & Tool Commands ---
-    public static void snippetList(String input, CommandExecutionContext c) { 
-        AppLogger.info("[snippet] Listing indexed workspace code snippets (placeholder)"); 
+    public static void snippetList(String input, CommandExecutionContext c) {
+        java.nio.file.Path root = java.nio.file.Path.of("snippets");
+        if (!java.nio.file.Files.isDirectory(root)) {
+            AppLogger.error("No snippets folder at " + root.toAbsolutePath());
+            return;
+        }
+        try (java.util.stream.Stream<java.nio.file.Path> walk =
+                java.nio.file.Files.walk(root)) {
+            java.util.List<java.nio.file.Path> files = walk
+                .filter(java.nio.file.Files::isRegularFile)
+                .sorted()
+                .toList();
+            if (files.isEmpty()) {
+                AppLogger.raw("No snippet indexed under " + root.toAbsolutePath());
+                return;
+            }
+            for (java.nio.file.Path f : files) {
+                AppLogger.raw(String.format("  %-40s %d bytes",
+                    root.relativize(f), java.nio.file.Files.size(f)));
+            }
+        } catch (java.io.IOException ex) {
+            AppLogger.error("Snippets could not be listed: " + ex.getMessage());
+        }
     }
 
-    public static void snippetInfo(String input, CommandExecutionContext c) { 
-        AppLogger.info("[snippet] Displaying target metadata definitions (placeholder)"); 
+    public static void snippetInfo(String input, CommandExecutionContext c) {
+        String[] args = c.getArgs();
+        if (args.length == 0) {
+            AppLogger.error("Usage: :snippet info <name>");
+            return;
+        }
+        java.nio.file.Path root = java.nio.file.Path.of("snippets");
+        try (java.util.stream.Stream<java.nio.file.Path> walk =
+                java.nio.file.Files.walk(root)) {
+            java.nio.file.Path found = walk
+                .filter(java.nio.file.Files::isRegularFile)
+                .filter(f -> f.getFileName().toString().contains(args[0]))
+                .findFirst().orElse(null);
+            if (found == null) {
+                AppLogger.error("No snippet matching: " + args[0]);
+                return;
+            }
+            AppLogger.raw(found.toAbsolutePath().toString());
+            AppLogger.raw(java.nio.file.Files.size(found) + " bytes, modified "
+                + java.nio.file.Files.getLastModifiedTime(found));
+            for (String line : java.nio.file.Files.readAllLines(
+                    found, java.nio.charset.StandardCharsets.UTF_8)) {
+                AppLogger.raw("  " + line);
+            }
+        } catch (java.io.IOException ex) {
+            AppLogger.error("Snippet could not be read: " + ex.getMessage());
+        }
     }
 
-    public static void snippetReload(String input, CommandExecutionContext c) { 
-        AppLogger.info("[snippet] Performing hot reload on dynamic registers (placeholder)"); 
+    public static void snippetReload(String input, CommandExecutionContext c) {
+        snippetList(input, c);
     }
 
-    public static void toolsDiag(String input, CommandExecutionContext c) { 
-        AppLogger.info("[tools] Auditing local platform dependencies (placeholder)"); 
+    public static void toolsDiag(String input, CommandExecutionContext c) {
+        com.sphere.utils.StartupDiagnostic.run(new com.sphere.utils.SettingsManager());
     }
 
-    public static void toolsList(String input, CommandExecutionContext c) { 
-        AppLogger.info("[tools] Listing valid compiled binary endpoints (placeholder)"); 
+    public static void toolsList(String input, CommandExecutionContext c) {
+        com.sphere.utils.SettingsManager sm = new com.sphere.utils.SettingsManager();
+        java.util.Map<String, java.util.List<java.util.Map.Entry<String, String>>> all =
+            sm.getSequentialStructure();
+        boolean any = false;
+        for (String section : new String[]{"SYSTEM_PATH", "GENERAL"}) {
+            java.util.List<java.util.Map.Entry<String, String>> entries = all.get(section);
+            if (entries == null) {
+                continue;
+            }
+            for (java.util.Map.Entry<String, String> kv : entries) {
+                any = true;
+                String key = kv.getKey();
+                String declared = kv.getValue();
+                String resolved;
+                if (sm.isDeclaredEmpty(key)) {
+                    resolved = "disabled in settings.conf";
+                } else {
+                    String found = sm.resolveTool(key, null);
+                    resolved = found == null ? "not found" : found;
+                }
+                AppLogger.raw(String.format("  %-20s %-40s %s", key,
+                    declared == null || declared.isBlank() ? "(empty)" : declared, resolved));
+            }
+        }
+        if (!any) {
+            AppLogger.error("No [SYSTEM_PATH] or [GENERAL] section in settings.conf.");
+        }
     }
 
-    public static void toolsUpdate(String input, CommandExecutionContext c) { 
-        AppLogger.info("[tools] Refreshing dependency metadata versions (placeholder)"); 
+    public static void toolsUpdate(String input, CommandExecutionContext c) {
+        // Rereads settings.conf and reports what each declared tool resolves to now.
+        toolsList(input, c);
+    }
+
+    /** Projects live in WorkSpace/, one folder each. */
+    private static java.nio.file.Path workspaceRoot() {
+        return java.nio.file.Path.of("WorkSpace");
+    }
+
+    private static java.util.List<java.nio.file.Path> workspaceProjects() {
+        java.nio.file.Path root = workspaceRoot();
+        if (!java.nio.file.Files.isDirectory(root)) {
+            AppLogger.error("No WorkSpace folder at " + root.toAbsolutePath());
+            return null;
+        }
+        try (java.util.stream.Stream<java.nio.file.Path> list = java.nio.file.Files.list(root)) {
+            return list.filter(java.nio.file.Files::isDirectory).sorted().toList();
+        } catch (java.io.IOException ex) {
+            AppLogger.error("WorkSpace could not be read: " + ex.getMessage());
+            return null;
+        }
+    }
+
+    private static void setActiveProject(CommandExecutionContext c, String verb) {
+        String[] args = c.getArgs();
+        if (args.length == 0) {
+            AppLogger.error("Usage: :project " + verb + " <name>");
+            return;
+        }
+        String name = String.join(" ", args);
+        java.nio.file.Path project = workspaceRoot().resolve(name);
+        if (!java.nio.file.Files.isDirectory(project)) {
+            AppLogger.error("No project named " + name + " under "
+                + workspaceRoot().toAbsolutePath());
+            return;
+        }
+        if (c.ctx != null) {
+            c.ctx.setActiveProject(name);
+        }
+        AppLogger.raw("Active project: " + name + "  (" + project.toAbsolutePath() + ")");
+    }
+
+    /** files, folders, bytes. */
+    private static long[] tallyTree(java.nio.file.Path root) {
+        long files = 0;
+        long folders = 0;
+        long bytes = 0;
+        try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(root)) {
+            for (java.nio.file.Path f : walk.toList()) {
+                if (java.nio.file.Files.isDirectory(f)) {
+                    folders++;
+                } else {
+                    files++;
+                    try {
+                        bytes += java.nio.file.Files.size(f);
+                    } catch (java.io.IOException ignored) {
+                        // a file that vanished between the walk and the read
+                    }
+                }
+            }
+        } catch (java.io.IOException ex) {
+            AppLogger.error(root.getFileName() + " could not be walked: " + ex.getMessage());
+        }
+        return new long[]{files, Math.max(0, folders - 1), bytes};
+    }
+
+    private static String humanBytes(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        String[] units = {"KiB", "MiB", "GiB", "TiB"};
+        double value = bytes;
+        int unit = -1;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+        return String.format(java.util.Locale.ROOT, "%.1f %s", value, units[unit]);
+    }
+
+    /** Runs a declared tool with the given arguments and prints its first answer. */
+    private static void reportTool(String label, String key, String fallback, String... args) {
+        com.sphere.utils.SettingsManager sm = new com.sphere.utils.SettingsManager();
+        if (sm.isDeclaredEmpty(key)) {
+            AppLogger.raw("  " + label + ": " + key + " is empty in settings.conf, which disables it.");
+            return;
+        }
+        String tool = sm.resolveTool(key, fallback);
+        if (tool == null) {
+            AppLogger.error(label + ": " + fallback + " not found. Set " + key + " in settings.conf.");
+            return;
+        }
+        java.util.List<String> command = new java.util.ArrayList<>();
+        command.add(tool);
+        command.addAll(java.util.Arrays.asList(args));
+        try {
+            Process probe = new ProcessBuilder(command).redirectErrorStream(true).start();
+            String answer;
+            try (java.io.BufferedReader in = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(probe.getInputStream(),
+                        java.nio.charset.StandardCharsets.UTF_8))) {
+                answer = in.readLine();
+            }
+            if (!probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                probe.destroyForcibly();
+            }
+            AppLogger.raw("  " + label + ": " + tool);
+            AppLogger.raw("  " + " ".repeat(label.length()) + "  " + (answer == null ? "(no answer)" : answer));
+        } catch (java.io.IOException ex) {
+            AppLogger.error(label + ": " + tool + " did not run: " + ex.getMessage());
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void switchMode(CommandExecutionContext c, String mode, String indicator) {

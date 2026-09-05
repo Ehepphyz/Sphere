@@ -19,7 +19,7 @@ import com.sphere.utils.AppLogger;
 import com.sphere.fonts.FontLoader;
 
 /**
- * One editor tab: a styled code surface with syntax colouring, a gutter carrying
+ * One editor tab: a styled code surface with syntax coloring, a gutter carrying
  * breakpoints and diagnostics, completion, and the markdown or LaTeX preview.
  */
 public class CodeTab extends JPanel {
@@ -224,7 +224,7 @@ public class CodeTab extends JPanel {
         return language;
     }
 
-    /** Rebuilds colours after a theme switch. */
+    /** Rebuilds colors after a theme switch. */
     public void refreshTheme() {
         setBackground(EditorTheme.background());
         editorArea.applyTheme();

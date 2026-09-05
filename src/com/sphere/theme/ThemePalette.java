@@ -38,6 +38,7 @@ public interface ThemePalette {
     Color getLogInfoPrefix();
     Color getLogPromptPrefix();
     Color getLogWarnPrefix();
+    Color getLogDebugPrefix();
 
     Color getLogErrorText();
     Color getLogWarnText();

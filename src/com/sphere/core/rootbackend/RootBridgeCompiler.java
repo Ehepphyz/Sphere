@@ -574,7 +574,14 @@ public final class RootBridgeCompiler {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectError(ProcessBuilder.Redirect.DISCARD);
             pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
-            return pb.start().waitFor() == 0;
+            // Bounded, like the other probes in this file: a compiler that hangs
+            // used to hold the calling thread for ever and leave its process alive.
+            Process probe = pb.start();
+            if (!probe.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                probe.destroyForcibly();
+                return false;
+            }
+            return probe.exitValue() == 0;
         } catch (Exception e) {
             return false;
         }

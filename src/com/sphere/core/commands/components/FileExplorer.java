@@ -23,6 +23,7 @@ import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
+import com.sphere.utils.AppLogger;
 
 public class FileExplorer extends JTree {
 
@@ -666,6 +667,20 @@ public class FileExplorer extends JTree {
         return keep;
     }
 
+    /**
+     * Stops the watcher. Without it each folder keeps an inotify registration for
+     * the life of the application, and Linux eventually refuses new ones.
+     */
+    public void disposeWatcher() {
+        try {
+            if (watchService != null) {
+                watchService.close();
+            }
+        } catch (java.io.IOException ex) {
+            AppLogger.error("File watcher did not close: " + ex.getMessage());
+        }
+    }
+
     /* -------------------------------------------------------------------------
     *  File system watcher (cross‑platform, debounced, EDT‑safe)
     */
@@ -711,6 +726,11 @@ public class FileExplorer extends JTree {
 
                         key.reset();
 
+                    } catch (java.nio.file.ClosedWatchServiceException closed) {
+                        return;                 // disposeWatcher() closed the service
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
                     } catch (Exception ignored) {}
                 }
             });
@@ -719,7 +739,7 @@ public class FileExplorer extends JTree {
             watchThread.start();
 
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLogger.error("File watcher could not start: " + e.getMessage());
         }
     }
 

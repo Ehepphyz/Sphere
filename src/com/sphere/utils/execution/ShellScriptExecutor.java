@@ -128,7 +128,7 @@ public final class ShellScriptExecutor {
     }
 
     private static String readShebangHeader(Path path) {
-        try (BufferedReader reader = new BufferedReader(new FileReader(path.toFile()))) {
+        try (BufferedReader reader = java.nio.file.Files.newBufferedReader(path, java.nio.charset.StandardCharsets.UTF_8)) {
             String firstLine = reader.readLine();
             if (firstLine != null) {
                 firstLine = firstLine.replace("\uFEFF", "");

@@ -63,7 +63,7 @@ public class PythonBackend implements Backend {
     public synchronized void cancelCurrentExecution() {
         if (currentProcess != null && currentProcess.isAlive()) {
             currentProcess.destroyForcibly();
-            AppLogger.info("Python process execution forcibly cancelled by user.");
+            AppLogger.info("Python process execution forcibly canceled by user.");
         }
     }
 
@@ -427,7 +427,7 @@ public class PythonBackend implements Backend {
                             if (upper.contains("ERROR") || upper.contains("TRACEBACK")) {
                                 AppLogger.error(cleanLine);
                             } else {
-                                AppLogger.raw(cleanLine);
+                                AppLogger.stream(cleanLine);
                             }
                         }
                     }
@@ -574,4 +574,4 @@ public class PythonBackend implements Backend {
         String getActiveVenvPath() { return activeVenvPath; }
         boolean isVenvActive() { return activeVenvPythonExecutable != null; }
     }
-}
+}

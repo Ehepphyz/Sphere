@@ -342,7 +342,7 @@ public class WorkspaceManager {
     public void loadOrCreatePresetFile(File projectDir) {
         File f = getPresetFile(projectDir);
         if (!f.exists()) {
-            try (FileWriter w = new FileWriter(f)) {
+            try (FileWriter w = new FileWriter(f, java.nio.charset.StandardCharsets.UTF_8)) {
                 w.write(getDefaultPresetJson());
                 AppLogger.success("Created default .presets configuration for: " + projectDir.getName());
             } catch (Exception e) {
@@ -390,7 +390,7 @@ public class WorkspaceManager {
             isModified |= ensurePresetEntry(root, "Belle II", List.of("b2"));
 
             if (isModified) {
-                try (FileWriter w = new FileWriter(f)) {
+                try (FileWriter w = new FileWriter(f, java.nio.charset.StandardCharsets.UTF_8)) {
                     w.write(MinimalJson.toJson(root));
                     AppLogger.info(".presets structural fields updated for: " + projectDir.getName());
                 }

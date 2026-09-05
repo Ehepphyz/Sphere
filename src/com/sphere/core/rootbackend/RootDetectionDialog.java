@@ -290,7 +290,7 @@ public class RootDetectionDialog implements RootDetectionCallback {
         boolean rootDirUpdated = false;
 
         if (configFile.exists()) {
-            try (BufferedReader reader = new BufferedReader(new FileReader(configFile))) {
+            try (BufferedReader reader = java.nio.file.Files.newBufferedReader(configFile.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String trimmed = line.trim();
@@ -336,7 +336,7 @@ public class RootDetectionDialog implements RootDetectionCallback {
             outputLines.add("[ENGINEERING]");
         }
 
-        try (PrintWriter writer = new PrintWriter(new FileWriter(configFile, false))) {
+        try (PrintWriter writer = new PrintWriter(java.nio.file.Files.newBufferedWriter(configFile.toPath(), java.nio.charset.StandardCharsets.UTF_8))) {
             for (String outputLine : outputLines) {
                 writer.println(outputLine);
             }
@@ -386,7 +386,7 @@ public class RootDetectionDialog implements RootDetectionCallback {
 
         String rootDir = null;
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(configFile))) {
+        try (BufferedReader reader = java.nio.file.Files.newBufferedReader(configFile.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
             String line;
             boolean inGeneral = false;
 

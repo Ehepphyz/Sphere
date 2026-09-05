@@ -11,7 +11,7 @@ import java.awt.BorderLayout;
  * A second view of a running terminal.
  *
  * It shares the source's document rather than copying its text: the mirror keeps
- * the colours, stays in step for free, and no longer rebuilds the whole buffer on
+ * the colors, stays in step for free, and no longer rebuilds the whole buffer on
  * every character the shell writes.
  */
 public class TerminalMirrorView extends JPanel {

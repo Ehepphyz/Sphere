@@ -54,7 +54,7 @@ public class SessionManager {
             String fullLine = "[" + timestamp + "] " + message + System.lineSeparator();
             
             // Files.write with APPEND is inherently safer and handles opening/closing automatically
-            Files.write(sessionFilePath, fullLine.getBytes(), 
+            Files.write(sessionFilePath, fullLine.getBytes(java.nio.charset.StandardCharsets.UTF_8), 
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException e) {
             System.err.println("Failed to write to session log: " + e.getMessage());

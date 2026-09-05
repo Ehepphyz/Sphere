@@ -30,7 +30,7 @@ public class PythonEnvs {
 
             File configFile = new File(configDir, CONFIG_FILE_NAME);
             if (configFile.exists()) {
-                try (BufferedReader reader = new BufferedReader(new FileReader(configFile))) {
+                try (BufferedReader reader = java.nio.file.Files.newBufferedReader(configFile.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
                     String line = reader.readLine();
                     cachedPythonPath = (line != null) ? line.trim() : "";
                 }
@@ -264,7 +264,7 @@ public class PythonEnvs {
 
         // --- Commit Compiled File ---
         try {
-            try (BufferedWriter writer = new BufferedWriter(new FileWriter(configFile))) {
+            try (BufferedWriter writer = java.nio.file.Files.newBufferedWriter(configFile.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
                 writer.write(customPythonPath.toString());
             }
             cachedPythonPath = customPythonPath.toString();

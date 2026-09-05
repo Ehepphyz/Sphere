@@ -353,8 +353,8 @@ public class TerminalPanel extends JPanel {
         engine.stop();
     }
 
-    /** Colours the input to match the terminal surface. */
-    public void applyColours(Color background, Color foreground) {
+    /** Colors the input to match the terminal surface. */
+    public void applyColors(Color background, Color foreground) {
         input.setBackground(background);
         input.setForeground(foreground);
         input.setCaretColor(foreground);

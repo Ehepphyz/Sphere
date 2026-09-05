@@ -167,7 +167,7 @@ public class CppBackend implements Backend {
     public synchronized void cancelCurrentExecution() {
         if (currentProcess != null && currentProcess.isAlive()) {
             currentProcess.destroyForcibly();
-            AppLogger.info("C++ process pipeline forcibly cancelled by user.");
+            AppLogger.info("C++ process pipeline forcibly canceled by user.");
         }
     }
 
@@ -333,7 +333,7 @@ public class CppBackend implements Backend {
         }
     }
 
-    /// Source extensions the auto-compile pipeline recognises. ".cpp" alone left
+    /// Source extensions the auto-compile pipeline recognizes. ".cpp" alone left
     /// ".cc", ".cxx" and the ".C" of ROOT macros falling through to the raw
     /// compiler invocation, which builds a.out and never runs it.
     private static final String[] CPP_SOURCE_EXTENSIONS =
@@ -369,8 +369,8 @@ public class CppBackend implements Backend {
 
         String extension = sourceExtensionOf(sourceFile.getName());
         if (extension == null) {
-            AppLogger.error("Unrecognised C++ source extension: " + sourceFile.getName());
-            return new CppProcessRunner.CppResult("", "Unrecognised extension.", -1, false);
+            AppLogger.error("Unrecognized C++ source extension: " + sourceFile.getName());
+            return new CppProcessRunner.CppResult("", "Unrecognized extension.", -1, false);
         }
 
         final String os = System.getProperty("os.name").toLowerCase();
@@ -753,7 +753,7 @@ public class CppBackend implements Backend {
                         if (listener != null) {
                             listener.onStdoutLine(cleanLine);
                         } else {
-                            AppLogger.raw(cleanLine);
+                            AppLogger.stream(cleanLine);
                         }
                     }
                 } catch (IOException e) {
@@ -845,4 +845,4 @@ public class CppBackend implements Backend {
         void onStderrLine(String line);
         void onProcessComplete(int exitCode, boolean timedOut);
     }
-}
+}

@@ -40,15 +40,15 @@ public class TerminalEngine {
     };
 
     /**
-     * Tools hide their colours when their output is not a terminal, and here it
+     * Tools hide their colors when their output is not a terminal, and here it
      * never is: ls, grep and the compilers all check that themselves, so -auto
-     * yields nothing whatever TERM says. This asks them once to colour anyway.
+     * yields nothing whatever TERM says. This asks them once to color anyway.
      * Each form is probed before use, so a BSD or macOS shell keeps what it has.
      *
-     * The cost is real: an aliased ls writes its colour codes into a redirection
+     * The cost is real: an aliased ls writes its color codes into a redirection
      * too. A leading backslash bypasses the alias, as in \ls > list.txt.
      */
-    private static final String COLOUR_PREAMBLE = String.join("; ",
+    private static final String COLOR_PREAMBLE = String.join("; ",
         "if ls --color=always /dev/null >/dev/null 2>&1",
         "then alias ls='ls --color=always'",
         "else CLICOLOR_FORCE=1; export CLICOLOR_FORCE; alias ls='ls -G'; fi",
@@ -65,7 +65,7 @@ public class TerminalEngine {
     /**
      * Reproduces what --login would have done. A login shell ignores --rcfile, so
      * Git Bash and MSYS2 are started without it and read their profile from here,
-     * which is what lets the colour settings ride along without a typed line.
+     * which is what lets the color settings ride along without a typed line.
      */
     private static final String LOGIN_PROFILE = String.join("\n",
         "[ -r /etc/profile ] && . /etc/profile",
@@ -87,7 +87,7 @@ public class TerminalEngine {
     private BufferedWriter writer;
     private Thread readerThread;
     private volatile boolean starting;
-    private boolean forceColour = true;
+    private boolean forceColor = true;
 
     public TerminalEngine(String shellCommand) {
         this(new ShellInfo(shellCommand, shellCommand,
@@ -297,23 +297,23 @@ public class TerminalEngine {
         fireOutput("\n[i] Terminal stopped.\n");
     }
 
-    /** Turns the colour setup off. Must be set before start(). */
-    public void setForceColour(boolean on) {
-        forceColour = on;
+    /** Turns the color setup off. Must be set before start(). */
+    public void setForceColor(boolean on) {
+        forceColor = on;
     }
 
     /**
-     * The arguments the shell is launched with, colour setup included.
+     * The arguments the shell is launched with, color setup included.
      *
      * The settings go in through the shell's own startup file rather than being
      * typed in: a line sent to an interactive shell is printed back, so the
      * previous approach put its own source command on screen -- and under Windows
      * a path written D:\... is not a path any POSIX shell can open, so it printed
-     * an error and no colour at all.
+     * an error and no color at all.
      */
     private List<String> launchArguments(Map<String, String> environment) {
         List<String> arguments = new ArrayList<>(shell.arguments);
-        if (!forceColour) {
+        if (!forceColor) {
             return arguments;
         }
         String family = shellFamily();
@@ -323,23 +323,23 @@ public class TerminalEngine {
                     // --rcfile is ignored by a login shell, so the login files are
                     // read from our own file instead of through --login.
                     boolean login = arguments.remove("--login") | arguments.remove("-l");
-                    Path rc = write("terminal-colour.bashrc",
-                        (login ? LOGIN_PROFILE : BASHRC_PROFILE) + "\n" + COLOUR_PREAMBLE);
+                    Path rc = write("terminal-color.bashrc",
+                        (login ? LOGIN_PROFILE : BASHRC_PROFILE) + "\n" + COLOR_PREAMBLE);
                     arguments.add(0, forwardSlashes(rc));
                     arguments.add(0, "--rcfile");
                 }
                 case "zsh" -> {
                     Path folder = write("zdotdir/.zshrc",
-                        ZSHRC_PROFILE + "\n" + COLOUR_PREAMBLE).getParent();
+                        ZSHRC_PROFILE + "\n" + COLOR_PREAMBLE).getParent();
                     environment.put("ZDOTDIR", folder.toAbsolutePath().toString());
                 }
                 case "sh" -> {
                     // An interactive POSIX shell reads whatever $ENV points at.
-                    Path rc = write("terminal-colour.env", COLOUR_PREAMBLE);
+                    Path rc = write("terminal-color.env", COLOR_PREAMBLE);
                     environment.put("ENV", forwardSlashes(rc));
                 }
                 case "pwsh" -> {
-                    // PowerShell 7 drops its colours when its output is redirected,
+                    // PowerShell 7 drops its colors when its output is redirected,
                     // and here it always is. Untested from this side: no pwsh.
                     arguments.add("-NoExit");
                     arguments.add("-Command");
@@ -347,10 +347,10 @@ public class TerminalEngine {
                 }
                 case "wsl" -> {
                     // wsl.exe alone starts the distribution's shell without a
-                    // terminal, so it is neither interactive nor coloured. The
+                    // terminal, so it is neither interactive nor colored. The
                     // file is reached through /mnt, the only path both sides share.
-                    Path rc = write("terminal-colour.bashrc",
-                        BASHRC_PROFILE + "\n" + COLOUR_PREAMBLE);
+                    Path rc = write("terminal-color.bashrc",
+                        BASHRC_PROFILE + "\n" + COLOR_PREAMBLE);
                     String inside = mountPath(rc);
                     if (inside != null) {
                         arguments.add("--");
@@ -363,7 +363,7 @@ public class TerminalEngine {
                 default -> { }        // cmd has nothing to set
             }
         } catch (IOException ex) {
-            return new ArrayList<>(shell.arguments);   // colours stay as they are
+            return new ArrayList<>(shell.arguments);   // colors stay as they are
         }
         return arguments;
     }

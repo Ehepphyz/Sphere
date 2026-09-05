@@ -54,6 +54,7 @@ public class Sphere extends JFrame {
 
     // Persistent workspace frame instance for editing text files internally
     private com.sphere.ui.QuickCodeEditorFrame editorFrame;
+    private static com.sphere.ui.QuickCodeEditorFrame activeEditorFrame;
 
     // Layout components
     private JSplitPane leftVerticalSplit;
@@ -66,10 +67,15 @@ public class Sphere extends JFrame {
     private final HistoryManager historyManager = new HistoryManager();
     private final CommandRouter router = new CommandRouter();
     private final SettingsManager settings = new SettingsManager();
+    /** Kept so the shutdown hook can stop the shells it started. */
+    private TerminalManager terminals;
 
     public Sphere() {
         // Shutdown hook - Ensures session logs close cleanly on application termination
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            // The JVM leaves its children behind: without this, the shells, clangd
+            // and the Python kernel keep running after Sphere is closed.
+            releaseChildProcesses();
             session.close();
             AppLogger.info("Engine shutdown cleanly.");
         }));
@@ -236,6 +242,7 @@ public class Sphere extends JFrame {
         initFrame();
         initMenuBar(); // Registered the central application menu bar routing loop
         this.editorFrame = new QuickCodeEditorFrame(null);
+        activeEditorFrame = this.editorFrame;
 
         JSplitPane leftPane = initLeftPane();
         JPanel consolePanel   = initConsole();
@@ -383,6 +390,7 @@ public class Sphere extends JFrame {
 
         // --- Terminal Setup ---
         TerminalManager terminalManager = new TerminalManager();
+        this.terminals = terminalManager;
         Component terminalComponent = terminalManager.getTabbedPane();
 
         // Set the minimum size to prevent the 1/4 screen collapse issue
@@ -493,6 +501,11 @@ public class Sphere extends JFrame {
     /**
      * Exposes the active mode hook safely to external execution threads.
      */
+    /** The editor window, so a console command can open a file in it. */
+    public static com.sphere.ui.QuickCodeEditorFrame editorWindow() {
+        return activeEditorFrame;
+    }
+
     public static void assignGlobalIndicator(String indicator) {
         if (globalModeListener != null) {
             globalModeListener.accept(indicator);
@@ -532,6 +545,25 @@ public class Sphere extends JFrame {
                     break;
             }
         });
+    }
+
+    /** Stops everything Sphere started, so nothing survives the window closing. */
+    private void releaseChildProcesses() {
+        try {
+            if (terminals != null) {
+                terminals.shutdownAllTerminals();
+            }
+        } catch (Exception ex) {
+            AppLogger.error("Terminals did not stop cleanly: " + ex.getMessage());
+        }
+        try {
+            if (router != null && router.getCppBackend()
+                    instanceof com.sphere.core.cpp.CppBackend cpp) {
+                cpp.getIntellisenseBackend().stop();
+            }
+        } catch (Exception ex) {
+            AppLogger.error("clangd did not stop cleanly: " + ex.getMessage());
+        }
     }
 
     private void attachWindowHooks() {

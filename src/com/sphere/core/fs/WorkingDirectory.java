@@ -35,7 +35,9 @@ public class WorkingDirectory {
             targetPath = Paths.get(System.getProperty("user.home"));
         } else if (cleanedPath.startsWith("~" + java.io.File.separator)) {
             targetPath = Paths.get(System.getProperty("user.home")).resolve(cleanedPath.substring(2));
-        } else if (cleanedPath.startsWith("~/")) { // Explicit Unix/WSL/Forward-slash normalization fallback
+        } else if (cleanedPath.startsWith("~/") || cleanedPath.startsWith("~\\")) {
+            // Both separators, on every platform: the fs plugins already accept
+            // "~\\sub" everywhere, and cd refusing it was the only difference.
             targetPath = Paths.get(System.getProperty("user.home")).resolve(cleanedPath.substring(2));
         } else {
             targetPath = Paths.get(cleanedPath);

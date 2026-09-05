@@ -172,7 +172,7 @@ public class TerminalManager {
         menu.add(createModernMenuItem("Interrupt Command", ev -> panel.getEngine().interrupt()));
         menu.add(createModernMenuItem("Clear Output", ev -> panel.getView().clear()));
         // Shows the palette on request, instead of at every opening as before.
-        menu.add(createModernMenuItem("Test Colours", ev -> panel.getView().printColourTest()));
+        menu.add(createModernMenuItem("Test Colors", ev -> panel.getView().printColorTest()));
 
         attachPopupMenuWidthResizer(menu);
         menu.show(e.getComponent(), e.getX(), e.getY());
@@ -331,7 +331,7 @@ public class TerminalManager {
                         }
                     }
 
-                    // On ajoute un peu plus d'espace à droite (44 au lieu de 32) pour accueillir le triangle sans collision
+                    // A little more room on the right (44 instead of 32) so the arrow does not collide
                     int targetWidth = maxTextWidth + 44;
                     menu.setPreferredSize(new Dimension(targetWidth, menu.getPreferredSize().height));
                     menu.revalidate();

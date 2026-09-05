@@ -19,13 +19,13 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Colours a JTextPane from a LanguageSpec. Only the lines touched by an edit are
+ * Colors a JTextPane from a LanguageSpec. Only the lines touched by an edit are
  * rescanned, and the scan runs off the event thread so a large file does not
  * stall typing.
  */
 public final class SyntaxHighlighter implements DocumentListener {
 
-    /** Beyond this the file is left uncoloured rather than freezing the editor. */
+    /** Beyond this the file is left uncolored rather than freezing the editor. */
     private static final int MAX_HIGHLIGHT_CHARS = 4 * 1024 * 1024;
 
     private static final ExecutorService SCANNER =
@@ -113,7 +113,7 @@ public final class SyntaxHighlighter implements DocumentListener {
 
     /**
      * Widens the range to whole lines, and back to the last block-comment opener
-     * so an edit inside a comment cannot leave the rest of the file miscoloured.
+     * so an edit inside a comment cannot leave the rest of the file miscolored.
      */
     private void scheduleScan(int from, int to) {
         if (!enabled || spec.isPlain()) {

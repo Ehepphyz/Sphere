@@ -9,7 +9,7 @@ import java.util.List;
  */
 public final class SyntaxTokenizer {
 
-    /** One coloured region, offsets relative to the text handed to tokenize(). */
+    /** One colored region, offsets relative to the text handed to tokenize(). */
     public static final class Span {
         public final int start;
         public final int end;
@@ -196,7 +196,7 @@ public final class SyntaxTokenizer {
                 continue;
             }
             if (!triple && c == '\n') {
-                break; // unterminated: stop at the line so one typo cannot recolour the file
+                break; // unterminated: stop at the line so one typo cannot recolor the file
             }
             if (c == quote) {
                 if (!triple) {

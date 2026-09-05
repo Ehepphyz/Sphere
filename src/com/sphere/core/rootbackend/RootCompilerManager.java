@@ -40,7 +40,7 @@ public class RootCompilerManager {
         }
 
         Map<String, String> rawVariables = new HashMap<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(conf))) {
+        try (BufferedReader reader = java.nio.file.Files.newBufferedReader(conf.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();

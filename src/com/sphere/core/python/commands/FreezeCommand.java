@@ -34,7 +34,7 @@ public class FreezeCommand implements PythonCommand {
             }
 
             // Write to requirements.txt in the application root
-            Files.write(Paths.get(REQUIREMENTS_FILE), output.toString().getBytes());
+            Files.write(Paths.get(REQUIREMENTS_FILE), output.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             AppLogger.info("Requirements saved to: " + new File(REQUIREMENTS_FILE).getAbsolutePath());
 
         } catch (IOException e) {
