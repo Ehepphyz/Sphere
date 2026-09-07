@@ -146,6 +146,8 @@ private:
   choose_node_for_message(const BridgeMessage &msg) const noexcept;
 
   void handle_cmd_ping(const BridgeMessage &msg);
+  void handle_release_chunk(const BridgeMessage &msg);
+  void handle_alloc_chunk(const BridgeMessage &msg);
   void handle_shm_tensor_ref(const BridgeMessage &msg);
 
   void emit_event(Proto::PacketType type, const BridgeMessage &source,

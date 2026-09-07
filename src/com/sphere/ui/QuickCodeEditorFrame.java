@@ -52,12 +52,21 @@ public class QuickCodeEditorFrame extends JFrame {
             return;
         }
 
-        // If the workspace is currently displaying the file, focus the window and abort execution
-        if (editor.getCurrentFile() != null && editor.getCurrentFile().getAbsolutePath().equals(file.getAbsolutePath())) {
+        // Every explorer, console and command that opens a file lands here, so an
+        // image is turned away once rather than in each of them.
+        if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
+            com.sphere.ui.ImageEditorFrame.show(file);
+            return;
+        }
+
+        // Ask the tabs, not a remembered path: currentFile survives its tab being
+        // closed, and trusting it here left the file impossible to reopen.
+        if (editor.findTabForFile(file) != null) {
             if (!isVisible()) {
                 setVisible(true);
             }
             toFront();
+            editor.loadFile(file);
             editor.requestFocusInWindow();
             return;
         }
@@ -80,4 +89,4 @@ public class QuickCodeEditorFrame extends JFrame {
     public QuickCodeEditor getEditor() {
         return editor;
     }
-}
+}

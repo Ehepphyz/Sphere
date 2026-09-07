@@ -70,7 +70,14 @@ public class WindowManager {
      */
     public static void showFileInEditor(File file) {
         if (file == null) return;
-        
+
+        // This path builds the frame directly rather than going through
+        // openFileInternally, so an image is turned away here as well.
+        if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
+            com.sphere.ui.ImageEditorFrame.show(file);
+            return;
+        }
+
         String absolutePath = file.getAbsolutePath();
         QuickCodeEditorFrame editorFrame = editorCache.get(absolutePath);
 

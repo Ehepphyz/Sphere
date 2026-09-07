@@ -534,6 +534,12 @@ public class QuickCodeEditor extends JPanel {
         if (tabbedPane.getTabCount() == 0) {
             addNewTab(null);
         }
+
+        // currentFile used to keep naming the file whose tab had just closed, and
+        // openFileInternally treats a match there as "already open" and returns.
+        // The same file could then never be reopened without restarting Sphere.
+        CodeTab active = getActiveTab();
+        this.currentFile = active == null ? null : active.getFile();
     }
 
     /* Closes all tabs except the given one. */

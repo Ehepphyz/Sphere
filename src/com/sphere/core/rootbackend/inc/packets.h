@@ -33,9 +33,15 @@ enum class PacketType : std::uint16_t {
   CMD_SYS_UPTIME = 12,
   CMD_SYS_CONFIG = 13,
   CMD_CLING_EXEC = 14,
-  // Returns one heap chunk to the allocator. The offset travels in job_id, so
-  // a release never allocates in order to free.
+  // Returns one heap chunk to the allocator. Sent as a SHM_REF so the message
+  // carries the generation the block was handed out under; a release quoting a
+  // generation that has moved on is refused instead of freeing someone else's
+  // block. The older form, with the byte offset in job_id, still works.
   CMD_RELEASE_CHUNK = 15,
+  // Asks the engine for a heap block. Lets a client that is not the engine --
+  // the Python kernel writing a tensor back -- obtain memory without carrying a
+  // second copy of the allocator. Size and shape ride in the request's shm_ref.
+  CMD_ALLOC_CHUNK = 16,
 
   // TTree commands
   CMD_TTREE_INSPECT = 20,
@@ -63,6 +69,7 @@ enum class PacketType : std::uint16_t {
   EVT_SYS_UPTIME = 111,
   EVT_SYS_CONFIG = 112,
   EVT_CLING_RESULT = 113, // answers CMD_CLING_EXEC
+  EVT_CHUNK_READY = 114,  // answers CMD_ALLOC_CHUNK, carries offset+generation
   EVT_TTREE_INFO = 130,   // answers CMD_TTREE_INSPECT / QUERY_ENTRIES
   EVT_TTREE_SCHEMA = 131, // answers CMD_TTREE_SCAN_BRANCHES
   EVT_TTREE_ENTRY = 132,  // answers CMD_TTREE_GET_ENTRY

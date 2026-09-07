@@ -220,7 +220,7 @@ void handle_apply_filter(ShmLayout &shm, const Proto::PacketHeader &pkt, void *c
     msg.job_id = pkt.job_id;
     msg.req_id = pkt.req_id;
 
-    msg.shm_ref.offset = static_cast<std::uint32_t>(payload_off);
+    shm_ref_publish(msg.shm_ref, shm, payload_off);
     msg.shm_ref.total_bytes = static_cast<std::uint32_t>(bitmask_bytes);
     msg.shm_ref.dtype = ShmDType::UInt8;
     msg.shm_ref.ndim = 1;

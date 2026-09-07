@@ -132,9 +132,14 @@ public class CommandDefinitions {
         register(":root style set", "Select a ROOT style. Usage: :root style set <name>", Handlers::rootStyleSet);
         register(":root script load", "Load a macro. Usage: :root script load <file>", Handlers::rootLoadScript);
         register(":root script run", "Run a macro. Usage: :root script run <file>", Handlers::rootRunScript);
-        register(":root script compile", "Compile and load a macro (ACLiC). Usage: :root script compile <file>", Handlers::rootCompileScripts);
+        register(":root script compile", "Compile a macro with ACLiC. Usage: :root script compile <file> | --all", Handlers::rootCompileScripts);
         register(":root includes load", "Add an include path to the interpreter. Usage: :root includes load <dir>", Handlers::rootLoadIncludes);
         register(":root includes compile", "Add an include path to the compiler. Usage: :root includes compile <dir>", Handlers::rootCompileIncludes);
+        register(":root script list", "List the macros in user_scripts/, global then project", Handlers::rootScriptList);
+        register(":root includes list", "List the libraries and sources in includes/", Handlers::rootIncludesList);
+        register(":root includes reload", "Load again what is in includes/, after a rebuild", Handlers::rootIncludesReload);
+        register(":root includes build", "Build includes/ into shared libraries. Usage: :root includes build <file.cpp> | --all [--force]", Handlers::rootIncludesBuild);
+        register(":root build", "Build includes/ then user_scripts/, the whole pipeline", Handlers::rootBuildAll);
         register(":root cache size", "Set TFile.CacheSize. Usage: :root cache size <bytes>", Handlers::rootSetCacheSize);
         register(":root cache policy", "Set TFile.CachePolicy. Usage: :root cache policy <n>", Handlers::rootSetCachePolicy);
         register(":root cache stats", "Print the ROOT environment table", Handlers::rootCacheStats);
@@ -335,4 +340,4 @@ public class CommandDefinitions {
     public static Map<String, CommandInfo> all() {
         return Collections.unmodifiableMap(INTERNAL_COMMANDS);
     }
-}
+}

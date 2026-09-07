@@ -220,7 +220,7 @@ void Engine::scheduler_loop(std::stop_token stop_token) {
     if (shm_->cmd_ring != nullptr && shm_->cmd_ring->pop(msg)) {
       if (msg.type == MsgType::SHM_REF && msg.shm_ref.offset != 0 &&
           shm_->base != nullptr) {
-        utils::prefetch_read(shm_->base + msg.shm_ref.offset);
+        utils::prefetch_read(shm_->base + shm_ref_byte_offset(msg.shm_ref));
       }
 
       enqueue_message(msg);
@@ -394,6 +394,14 @@ void Engine::handle_message(const BridgeMessage &msg) {
     handle_cmd_ping(msg);
     return;
   }
+  if (opcode == Proto::PacketType::CMD_RELEASE_CHUNK) {
+    handle_release_chunk(msg);
+    return;
+  }
+  if (opcode == Proto::PacketType::CMD_ALLOC_CHUNK) {
+    handle_alloc_chunk(msg);
+    return;
+  }
   if (msg.type == MsgType::SHM_REF) {
     handle_shm_tensor_ref(msg);
   }
@@ -407,7 +415,7 @@ void Engine::handle_message(const BridgeMessage &msg) {
                             ? msg.shm_ref.total_bytes
                             : msg.payload_size;
   header.payload_offset =
-      (msg.type == MsgType::SHM_REF) ? msg.shm_ref.offset : 0;
+      (msg.type == MsgType::SHM_REF) ? shm_ref_byte_offset(msg.shm_ref) : 0;
   header.job_id = msg.job_id;
   header.req_id = msg.req_id;
 
@@ -432,10 +440,10 @@ void Engine::handle_message(const BridgeMessage &msg) {
   // whatever it needed, so neither outlives this call. Without this the heap
   // only ever grew.
   if (inline_staging.has_value() && *inline_staging) {
-    shm_heap_retire_chunk(*shm_, inline_staging->offset());
-  } else if (msg.type == MsgType::SHM_REF && msg.shm_ref.offset != 0 &&
-             opcode != Proto::PacketType::CMD_RELEASE_CHUNK) {
-    shm_heap_retire_chunk(*shm_, msg.shm_ref.offset);
+    shm_heap_release(*shm_, inline_staging->handle());
+  } else if (msg.type == MsgType::SHM_REF && msg.shm_ref.offset != 0) {
+    shm_heap_release(*shm_, ShmHandle{shm_ref_byte_offset(msg.shm_ref),
+                                      msg.shm_ref.generation});
   }
 
   if (!dispatched) {
@@ -454,11 +462,62 @@ void Engine::handle_cmd_ping(const BridgeMessage &msg) {
   emit_event(Proto::PacketType::EVT_PONG, msg);
 }
 
+void Engine::handle_release_chunk(const BridgeMessage &msg) {
+  // A SHM_REF release quotes the generation, so a client that kept an address
+  // across a recycle frees nothing instead of freeing someone else's block. The
+  // older form carries the raw byte offset in job_id and has no generation to
+  // check, so the live one is read.
+  if (msg.type == MsgType::SHM_REF && msg.shm_ref.offset != 0) {
+    (void)shm_heap_release(*shm_, ShmHandle{shm_ref_byte_offset(msg.shm_ref),
+                                            msg.shm_ref.generation});
+    return;
+  }
+  if (msg.job_id != 0) {
+    shm_heap_retire_chunk(*shm_, msg.job_id);
+  }
+}
+
+void Engine::handle_alloc_chunk(const BridgeMessage &msg) {
+  const ShmHandle handle =
+      shm_heap_acquire(*shm_, msg.shm_ref.total_bytes, 1,
+                       static_cast<std::uint16_t>(msg.job_id),
+                       static_cast<std::uint16_t>(msg.shm_ref.dtype));
+  BridgeMessage reply{};
+  reply.cmd = static_cast<std::uint16_t>(handle.is_valid()
+                                             ? Proto::PacketType::EVT_CHUNK_READY
+                                             : Proto::PacketType::EVT_ERROR);
+  reply.job_id = msg.job_id;
+  reply.req_id = msg.req_id;
+
+  if (handle.is_valid()) {
+    reply.type = MsgType::SHM_REF;
+    shm_ref_set_byte_offset(reply.shm_ref, handle.payload_offset);
+    reply.shm_ref.total_bytes = msg.shm_ref.total_bytes;
+    reply.shm_ref.generation = handle.generation;
+    reply.shm_ref.dtype = msg.shm_ref.dtype;
+    reply.shm_ref.ndim = msg.shm_ref.ndim;
+    for (std::size_t i = 0; i < SHM_REF_MAX_DIMS; ++i) {
+      reply.shm_ref.shape[i] = msg.shm_ref.shape[i];
+    }
+    // The block belongs to the caller now, so the engine must not free it here.
+    shm_chunk_commit(*shm_, handle.payload_offset);
+  } else {
+    reply.type = MsgType::INLINE_DATA;
+  }
+
+  if (shm_->evt_ring == nullptr || !shm_->evt_ring->push(reply)) {
+    if (handle.is_valid()) {
+      (void)shm_heap_release(*shm_, handle);
+    }
+    log::metrics().evt_ring_drops.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
 void Engine::handle_shm_tensor_ref(const BridgeMessage &msg) {
   if (shm_->base == nullptr || msg.shm_ref.offset == 0) {
     return;
   }
-  if (!shm_chunk_is_valid(*shm_, msg.shm_ref.offset)) {
+  if (!shm_chunk_is_valid(*shm_, shm_ref_byte_offset(msg.shm_ref))) {
     return;
   }
 

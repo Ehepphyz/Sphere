@@ -42,8 +42,8 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final long CACHE_LINE_SIZE = 64L;
 
     public static final int SHM_MAGIC = 0x53504852; // 'SPHR'
-    public static final int SHM_VERSION = 2;
-    public static final int PROTO_VERSION = 2;
+    public static final int SHM_VERSION = 3;
+    public static final int PROTO_VERSION = 3;
 
     // ---- ShmHeader (inc/shm_layout.h), 1408 bytes at region offset 0 --------
     public static final long HDR_MAGIC            = 0L;
@@ -114,13 +114,23 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final byte MSG_TYPE_INLINE_DATA = 1;
     public static final byte MSG_TYPE_SHM_REF     = 2;
 
-    // ---- ShmRef, 36 bytes, overlaid on the union at MSG_OFF_UNION ----------
-    public static final long REF_OFF_OFFSET      = 0L;  // uint32 from region base
+    // ---- ShmRef, 40 bytes, overlaid on the union at MSG_OFF_UNION ----------
+    // The offset is counted in units of 64 bytes, which is why a uint32 can
+    // address far more than 4 GiB. The generation says which use of that address
+    // the descriptor refers to: quoting a stale one is refused rather than
+    // reading whatever now occupies the block.
+    public static final long REF_OFF_OFFSET      = 0L;  // uint32, >> SHM_OFFSET_SHIFT
     public static final long REF_OFF_TOTAL_BYTES = 4L;  // uint32
-    public static final long REF_OFF_DTYPE       = 8L;  // 1 byte
-    public static final long REF_OFF_NDIM        = 9L;  // 1 byte
-    public static final long REF_OFF_RESERVED    = 10L; // 2 bytes
-    public static final long REF_OFF_SHAPE       = 12L; // 6 x uint32
+    public static final long REF_OFF_GENERATION  = 8L;  // uint32
+    public static final long REF_OFF_DTYPE       = 12L; // 1 byte
+    public static final long REF_OFF_NDIM        = 13L; // 1 byte
+    public static final long REF_OFF_RESERVED    = 14L; // 2 bytes
+    public static final long REF_OFF_SHAPE       = 16L; // 6 x uint32
+
+    public static final int  SHM_OFFSET_SHIFT = 6;
+
+    public static long refByteOffset(long units) { return units << SHM_OFFSET_SHIFT; }
+    public static long refOffsetUnits(long bytes) { return bytes >>> SHM_OFFSET_SHIFT; }
     public static final int  SHM_REF_MAX_DIMS    = 6;
 
     // ShmDType (inc/lockfree_ring.h)
@@ -184,6 +194,8 @@ public final class RootBackend implements AutoCloseable, Backend {
     // Hands a heap chunk back to the engine. The offset travels in jobId, so
     // releasing never allocates a chunk of its own.
     public static final short CMD_RELEASE_CHUNK   = 15;
+    public static final short CMD_ALLOC_CHUNK     = 16;
+    public static final short EVT_CHUNK_READY     = 114;
     public static final short CMD_FILE_SCAN       = 27;
     public static final short CMD_FILE_LIST       = 28;
 
@@ -495,34 +507,16 @@ public final class RootBackend implements AutoCloseable, Backend {
                 : Paths.get("rootbackend", "root_backend.shm");
         }
 
+        this.shmRegionPath = shmPath.toAbsolutePath().toString();
         this.sharedArena = Arena.ofShared();
 
         Path binaryForInit = Paths.get(System.getProperty("user.dir"), "rootbackend",
             System.getProperty("os.name").toLowerCase().contains("win")
                 ? "root-bridge.exe" : "root-bridge");
-        ensureSharedRegionExists(binaryForInit, resolveSharedRegionPath(shmPath));
 
         Path resolved = resolveSharedRegionPath(shmPath);
-        long mappedSize;
-
-        // Memory-map the SHM file directly into an off-heap MemorySegment
-        try (RandomAccessFile file = new RandomAccessFile(resolved.toFile(), "rw");
-            FileChannel channel = file.getChannel()) {
-
-            mappedSize = channel.size();
-            if (mappedSize < MIN_REGION_BYTES) {
-                throw new IllegalStateException(
-                    "Shared region " + resolved + " is only " + mappedSize
-                    + " bytes. Start the engine with --init-shm first.");
-            }
-
-            this.shmBaseSegment = channel.map(
-                FileChannel.MapMode.READ_WRITE,
-                0,
-                mappedSize,
-                this.sharedArena
-            );
-        }
+        this.shmBaseSegment = openSharedRegion(binaryForInit, resolved);
+        final long mappedSize = this.shmBaseSegment.byteSize();
 
         long baseAddress = this.shmBaseSegment.address();
         if ((baseAddress % CACHE_LINE_SIZE) != 0) {
@@ -626,6 +620,14 @@ public final class RootBackend implements AutoCloseable, Backend {
         initNativeErrorHooks();
         this.isAvailable = true;
 
+        // The user's own pipeline: every shared library sitting in includes/ is
+        // loaded now, so a macro run later already has its classes.
+        try {
+            RootUserPipeline.loadInto(this, activePipelineProject);
+        } catch (RuntimeException e) {
+            AppLogger.warn("The user pipeline could not be loaded: " + e.getMessage());
+        }
+
         synchronized (RootBackend.class) {
             if (INSTANCE == null) {
                 INSTANCE = this;
@@ -665,9 +667,11 @@ public final class RootBackend implements AutoCloseable, Backend {
                     ringSegment.set(ValueLayout.JAVA_SHORT, dataOffset + MSG_OFF_CMD, opcode);
                     ringSegment.set(ValueLayout.JAVA_INT, dataOffset + MSG_OFF_JOB_ID, jobId);
                     ringSegment.set(ValueLayout.JAVA_INT, dataOffset + MSG_OFF_REQ_ID, reqId);
-                    ringSegment.set(ValueLayout.JAVA_INT, dataOffset + MSG_OFF_UNION,
-                                    (int) heapOffset);
-                    ringSegment.set(ValueLayout.JAVA_INT, dataOffset + MSG_OFF_UNION + 4,
+                    ringSegment.set(ValueLayout.JAVA_INT,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_OFFSET,
+                                    (int) refOffsetUnits(heapOffset));
+                    ringSegment.set(ValueLayout.JAVA_INT,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_TOTAL_BYTES,
                                     byteCount);
                     RAW_LONG_HANDLE.setRelease(ringSegment, seqOffset, pos + 1L);
                     return true;
@@ -677,6 +681,66 @@ public final class RootBackend implements AutoCloseable, Backend {
                 return false;
             } else {
                 pos = (long) RAW_LONG_HANDLE.getVolatile(ringSegment, RING_ENQUEUE_POS_OFFSET);
+            }
+        }
+    }
+
+    /**
+     * Pushes a descriptor that carries its generation, so the engine can tell a
+     * live block from an address whose block has since been handed to someone
+     * else. Used for releases and for asking the engine to allocate.
+     */
+    public static boolean pushShmRefMessage(MemorySegment ringSegment, int capacityPow2,
+                                            short opcode, long heapOffset, long byteCount,
+                                            int generation, byte dtype, int reqId) {
+        final long capacity = 1L << capacityPow2;
+        final long mask = capacity - 1L;
+        long pos = (long) RAW_LONG_HANDLE.getVolatile(ringSegment, RING_ENQUEUE_POS_OFFSET);
+
+        for (int spins = 0; ; ) {
+            final long cellOffset = RING_BUFFER_BASE_OFFSET + ((pos & mask) * CELL_SIZE);
+            final long seqOffset = cellOffset + CELL_SEQ_OFFSET;
+            final long dataOffset = cellOffset + CELL_DATA_OFFSET;
+            final long seq = (long) RAW_LONG_HANDLE.getVolatile(ringSegment, seqOffset);
+            final long dif = seq - pos;
+
+            if (dif == 0) {
+                final long witness = (long) RAW_LONG_HANDLE.compareAndExchange(
+                    ringSegment, RING_ENQUEUE_POS_OFFSET, pos, pos + 1L);
+                if (witness == pos) {
+                    ringSegment.asSlice(dataOffset, BRIDGE_MESSAGE_SIZE).fill((byte) 0);
+                    ringSegment.set(ValueLayout.JAVA_BYTE, dataOffset + MSG_OFF_TYPE,
+                                    MSG_TYPE_SHM_REF);
+                    ringSegment.set(ValueLayout.JAVA_SHORT, dataOffset + MSG_OFF_CMD, opcode);
+                    ringSegment.set(ValueLayout.JAVA_INT, dataOffset + MSG_OFF_REQ_ID, reqId);
+                    ringSegment.set(ValueLayout.JAVA_INT,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_OFFSET,
+                                    (int) refOffsetUnits(heapOffset));
+                    ringSegment.set(ValueLayout.JAVA_INT,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_TOTAL_BYTES,
+                                    (int) byteCount);
+                    ringSegment.set(ValueLayout.JAVA_INT,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_GENERATION,
+                                    generation);
+                    ringSegment.set(ValueLayout.JAVA_BYTE,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_DTYPE, dtype);
+                    ringSegment.set(ValueLayout.JAVA_BYTE,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_NDIM, (byte) 1);
+                    ringSegment.set(ValueLayout.JAVA_INT,
+                                    dataOffset + MSG_OFF_UNION + REF_OFF_SHAPE,
+                                    (int) byteCount);
+                    RAW_LONG_HANDLE.setRelease(ringSegment, seqOffset, pos + 1L);
+                    return true;
+                }
+                pos = witness;
+            } else if (dif < 0) {
+                return false;
+            } else {
+                pos = (long) RAW_LONG_HANDLE.getVolatile(ringSegment, RING_ENQUEUE_POS_OFFSET);
+            }
+            if (++spins >= MAX_SPIN_RETRIES) {
+                Thread.onSpinWait();
+                spins = 0;
             }
         }
     }
@@ -749,7 +813,7 @@ public final class RootBackend implements AutoCloseable, Backend {
     // One decoded event from the C++ engine.
     public record BridgeEvent(byte transport, short cmd, short flags, int jobId, int reqId,
                               byte[] inlineBytes, long shmOffset, long shmBytes,
-                              byte dtype, int[] shape) {
+                              int shmGeneration, byte dtype, int[] shape) {
         public boolean isShmRef() { return transport == MSG_TYPE_SHM_REF; }
         public boolean isError()  { return cmd == EVT_ERROR; }
 
@@ -822,10 +886,12 @@ public final class RootBackend implements AutoCloseable, Backend {
 
         if (transport == MSG_TYPE_SHM_REF) {
             final long refBase = dataOffset + MSG_OFF_UNION;
-            final long offset = Integer.toUnsignedLong(
-                ringSegment.get(ValueLayout.JAVA_INT, refBase + REF_OFF_OFFSET));
+            final long offset = refByteOffset(Integer.toUnsignedLong(
+                ringSegment.get(ValueLayout.JAVA_INT, refBase + REF_OFF_OFFSET)));
             final long bytes = Integer.toUnsignedLong(
                 ringSegment.get(ValueLayout.JAVA_INT, refBase + REF_OFF_TOTAL_BYTES));
+            final int generation =
+                ringSegment.get(ValueLayout.JAVA_INT, refBase + REF_OFF_GENERATION);
             final byte dtype = ringSegment.get(ValueLayout.JAVA_BYTE, refBase + REF_OFF_DTYPE);
             final int ndim = Math.min(SHM_REF_MAX_DIMS, Byte.toUnsignedInt(
                 ringSegment.get(ValueLayout.JAVA_BYTE, refBase + REF_OFF_NDIM)));
@@ -836,7 +902,7 @@ public final class RootBackend implements AutoCloseable, Backend {
                                            refBase + REF_OFF_SHAPE + (4L * d));
             }
             return new BridgeEvent(transport, cmd, flags, jobId, reqId,
-                                   new byte[0], offset, bytes, dtype, shape);
+                                   new byte[0], offset, bytes, generation, dtype, shape);
         }
 
         final int length = Math.min(payloadSize, BRIDGE_INLINE_CAPACITY);
@@ -846,7 +912,7 @@ public final class RootBackend implements AutoCloseable, Backend {
                                inline, 0, length);
         }
         return new BridgeEvent(transport, cmd, flags, jobId, reqId,
-                               inline, 0L, 0L, (byte) 0, new int[0]);
+                               inline, 0L, 0L, 0, (byte) 0, new int[0]);
     }
 
     /**
@@ -858,28 +924,78 @@ public final class RootBackend implements AutoCloseable, Backend {
         }
     }
 
-    private static void ensureSharedRegionExists(Path binaryPath, Path region) {
-        if (java.nio.file.Files.exists(region)) {
-            try (RandomAccessFile probe = new RandomAccessFile(region.toFile(), "r")) {
-                if (probe.length() >= MIN_REGION_BYTES) {
-                    probe.seek(HDR_MAGIC);
-                    // ShmHeader::magic is a little-endian uint32.
-                    byte[] four = new byte[4];
-                    probe.readFully(four);
-                    int magic = (four[0] & 0xFF) | ((four[1] & 0xFF) << 8)
-                              | ((four[2] & 0xFF) << 16) | ((four[3] & 0xFF) << 24);
-                    if (magic == SHM_MAGIC) {
-                        return; 
+    /**
+     * Maps the shared region, laying it out again first if what is on disk is not
+     * the shape this build reads. A region left over from an earlier build is
+     * converted rather than reported: the engine rewrites it and the mapping is
+     * retried once.
+     */
+    private MemorySegment openSharedRegion(Path binaryPath, Path region) throws Exception {
+        Exception lastFailure = null;
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            layOutRegion(binaryPath, region, attempt > 0);
+            try (RandomAccessFile file = new RandomAccessFile(region.toFile(), "rw");
+                FileChannel channel = file.getChannel()) {
+
+                final long mappedSize = channel.size();
+                if (mappedSize >= MIN_REGION_BYTES) {
+                    MemorySegment mapped = channel.map(
+                        FileChannel.MapMode.READ_WRITE, 0, mappedSize, this.sharedArena);
+                    if (regionIsCurrent(mapped)) {
+                        return mapped;
                     }
                 }
-            } catch (Exception ignored) {
-                // Fall through and let the engine reformat it.
+            } catch (Exception e) {
+                lastFailure = e;
             }
         }
 
+        throw new IllegalStateException(
+            "The shared region " + region + " could not be prepared. Check that "
+            + "root-bridge is present next to it and that the folder is writable.",
+            lastFailure);
+    }
+
+    /** True when the region on disk is laid out the way this build reads it. */
+    private static boolean regionIsCurrent(MemorySegment region) {
+        return region.get(ValueLayout.JAVA_INT, HDR_MAGIC) == SHM_MAGIC
+            && region.get(ValueLayout.JAVA_INT, HDR_VERSION) == SHM_VERSION;
+    }
+
+    /** True when the file already holds a region this build can read as is. */
+    private static boolean regionFileIsCurrent(Path region) {
+        try (RandomAccessFile probe = new RandomAccessFile(region.toFile(), "r")) {
+            if (probe.length() < MIN_REGION_BYTES) {
+                return false;
+            }
+            return readLittleEndianInt(probe, HDR_MAGIC) == SHM_MAGIC
+                && readLittleEndianInt(probe, HDR_VERSION) == SHM_VERSION;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static int readLittleEndianInt(RandomAccessFile file, long offset)
+            throws java.io.IOException {
+        file.seek(offset);
+        byte[] four = new byte[4];
+        file.readFully(four);
+        return (four[0] & 0xFF) | ((four[1] & 0xFF) << 8)
+             | ((four[2] & 0xFF) << 16) | ((four[3] & 0xFF) << 24);
+    }
+
+    /**
+     * Has the engine write the region's layout. Skipped when the file already
+     * holds the right one, unless `force` says to write it regardless.
+     */
+    private static void layOutRegion(Path binaryPath, Path region, boolean force) {
+        if (!force && regionFileIsCurrent(region)) {
+            return;
+        }
         if (!java.nio.file.Files.exists(binaryPath)) {
-            AppLogger.warn("root-bridge binary not found at " + binaryPath
-                + "; the shared region " + region + " cannot be created.");
+            AppLogger.warn("root-bridge not found at " + binaryPath
+                + "; the shared region " + region + " cannot be prepared.");
             return;
         }
 
@@ -899,7 +1015,7 @@ public final class RootBackend implements AutoCloseable, Backend {
                 AppLogger.warn("root-bridge --init-shm exited with " + init.exitValue() + ".");
             }
         } catch (Exception e) {
-            AppLogger.error("Could not create the shared region: " + e.getMessage());
+            AppLogger.error("Could not prepare the shared region: " + e.getMessage());
         }
     }
 
@@ -921,24 +1037,12 @@ public final class RootBackend implements AutoCloseable, Backend {
     }
 
     private void verifyRegionHeader() {
-        int magic = this.shmBaseSegment.get(ValueLayout.JAVA_INT, HDR_MAGIC);
-        int version = this.shmBaseSegment.get(ValueLayout.JAVA_INT, HDR_VERSION);
+        // openSharedRegion has already laid the region out the way this build
+        // reads it, so there is nothing left here to refuse.
         int proto = this.shmBaseSegment.get(ValueLayout.JAVA_INT, HDR_PROTO_VERSION);
-
-        if (magic != SHM_MAGIC) {
-            throw new IllegalStateException(String.format(
-                "Shared region magic is 0x%08X, expected 0x%08X. "
-                + "Either the engine has not initialized it yet, or this is not "
-                + "a root-bridge region.", magic, SHM_MAGIC));
-        }
-        if (version != SHM_VERSION) {
-            throw new IllegalStateException(
-                "Shared region layout version " + version + ", this client speaks "
-                + SHM_VERSION + ". Rebuild whichever side is behind.");
-        }
         if (proto != PROTO_VERSION) {
-            AppLogger.warn("Region wire version " + proto + " differs from this client's "
-                + PROTO_VERSION + "; opcode meanings may have moved.");
+            AppLogger.warn("The engine and this build disagree on what the opcodes "
+                + "mean; some replies may not be understood.");
         }
     }
 
@@ -1121,7 +1225,7 @@ public final class RootBackend implements AutoCloseable, Backend {
             } catch (Exception ex) {
                 AppLogger.warn("Canvas renderer refused a payload: " + ex.getMessage());
             } finally {
-                owner.releaseReferencedChunk(event.shmOffset());
+                owner.releaseReferencedChunk(event.shmOffset(), event.shmGeneration());
             }
             return;
         }
@@ -1131,7 +1235,7 @@ public final class RootBackend implements AutoCloseable, Backend {
             // chunk here, because nobody will ever read it.
             BridgeEvent dropped = unmatchedEvents.poll();
             if (dropped != null && dropped.isShmRef()) {
-                owner.releaseReferencedChunk(dropped.shmOffset());
+                owner.releaseReferencedChunk(dropped.shmOffset(), dropped.shmGeneration());
             }
             unmatchedEvents.offer(event);
         }
@@ -1163,17 +1267,49 @@ public final class RootBackend implements AutoCloseable, Backend {
     }
 
     public byte[] readReferencedBytes(long regionOffset, long length) {
+        return readReferencedBytes(regionOffset, length, 0);
+    }
+
+    /**
+     * Copies a reply chunk out and hands it back. When `generation` is non-zero
+     * the block is checked first: an address that has since been recycled reads
+     * as empty rather than as whatever now occupies it.
+     */
+    public byte[] readReferencedBytes(long regionOffset, long length, int generation) {
         if (shmBaseSegment == null || regionOffset <= 0 || length <= 0
             || regionOffset > shmBaseSegment.byteSize()
             || length > shmBaseSegment.byteSize() - regionOffset) {
             return new byte[0];
         }
+        final HeapHandle handle = new HeapHandle(regionOffset, generation);
+        if (generation != 0 && !heapHandleIsLive(handle)) {
+            AppLogger.error("Shared heap: chunk at " + regionOffset
+                + " was recycled before it could be read.");
+            return new byte[0];
+        }
         byte[] out = new byte[(int) Math.min(length, Integer.MAX_VALUE)];
         MemorySegment.copy(shmBaseSegment, ValueLayout.JAVA_BYTE, regionOffset, out, 0, out.length);
-        // The bytes are ours now, so the chunk can go back. Nothing else frees a
-        // reply chunk, and the engine's heap only rewinds once none are left.
-        releaseReferencedChunk(regionOffset);
+        // The bytes are ours now, so the block goes back to its size class and is
+        // handed out again without the heap growing.
+        releaseReferencedChunk(regionOffset, generation);
         return out;
+    }
+
+    /**
+     * Hands a chunk to the caller without copying it. The slice stays valid only
+     * until the chunk is released, so a caller that keeps it must not release
+     * until it is done. Returns null when the handle no longer names that block.
+     */
+    public MemorySegment viewReferencedBytes(long regionOffset, long length, int generation) {
+        if (shmBaseSegment == null || regionOffset <= 0 || length <= 0
+            || regionOffset > shmBaseSegment.byteSize()
+            || length > shmBaseSegment.byteSize() - regionOffset) {
+            return null;
+        }
+        if (generation != 0 && !heapHandleIsLive(new HeapHandle(regionOffset, generation))) {
+            return null;
+        }
+        return shmBaseSegment.asSlice(regionOffset, length);
     }
 
     /**
@@ -1181,13 +1317,29 @@ public final class RootBackend implements AutoCloseable, Backend {
      * so releasing an offset twice, or one that was never handed out, is safe.
      */
     public boolean releaseReferencedChunk(long regionOffset) {
+        return releaseReferencedChunk(regionOffset, 0);
+    }
+
+    /**
+     * Returns one reply chunk to the engine's heap. The generation travels with
+     * the address, so a release that arrives after the block was already recycled
+     * frees nothing instead of freeing whatever took its place. Releasing twice,
+     * or releasing an address that was never handed out, changes nothing.
+     */
+    public boolean releaseReferencedChunk(long regionOffset, int generation) {
         if (!isAvailable || commandRingSegment == null || regionOffset <= 0
-            || regionOffset > 0xFFFFFFFFL) {
+            || regionOffset >= (1L << 32) * (1L << SHM_OFFSET_SHIFT)) {
             return false;
         }
-        return pushCommandMessage(commandRingSegment, cmdRingCapacityPow2,
-                                  CMD_RELEASE_CHUNK, (int) regionOffset,
-                                  nextReqId.incrementAndGet(), null);
+        if (generation == 0) {
+            // Older form: no generation to quote, the engine reads the live one.
+            return pushCommandMessage(commandRingSegment, cmdRingCapacityPow2,
+                                      CMD_RELEASE_CHUNK, (int) regionOffset,
+                                      nextReqId.incrementAndGet(), null);
+        }
+        return pushShmRefMessage(commandRingSegment, cmdRingCapacityPow2,
+                                 CMD_RELEASE_CHUNK, regionOffset, 0L, generation,
+                                 (byte) 0, nextReqId.incrementAndGet());
     }
 
     /**
@@ -1198,6 +1350,37 @@ public final class RootBackend implements AutoCloseable, Backend {
      */
     public static int nextRequestId() {
         return nextReqId.incrementAndGet();
+    }
+
+    /**
+     * Claims a block for a client that has no allocator of its own -- the Python
+     * kernel writing a tensor back. The block is committed, so the engine sees it
+     * as readable, and stays the caller's until releaseForClient.
+     */
+    public HeapHandle acquireForClient(int byteCount, short dtype) {
+        if (!isAvailable || shmBaseSegment == null || byteCount <= 0) {
+            return new HeapHandle(0L, 0);
+        }
+        final HeapHandle handle = heapAcquire(byteCount, CHUNK_KIND_DATA, (short) 0, dtype);
+        if (!handle.isValid()) {
+            return handle;
+        }
+        final long chunk = handle.payloadOffset() - CHUNK_HEADER_SIZE;
+        VarHandle.releaseFence();
+        shmBaseSegment.set(ValueLayout.JAVA_SHORT, chunk + CHUNK_FLAGS_OFF, CHUNK_COMMITTED);
+        return handle;
+    }
+
+    /** Returns a block claimed through acquireForClient. */
+    public boolean releaseForClient(long payloadOffset, int generation) {
+        return heapRelease(new HeapHandle(payloadOffset, generation));
+    }
+
+    private String shmRegionPath = "";
+
+    /** Path of the region file, so a kernel can map the same bytes. */
+    public String shmRegionPath() {
+        return shmRegionPath;
     }
 
     public MemorySegment commandRingSegment() { return commandRingSegment; }
@@ -1237,6 +1420,7 @@ public final class RootBackend implements AutoCloseable, Backend {
     private static final int  CHUNK_MAGIC        = 0x43484E4B;
     private static final short CHUNK_INCOMPLETE  = 0;
     private static final short CHUNK_COMMITTED   = 1;
+    private static final short CHUNK_FREE        = 8;
     private static final short CHUNK_KIND_DATA   = 1;
 
     private static final long HEAP_ALLOCATED_OFF       = 0L;
@@ -1278,8 +1462,27 @@ public final class RootBackend implements AutoCloseable, Backend {
     private static final long CHUNK_NEXT_LVL2_OFF = 56L;
     private static final long CHUNK_NEXT_LVL4_OFF = 64L;
     private static final long CHUNK_NEXT_LVL8_OFF = 72L;
+    private static final long CHUNK_GENERATION_OFF = 28L;
+    private static final long CHUNK_PREV_OFF       = 80L;
+    private static final long CHUNK_PREV_KIND_OFF  = 88L;
+    private static final long CHUNK_PREV_PROD_OFF  = 96L;
+    private static final long CHUNK_SIZE_CLASS_OFF = 104L;
 
-    private static final long HEAP_METADATA_SIZE = 2688L;
+    // Free lists, appended to ShmHeapRoot so every offset above kept its value.
+    private static final int  HEAP_SIZE_CLASSES    = 14;
+    private static final long ROOT_FREE_HEAD_OFF   = 1600L;
+    private static final long ROOT_FREE_BYTES_OFF  = 1712L;
+    private static final long ROOT_RECYCLED_OFF    = 1824L;
+    private static final long ROOT_CARVED_OFF      = 1832L;
+    private static final long ROOT_STALE_OFF       = 1840L;
+
+    // Each class holds a power-of-two payload plus room for the 128-byte header.
+    private static final long[] HEAP_CLASS_BYTES = {
+        4224L, 16512L, 32896L, 65664L, 131200L, 262272L, 524416L, 1048704L,
+        4194432L, 16777344L, 67108992L, 134217856L, 268435584L, 536871040L
+    };
+
+    private static final long HEAP_METADATA_SIZE = 3008L;
     private static final long CACHE_LINE         = 64L;
     private static final int  KIND_BUCKETS       = 16;
     private static final int  PRODUCER_BUCKETS   = 16;
@@ -1326,18 +1529,119 @@ public final class RootBackend implements AutoCloseable, Backend {
         }
     }
 
+    /** Which free list a payload of this size belongs to, or -1 when too large. */
+    private static int sizeClassOf(long payloadSize) {
+        final long needed = payloadSize + CHUNK_HEADER_SIZE;
+        for (int i = 0; i < HEAP_SIZE_CLASSES; i++) {
+            if (needed <= HEAP_CLASS_BYTES[i]) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static long packFreeHead(long chunkOffset, long tag) {
+        return (tag << 32) | (chunkOffset >>> SHM_OFFSET_SHIFT);
+    }
+
+    private static long unpackFreeOffset(long head) {
+        return (head & 0xFFFFFFFFL) << SHM_OFFSET_SHIFT;
+    }
+
+    private static long unpackFreeTag(long head) {
+        return head >>> 32;
+    }
+
+    /** A block address together with the generation it was handed out under. */
+    public record HeapHandle(long payloadOffset, int generation) {
+        public boolean isValid() { return payloadOffset != 0L; }
+    }
+
+    /** Adds a live block to the global, per-kind and per-producer indexes. */
+    private void indexLink(long root, long chunk, short kind, short producerId,
+                           boolean hasKind, boolean hasProducer) {
+        long previous = (long) RAW_LONG_HANDLE.getAndSet(
+            shmBaseSegment, root + ROOT_LAST_CHUNK_OFF, chunk);
+        RAW_LONG_HANDLE.setRelease(shmBaseSegment, chunk + CHUNK_PREV_OFF, previous);
+        if (previous == 0L) {
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, root + ROOT_FIRST_CHUNK_OFF, chunk);
+        } else {
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, previous + CHUNK_NEXT_OFF, chunk);
+        }
+
+        if (hasKind) {
+            previous = (long) RAW_LONG_HANDLE.getAndSet(
+                shmBaseSegment, root + ROOT_LAST_BY_KIND_OFF + kind * 8L, chunk);
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, chunk + CHUNK_PREV_KIND_OFF, previous);
+            if (previous == 0L) {
+                RAW_LONG_HANDLE.setRelease(
+                    shmBaseSegment, root + ROOT_FIRST_BY_KIND_OFF + kind * 8L, chunk);
+            } else {
+                RAW_LONG_HANDLE.setRelease(
+                    shmBaseSegment, previous + CHUNK_NEXT_KIND_OFF, chunk);
+            }
+            RAW_LONG_HANDLE.setRelease(
+                shmBaseSegment, root + ROOT_PF_HEAD_BY_KIND_OFF + kind * 8L, chunk);
+        }
+
+        if (hasProducer) {
+            previous = (long) RAW_LONG_HANDLE.getAndSet(
+                shmBaseSegment, root + ROOT_LAST_BY_PROD_OFF + producerId * 8L, chunk);
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, chunk + CHUNK_PREV_PROD_OFF, previous);
+            if (previous == 0L) {
+                RAW_LONG_HANDLE.setRelease(
+                    shmBaseSegment, root + ROOT_FIRST_BY_PROD_OFF + producerId * 8L, chunk);
+            } else {
+                RAW_LONG_HANDLE.setRelease(
+                    shmBaseSegment, previous + CHUNK_NEXT_PROD_OFF, chunk);
+            }
+            RAW_LONG_HANDLE.setRelease(
+                shmBaseSegment, root + ROOT_PF_HEAD_BY_PROD_OFF + producerId * 8L, chunk);
+        }
+
+        if (kind == CHUNK_KIND_DATA) {
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, root + ROOT_PREFETCH_HEAD_OFF, chunk);
+        }
+    }
+
+    /** Removes a block from one index, using its back link rather than a walk. */
+    private void indexUnlinkOne(long chunk, long prevField, long nextField,
+                                long headSlot, long tailSlot) {
+        final long previous = (long) RAW_LONG_HANDLE.getVolatile(shmBaseSegment, chunk + prevField);
+        final long next = (long) RAW_LONG_HANDLE.getVolatile(shmBaseSegment, chunk + nextField);
+        if ((long) RAW_LONG_HANDLE.getVolatile(shmBaseSegment, headSlot) == chunk) {
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, headSlot, next);
+        }
+        if ((long) RAW_LONG_HANDLE.getVolatile(shmBaseSegment, tailSlot) == chunk) {
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, tailSlot, previous);
+        }
+        if (previous != 0L) {
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, previous + nextField, next);
+        }
+        if (next != 0L) {
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment, next + prevField, previous);
+        }
+        RAW_LONG_HANDLE.setRelease(shmBaseSegment, chunk + prevField, 0L);
+        RAW_LONG_HANDLE.setRelease(shmBaseSegment, chunk + nextField, 0L);
+    }
+
     /**
-     * Mirror of shm_heap_alloc(): quotas, bump allocation, chunk header, and the
-     * traversal lists the engine's compaction pass walks. Returns the payload
-     * offset, or 0. The chunk is left INCOMPLETE for the caller to commit.
+     * Mirror of shm_heap_acquire(): a free block of the right class is reused
+     * before any new ground is broken, so a session that reads and releases in a
+     * loop keeps working in the same few megabytes. Returns the payload offset
+     * and its generation. The chunk is left INCOMPLETE for the caller to commit.
      */
-    private long heapAlloc(int size, short kind, short producerId, short encoding) {
+    private HeapHandle heapAcquire(int size, short kind, short producerId, short encoding) {
         final long heap = shmBaseSegment.get(ValueLayout.JAVA_LONG, HDR_OFF_DATA_HEAP);
         if (heap <= 0L || size <= 0) {
-            return 0L;
+            return new HeapHandle(0L, 0);
+        }
+        final int cls = sizeClassOf(size);
+        if (cls < 0) {
+            AppLogger.error("Shared heap: " + size + " bytes exceeds the largest size class.");
+            return new HeapHandle(0L, 0);
         }
         final long root = heap + ROOT_OFF;
-        final long need = alignUp(CHUNK_HEADER_SIZE + size, CACHE_LINE);
 
         final boolean hasKind = kind >= 0 && kind < KIND_BUCKETS;
         final boolean hasProducer = producerId >= 0 && producerId < PRODUCER_BUCKETS;
@@ -1346,7 +1650,7 @@ public final class RootBackend implements AutoCloseable, Backend {
 
         if (hasKind && !chargeBucket(heap + HEAP_QUOTA_BY_KIND_OFF + kind * 8L, kindCount)) {
             AppLogger.error("Shared heap: kind " + kind + " has reached its allocation quota.");
-            return 0L;
+            return new HeapHandle(0L, 0);
         }
         if (hasProducer
             && !chargeBucket(heap + HEAP_QUOTA_BY_PROD_OFF + producerId * 8L, prodCount)) {
@@ -1355,38 +1659,68 @@ public final class RootBackend implements AutoCloseable, Backend {
             }
             AppLogger.error("Shared heap: producer " + producerId
                 + " has reached its allocation quota.");
-            return 0L;
+            return new HeapHandle(0L, 0);
         }
 
-        final long capacity = shmBaseSegment.get(ValueLayout.JAVA_LONG, heap + HEAP_CAPACITY_OFF);
-        long allocated = (long) RAW_LONG_HANDLE.getVolatile(
-            shmBaseSegment, heap + HEAP_ALLOCATED_OFF);
-        for (;;) {
-            if (allocated + need > capacity) {
-                if (hasKind) {
-                    unchargeBucket(kindCount);
-                }
-                if (hasProducer) {
-                    unchargeBucket(prodCount);
-                }
-                AppLogger.error("Shared heap is full: " + size
-                    + " bytes requested, " + (capacity - allocated) + " left.");
-                return 0L;
-            }
-            long seen = (long) RAW_LONG_HANDLE.compareAndExchange(
-                shmBaseSegment, heap + HEAP_ALLOCATED_OFF, allocated, allocated + need);
-            if (seen == allocated) {
+        final long headSlot = root + ROOT_FREE_HEAD_OFF + cls * 8L;
+        long chunk = 0L;
+
+        long head = (long) RAW_LONG_HANDLE.getVolatile(shmBaseSegment, headSlot);
+        while (head != 0L) {
+            final long candidate = unpackFreeOffset(head);
+            final long next = (long) RAW_LONG_HANDLE.getVolatile(
+                shmBaseSegment, candidate + CHUNK_NEXT_OFF);
+            final long replacement = (next == 0L)
+                ? 0L : packFreeHead(next, unpackFreeTag(head) + 1L);
+            final long seen = (long) RAW_LONG_HANDLE.compareAndExchange(
+                shmBaseSegment, headSlot, head, replacement);
+            if (seen == head) {
+                chunk = candidate;
+                RAW_LONG_HANDLE.getAndAdd(shmBaseSegment,
+                    root + ROOT_FREE_BYTES_OFF + cls * 8L, -HEAP_CLASS_BYTES[cls]);
+                RAW_LONG_HANDLE.getAndAdd(shmBaseSegment, root + ROOT_RECYCLED_OFF, 1L);
                 break;
             }
-            allocated = seen;
+            head = seen;
         }
 
-        final long chunk = heap + HEAP_METADATA_SIZE + allocated;
-        if (chunk + CHUNK_HEADER_SIZE + size > shmBaseSegment.byteSize()) {
-            return 0L;
+        if (chunk == 0L) {
+            final long need = HEAP_CLASS_BYTES[cls];
+            final long capacity =
+                shmBaseSegment.get(ValueLayout.JAVA_LONG, heap + HEAP_CAPACITY_OFF);
+            long allocated = (long) RAW_LONG_HANDLE.getVolatile(
+                shmBaseSegment, heap + HEAP_ALLOCATED_OFF);
+            for (;;) {
+                if (allocated + need > capacity) {
+                    if (hasKind) {
+                        unchargeBucket(kindCount);
+                    }
+                    if (hasProducer) {
+                        unchargeBucket(prodCount);
+                    }
+                    AppLogger.error("Shared heap is full: " + size
+                        + " bytes requested, " + (capacity - allocated) + " left.");
+                    return new HeapHandle(0L, 0);
+                }
+                long seen = (long) RAW_LONG_HANDLE.compareAndExchange(
+                    shmBaseSegment, heap + HEAP_ALLOCATED_OFF, allocated, allocated + need);
+                if (seen == allocated) {
+                    break;
+                }
+                allocated = seen;
+            }
+            chunk = heap + HEAP_METADATA_SIZE + allocated;
+            if (chunk + need > shmBaseSegment.byteSize()) {
+                return new HeapHandle(0L, 0);
+            }
+            shmBaseSegment.asSlice(chunk, CHUNK_HEADER_SIZE).fill((byte) 0);
+            shmBaseSegment.set(ValueLayout.JAVA_INT, chunk + CHUNK_GENERATION_OFF, 1);
+            RAW_LONG_HANDLE.getAndAdd(shmBaseSegment, root + ROOT_CARVED_OFF, 1L);
         }
 
-        shmBaseSegment.asSlice(chunk, CHUNK_HEADER_SIZE).fill((byte) 0);
+        final int generation = (int) RAW_INT_HANDLE.getVolatile(
+            shmBaseSegment, chunk + CHUNK_GENERATION_OFF);
+
         shmBaseSegment.set(ValueLayout.JAVA_INT, chunk + CHUNK_MAGIC_OFF, CHUNK_MAGIC);
         shmBaseSegment.set(ValueLayout.JAVA_INT, chunk + CHUNK_SIZE_OFF, size);
         shmBaseSegment.set(ValueLayout.JAVA_LONG, chunk + CHUNK_EPOCH_OFF,
@@ -1394,44 +1728,121 @@ public final class RootBackend implements AutoCloseable, Backend {
         shmBaseSegment.set(ValueLayout.JAVA_SHORT, chunk + CHUNK_KIND_OFF, kind);
         shmBaseSegment.set(ValueLayout.JAVA_SHORT, chunk + CHUNK_PRODUCER_OFF, producerId);
         shmBaseSegment.set(ValueLayout.JAVA_SHORT, chunk + CHUNK_ENCODING_OFF, encoding);
+        shmBaseSegment.set(ValueLayout.JAVA_SHORT, chunk + CHUNK_SIZE_CLASS_OFF, (short) cls);
         shmBaseSegment.set(ValueLayout.JAVA_SHORT, chunk + CHUNK_FLAGS_OFF, CHUNK_INCOMPLETE);
         VarHandle.releaseFence();
 
-        spliceList(root + ROOT_LAST_CHUNK_OFF, root + ROOT_FIRST_CHUNK_OFF,
-                   CHUNK_NEXT_OFF, chunk);
-        if (hasKind) {
-            spliceList(root + ROOT_LAST_BY_KIND_OFF + kind * 8L,
-                       root + ROOT_FIRST_BY_KIND_OFF + kind * 8L,
-                       CHUNK_NEXT_KIND_OFF, chunk);
-            RAW_LONG_HANDLE.setRelease(
-                shmBaseSegment, root + ROOT_PF_HEAD_BY_KIND_OFF + kind * 8L, chunk);
-        }
-        if (hasProducer) {
-            spliceList(root + ROOT_LAST_BY_PROD_OFF + producerId * 8L,
-                       root + ROOT_FIRST_BY_PROD_OFF + producerId * 8L,
-                       CHUNK_NEXT_PROD_OFF, chunk);
-            RAW_LONG_HANDLE.setRelease(
-                shmBaseSegment, root + ROOT_PF_HEAD_BY_PROD_OFF + producerId * 8L, chunk);
-        }
-
-        final int seq = (int) RAW_INT_HANDLE.getAndAdd(
-            shmBaseSegment, root + ROOT_N_CHUNKS_OFF, 1) + 1;
-        if ((seq & 1) == 0) {
-            spliceLevel(root + ROOT_LAST_LVL2_OFF, CHUNK_NEXT_LVL2_OFF, chunk);
-        }
-        if ((seq & 3) == 0) {
-            spliceLevel(root + ROOT_LAST_LVL4_OFF, CHUNK_NEXT_LVL4_OFF, chunk);
-        }
-        if ((seq & 7) == 0) {
-            spliceLevel(root + ROOT_LAST_LVL8_OFF, CHUNK_NEXT_LVL8_OFF, chunk);
-        }
-
-        if (kind == CHUNK_KIND_DATA) {
-            RAW_LONG_HANDLE.setRelease(shmBaseSegment, root + ROOT_PREFETCH_HEAD_OFF, chunk);
-        }
+        indexLink(root, chunk, kind, producerId, hasKind, hasProducer);
+        RAW_INT_HANDLE.getAndAdd(shmBaseSegment, root + ROOT_N_CHUNKS_OFF, 1);
         RAW_LONG_HANDLE.getAndAdd(shmBaseSegment, heap + HEAP_ACTIVE_OFF, 1L);
 
-        return chunk + CHUNK_HEADER_SIZE;
+        return new HeapHandle(chunk + CHUNK_HEADER_SIZE, generation);
+    }
+
+    private long heapAlloc(int size, short kind, short producerId, short encoding) {
+        return heapAcquire(size, kind, producerId, encoding).payloadOffset();
+    }
+
+    /**
+     * Mirror of shm_heap_release(). Bumping the generation is what makes every
+     * other copy of this address stale, so it must succeed exactly once; losing
+     * that exchange means the block was already freed and nothing is done.
+     */
+    private boolean heapRelease(HeapHandle handle) {
+        if (shmBaseSegment == null || !handle.isValid()) {
+            return false;
+        }
+        final long heap = shmBaseSegment.get(ValueLayout.JAVA_LONG, HDR_OFF_DATA_HEAP);
+        if (heap <= 0L) {
+            return false;
+        }
+        final long root = heap + ROOT_OFF;
+        final long chunk = handle.payloadOffset() - CHUNK_HEADER_SIZE;
+        if (chunk < 0L || chunk + CHUNK_HEADER_SIZE > shmBaseSegment.byteSize()) {
+            return false;
+        }
+        if (shmBaseSegment.get(ValueLayout.JAVA_INT, chunk + CHUNK_MAGIC_OFF) != CHUNK_MAGIC) {
+            RAW_LONG_HANDLE.getAndAdd(shmBaseSegment, root + ROOT_STALE_OFF, 1L);
+            return false;
+        }
+        final int seen = (int) RAW_INT_HANDLE.compareAndExchange(
+            shmBaseSegment, chunk + CHUNK_GENERATION_OFF,
+            handle.generation(), handle.generation() + 1);
+        if (seen != handle.generation()) {
+            RAW_LONG_HANDLE.getAndAdd(shmBaseSegment, root + ROOT_STALE_OFF, 1L);
+            return false;
+        }
+
+        final short kind = shmBaseSegment.get(ValueLayout.JAVA_SHORT, chunk + CHUNK_KIND_OFF);
+        final short producerId =
+            shmBaseSegment.get(ValueLayout.JAVA_SHORT, chunk + CHUNK_PRODUCER_OFF);
+
+        indexUnlinkOne(chunk, CHUNK_PREV_OFF, CHUNK_NEXT_OFF,
+                       root + ROOT_FIRST_CHUNK_OFF, root + ROOT_LAST_CHUNK_OFF);
+        if (kind >= 0 && kind < KIND_BUCKETS) {
+            indexUnlinkOne(chunk, CHUNK_PREV_KIND_OFF, CHUNK_NEXT_KIND_OFF,
+                           root + ROOT_FIRST_BY_KIND_OFF + kind * 8L,
+                           root + ROOT_LAST_BY_KIND_OFF + kind * 8L);
+            unchargeBucket(heap + HEAP_ALLOC_BY_KIND_OFF + kind * 8L);
+        }
+        if (producerId >= 0 && producerId < PRODUCER_BUCKETS) {
+            indexUnlinkOne(chunk, CHUNK_PREV_PROD_OFF, CHUNK_NEXT_PROD_OFF,
+                           root + ROOT_FIRST_BY_PROD_OFF + producerId * 8L,
+                           root + ROOT_LAST_BY_PROD_OFF + producerId * 8L);
+            unchargeBucket(heap + HEAP_ALLOC_BY_PROD_OFF + producerId * 8L);
+        }
+
+        shmBaseSegment.set(ValueLayout.JAVA_SHORT, chunk + CHUNK_FLAGS_OFF, CHUNK_FREE);
+        RAW_LONG_HANDLE.getAndAdd(shmBaseSegment, heap + HEAP_ACTIVE_OFF, -1L);
+        RAW_INT_HANDLE.getAndAdd(shmBaseSegment, root + ROOT_N_CHUNKS_OFF, -1);
+
+        int cls = shmBaseSegment.get(ValueLayout.JAVA_SHORT, chunk + CHUNK_SIZE_CLASS_OFF);
+        if (cls < 0 || cls >= HEAP_SIZE_CLASSES) {
+            cls = sizeClassOf(
+                Integer.toUnsignedLong(
+                    shmBaseSegment.get(ValueLayout.JAVA_INT, chunk + CHUNK_SIZE_OFF)));
+        }
+        if (cls < 0) {
+            return true;
+        }
+
+        final long headSlot = root + ROOT_FREE_HEAD_OFF + cls * 8L;
+        long head = (long) RAW_LONG_HANDLE.getVolatile(shmBaseSegment, headSlot);
+        for (;;) {
+            RAW_LONG_HANDLE.setRelease(
+                shmBaseSegment, chunk + CHUNK_NEXT_OFF, unpackFreeOffset(head));
+            final long replacement = packFreeHead(chunk, unpackFreeTag(head) + 1L);
+            final long seenHead = (long) RAW_LONG_HANDLE.compareAndExchange(
+                shmBaseSegment, headSlot, head, replacement);
+            if (seenHead == head) {
+                break;
+            }
+            head = seenHead;
+        }
+        RAW_LONG_HANDLE.getAndAdd(shmBaseSegment,
+            root + ROOT_FREE_BYTES_OFF + cls * 8L, HEAP_CLASS_BYTES[cls]);
+        return true;
+    }
+
+    /**
+     * True while `handle` still names the block it was handed out for. False once
+     * that block has been freed and handed to someone else.
+     */
+    private boolean heapHandleIsLive(HeapHandle handle) {
+        if (shmBaseSegment == null || !handle.isValid()) {
+            return false;
+        }
+        final long chunk = handle.payloadOffset() - CHUNK_HEADER_SIZE;
+        if (chunk < 0L || chunk + CHUNK_HEADER_SIZE > shmBaseSegment.byteSize()) {
+            return false;
+        }
+        if (shmBaseSegment.get(ValueLayout.JAVA_INT, chunk + CHUNK_MAGIC_OFF) != CHUNK_MAGIC) {
+            return false;
+        }
+        final int generation = (int) RAW_INT_HANDLE.getVolatile(
+            shmBaseSegment, chunk + CHUNK_GENERATION_OFF);
+        final short flags = shmBaseSegment.get(ValueLayout.JAVA_SHORT, chunk + CHUNK_FLAGS_OFF);
+        return generation == handle.generation() && (flags & CHUNK_FREE) == 0;
     }
 
     /**
@@ -1470,7 +1881,8 @@ public final class RootBackend implements AutoCloseable, Backend {
             return null;
         }
         if (reply.isShmRef()) {
-            byte[] bytes = readReferencedBytes(reply.shmOffset(), reply.shmBytes());
+            byte[] bytes = readReferencedBytes(reply.shmOffset(), reply.shmBytes(),
+                                               reply.shmGeneration());
             int end = 0;
             while (end < bytes.length && bytes[end] != 0) {
                 end++;
@@ -1524,7 +1936,8 @@ public final class RootBackend implements AutoCloseable, Backend {
         }
 
         if (reply.isShmRef()) {
-            byte[] bytes = readReferencedBytes(reply.shmOffset(), reply.shmBytes());
+            byte[] bytes = readReferencedBytes(reply.shmOffset(), reply.shmBytes(),
+                                               reply.shmGeneration());
             int end = 0;
             while (end < bytes.length && bytes[end] != 0) {
                 end++;
@@ -1576,6 +1989,17 @@ public final class RootBackend implements AutoCloseable, Backend {
         }
         int reqId = nextReqId.incrementAndGet();
         return sendCommand(CMD_PING, 0, reqId, (byte[]) null) ? reqId : -1;
+    }
+
+    /** The project whose includes/ and user_scripts/ join the global ones. */
+    private static volatile String activePipelineProject;
+
+    public static void setActivePipelineProject(String projectName) {
+        activePipelineProject = projectName;
+    }
+
+    public static String getActivePipelineProject() {
+        return activePipelineProject;
     }
 
     public RootProcessBridge getProcessBridge() {

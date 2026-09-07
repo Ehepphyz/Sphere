@@ -740,7 +740,7 @@ void send_answer(ShmLayout &shm, const Proto::PacketHeader &pkt,
   msg.cmd = static_cast<std::uint16_t>(Proto::PacketType::EVT_OK);
   msg.job_id = pkt.job_id;
   msg.req_id = pkt.req_id;
-  msg.shm_ref.offset = static_cast<std::uint32_t>(writer.offset());
+  shm_ref_publish(msg.shm_ref, shm, writer.offset());
   msg.shm_ref.total_bytes = static_cast<std::uint32_t>(answer.size() + 1);
   msg.shm_ref.dtype = ShmDType::UInt8;
   msg.shm_ref.ndim = 1;

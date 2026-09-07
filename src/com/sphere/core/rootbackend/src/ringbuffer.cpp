@@ -923,7 +923,7 @@ bool ring_extract_tensor_meta(const void *shm_base, std::size_t shm_size,
     return false;
   }
 
-  const std::uint64_t offset = msg.shm_ref.offset;
+  const std::uint64_t offset = shm_ref_byte_offset(msg.shm_ref);
   const std::uint64_t total_bytes = msg.shm_ref.total_bytes;
   if (total_bytes == 0) [[unlikely]] {
     return false;

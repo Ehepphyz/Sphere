@@ -60,13 +60,27 @@ inline constexpr std::size_t SHM_REF_MAX_DIMS = 6;
 
 /// Zero-copy descriptor for an allocation in the shared-memory data heap.
 struct ShmRef {
-  std::uint32_t offset{0};      // byte offset from the SHM base
+  std::uint32_t offset{0};      // byte offset >> SHM_OFFSET_SHIFT, from the base
   std::uint32_t total_bytes{0}; // total allocation size
+  // Stamped when the block is handed out and bumped when it is freed. A holder
+  // that kept an address across a recycle is refused instead of reading the
+  // bytes that now belong to something else.
+  std::uint32_t generation{0};
   ShmDType dtype{ShmDType::Float32};
   std::uint8_t ndim{0};
   std::uint16_t reserved{0};
   std::uint32_t shape[SHM_REF_MAX_DIMS]{};
 };
+
+[[nodiscard]] constexpr std::uint64_t
+shm_ref_byte_offset(const ShmRef &ref) noexcept {
+  return static_cast<std::uint64_t>(ref.offset) << SHM_OFFSET_SHIFT;
+}
+
+constexpr void shm_ref_set_byte_offset(ShmRef &ref,
+                                       std::uint64_t byte_offset) noexcept {
+  ref.offset = static_cast<std::uint32_t>(byte_offset >> SHM_OFFSET_SHIFT);
+}
 
 /// Number of inline payload bytes available in a BridgeMessage.
 inline constexpr std::size_t BRIDGE_INLINE_CAPACITY = 44;

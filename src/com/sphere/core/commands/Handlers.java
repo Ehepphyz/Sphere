@@ -748,6 +748,16 @@ public class Handlers {
         if (c.ctx != null) {
             c.ctx.setActiveProject(name);
         }
+
+        // Opening a project brings its own includes/ and user_scripts/ into play,
+        // on top of the global pair. The folders are created on first use.
+        com.sphere.core.rootbackend.RootUserPipeline.ensureLayout(project.toAbsolutePath());
+        com.sphere.core.rootbackend.RootBackend.setActivePipelineProject(name);
+        com.sphere.core.rootbackend.RootBackend engine = backend(c);
+        if (engine != null && engine.isAvailable()) {
+            com.sphere.core.rootbackend.RootUserPipeline.loadInto(engine, name);
+        }
+
         AppLogger.raw("Active project: " + name + "  (" + project.toAbsolutePath() + ")");
     }
 
@@ -2154,7 +2164,8 @@ public class Handlers {
             usage(":root script load <file>");
             return;
         }
-        String a0 = a;
+        String a0 = macroPath(a, c);
+        if (a0 == null) return;
         cling(c, "gROOT->LoadMacro(\"" + a0 + "\")");
     }
 
@@ -2164,17 +2175,23 @@ public class Handlers {
             usage(":root script run <file>");
             return;
         }
-        String a0 = a;
+        String a0 = macroPath(a, c);
+        if (a0 == null) return;
         cling(c, "gROOT->ProcessLine(\".x " + a0 + "\")");
     }
 
     public static void rootCompileScripts(String i, CommandExecutionContext c) {
         String a = args(i, ":root script compile");
-        if (a.isEmpty()) {
-            usage(":root script compile <file>");
+        if (a.trim().equals("--all")) {
+            rootScriptCompileAll(i, c);
             return;
         }
-        String a0 = a;
+        if (a.isEmpty()) {
+            usage(":root script compile <file> | --all");
+            return;
+        }
+        String a0 = macroPath(a, c);
+        if (a0 == null) return;
         cling(c, "gROOT->LoadMacro(\"" + a0 + "+\")");
     }
 
@@ -2186,6 +2203,297 @@ public class Handlers {
         }
         String a0 = a;
         cling(c, "gROOT->ProcessLine(\".I " + a0 + "\")");
+    }
+
+    /**
+     * A macro named on its own is looked up in user_scripts/, the project's
+     * folder first and then the global one, before being treated as a path.
+     */
+    private static String macroPath(String argument, CommandExecutionContext c) {
+        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
+        java.nio.file.Path found =
+            com.sphere.core.rootbackend.RootUserPipeline.resolveMacro(argument, project);
+        if (found == null) {
+            AppLogger.error("No macro named " + argument
+                + ". Use  :root script list  to see what is in user_scripts/.");
+            return null;
+        }
+        return com.sphere.core.rootbackend.RootUserPipeline.forCling(found);
+    }
+
+    /** The macros of both layers, the project marked, so the user sees what runs. */
+    public static void rootScriptList(String i, CommandExecutionContext c) {
+        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
+        int shown = 0;
+        for (java.nio.file.Path root
+                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
+            java.util.List<java.nio.file.Path> found =
+                com.sphere.core.rootbackend.RootUserPipeline.macros(root);
+            if (found.isEmpty()) continue;
+            AppLogger.raw("  " + root.resolve(
+                com.sphere.core.rootbackend.RootUserPipeline.SCRIPTS_DIR));
+            for (java.nio.file.Path macro : found) {
+                AppLogger.raw(String.format("      %-32s %s",
+                    macro.getFileName(), humanBytes(sizeOf(macro))));
+                shown++;
+            }
+        }
+        if (shown == 0) {
+            AppLogger.info("No macro yet. Put a .C or .cpp in user_scripts/.");
+        } else {
+            AppLogger.raw("  " + shown + " macros. A later folder overrides an earlier name.");
+        }
+    }
+
+    /** The libraries of both layers, and the C++ sources waiting to be built. */
+    public static void rootIncludesList(String i, CommandExecutionContext c) {
+        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
+        int libraries = 0, sources = 0;
+        for (java.nio.file.Path root
+                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
+            java.util.List<java.nio.file.Path> found =
+                com.sphere.core.rootbackend.RootUserPipeline.libraries(root);
+            java.util.List<java.nio.file.Path> toBuild =
+                com.sphere.core.rootbackend.RootUserPipeline.sources(root);
+            if (found.isEmpty() && toBuild.isEmpty()) continue;
+            AppLogger.raw("  " + root.resolve(
+                com.sphere.core.rootbackend.RootUserPipeline.INCLUDES_DIR));
+            for (java.nio.file.Path library : found) {
+                AppLogger.raw(String.format("      %-32s %s  loaded at startup",
+                    library.getFileName(), humanBytes(sizeOf(library))));
+                libraries++;
+            }
+            for (java.nio.file.Path source : toBuild) {
+                AppLogger.raw(String.format("      %-32s %s  source, :root includes build",
+                    source.getFileName(), humanBytes(sizeOf(source))));
+                sources++;
+            }
+        }
+        if (libraries + sources == 0) {
+            AppLogger.info("Nothing in includes/ yet. A .so there is loaded at startup.");
+        }
+
+        com.sphere.core.rootbackend.RootUserCompiler compiler =
+            new com.sphere.core.rootbackend.RootUserCompiler(
+                new com.sphere.utils.SettingsManager(), backend(c));
+        AppLogger.raw("  compiler    " + String.valueOf(compiler.compiler()));
+        AppLogger.raw("  flags from  " + compiler.flagSource());
+        String rootCompiler = compiler.rootBuildCompiler();
+        if (rootCompiler != null) {
+            AppLogger.raw("  ROOT built with " + rootCompiler);
+        }
+    }
+
+    /** Loads again what is in includes/, for a library rebuilt while Sphere runs. */
+    public static void rootIncludesReload(String i, CommandExecutionContext c) {
+        com.sphere.core.rootbackend.RootBackend b = backend(c);
+        if (b == null) {
+            AppLogger.error("The ROOT engine is not running.");
+            return;
+        }
+        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
+        com.sphere.core.rootbackend.RootBackend.setActivePipelineProject(project);
+        var outcome = com.sphere.core.rootbackend.RootUserPipeline.loadInto(b, project);
+        if (outcome.total() == 0) {
+            AppLogger.info("Nothing to load in includes/.");
+        }
+        for (String problem : outcome.problems()) {
+            AppLogger.raw("      " + problem);
+        }
+    }
+
+    /**
+     * Builds the C++ of includes/ into shared libraries. One named source, or
+     * every source with --all, and only what changed unless --force is given.
+     */
+    public static void rootIncludesBuild(String i, CommandExecutionContext c) {
+        String a = args(i, ":root includes build").trim();
+        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
+
+        boolean all = a.contains("--all");
+        boolean force = a.contains("--force");
+        String named = a.replace("--all", "").replace("--force", "").trim();
+
+        if (!all && named.isEmpty()) {
+            AppLogger.raw("Usage: :root includes build <file.cpp> | --all [--force]");
+            AppLogger.raw("  --all      build every source of includes/, both layers");
+            AppLogger.raw("  --force    build even when the library is already newer");
+            return;
+        }
+
+        java.util.List<java.nio.file.Path> queue = new java.util.ArrayList<>();
+        if (all) {
+            for (java.nio.file.Path root
+                    : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
+                for (java.nio.file.Path source
+                        : com.sphere.core.rootbackend.RootUserPipeline.sources(root)) {
+                    if (force
+                        || com.sphere.core.rootbackend.RootUserCompiler.needsBuilding(source)) {
+                        queue.add(source);
+                    }
+                }
+            }
+            if (queue.isEmpty()) {
+                AppLogger.info("Nothing to build. Everything in includes/ is up to date.");
+                return;
+            }
+        } else {
+            java.nio.file.Path source = findSource(named, project);
+            if (source == null) {
+                AppLogger.error("No source named " + named + " in includes/.");
+                return;
+            }
+            queue.add(source);
+        }
+
+        runBuilds(queue, project, c);
+    }
+
+    /** A source of includes/ by bare name, the project layer winning. */
+    private static java.nio.file.Path findSource(String name, String project) {
+        String wanted = name.replace("\"", "").trim();
+        java.nio.file.Path found = null;
+        for (java.nio.file.Path root
+                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
+            java.nio.file.Path candidate = root
+                .resolve(com.sphere.core.rootbackend.RootUserPipeline.INCLUDES_DIR)
+                .resolve(wanted);
+            if (java.nio.file.Files.isRegularFile(candidate)) found = candidate;
+        }
+        if (found != null) return found;
+        java.nio.file.Path direct = java.nio.file.Path.of(wanted);
+        return java.nio.file.Files.isRegularFile(direct) ? direct.toAbsolutePath() : null;
+    }
+
+    /** Compiles a queue off the event thread, then reloads what was produced. */
+    private static void runBuilds(java.util.List<java.nio.file.Path> queue,
+                                  String project, CommandExecutionContext c) {
+        AppLogger.info("Building " + queue.size()
+            + (queue.size() == 1 ? " source..." : " sources..."));
+
+        new javax.swing.SwingWorker<java.util.List<
+                com.sphere.core.rootbackend.RootUserCompiler.Build>, String>() {
+            @Override
+            protected java.util.List<com.sphere.core.rootbackend.RootUserCompiler.Build>
+                    doInBackground() {
+                // The engine is handed over so its own build settings are used
+                // rather than a root-config that may not even be installed.
+                com.sphere.core.rootbackend.RootUserCompiler compiler =
+                    new com.sphere.core.rootbackend.RootUserCompiler(
+                        new com.sphere.utils.SettingsManager(), backend(c));
+
+                publish("      flags from " + compiler.flagSource());
+                String rootCompiler = compiler.rootBuildCompiler();
+                String ours = compiler.compiler();
+                if (rootCompiler != null && ours != null
+                        && !sameCompilerFamily(rootCompiler, ours)) {
+                    // A library built by another compiler can load and then fail
+                    // on a symbol, which is hard to read from the other end.
+                    publish("[W] ROOT was built with " + rootCompiler
+                            + ", this builds with " + ours);
+                }
+                java.util.List<com.sphere.core.rootbackend.RootUserCompiler.Build> done =
+                    new java.util.ArrayList<>();
+                for (java.nio.file.Path source : queue) {
+                    com.sphere.core.rootbackend.RootUserCompiler.Build built =
+                        compiler.build(source, null);
+                    done.add(built);
+                    publish((built.succeeded() ? "[+] " : "[!] ") + source.getFileName()
+                            + (built.succeeded()
+                               ? "  ->  " + built.output().getFileName()
+                               : ""));
+                    // The compiler's own words, which used to go to a terminal
+                    // that does not exist when Sphere runs from a .jar
+                    if (!built.succeeded()) {
+                        for (String line : built.lines()) publish("      " + line);
+                    }
+                }
+                return done;
+            }
+
+            @Override
+            protected void process(java.util.List<String> chunks) {
+                for (String line : chunks) {
+                    if (line.startsWith("[+] ")) AppLogger.success(line.substring(4));
+                    else if (line.startsWith("[!] ")) AppLogger.error(line.substring(4));
+                    else if (line.startsWith("[W] ")) AppLogger.warn(line.substring(4));
+                    else AppLogger.raw(line);
+                }
+            }
+
+            @Override
+            protected void done() {
+                java.util.List<com.sphere.core.rootbackend.RootUserCompiler.Build> results;
+                try { results = get(); } catch (Exception e) { return; }
+                long good = results.stream().filter(
+                    com.sphere.core.rootbackend.RootUserCompiler.Build::succeeded).count();
+                long bad = results.size() - good;
+                AppLogger.raw("  " + good + " built" + (bad > 0 ? ", " + bad + " failed" : "") + ".");
+
+                if (good > 0) {
+                    com.sphere.core.rootbackend.RootBackend engine = backend(c);
+                    if (engine != null && engine.isAvailable()) {
+                        com.sphere.core.rootbackend.RootUserPipeline.loadInto(engine, project);
+                    }
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Compiles the macros of user_scripts/ with ACLiC, inside the interpreter.
+     * One named macro, or every macro with --all.
+     */
+    public static void rootScriptCompileAll(String i, CommandExecutionContext c) {
+        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
+        com.sphere.core.rootbackend.RootBackend engine = backend(c);
+        if (engine == null || !engine.isAvailable()) {
+            AppLogger.error("ACLiC compiles inside the interpreter, "
+                + "so the ROOT engine has to be running.");
+            return;
+        }
+
+        java.util.List<java.nio.file.Path> queue = new java.util.ArrayList<>();
+        for (java.nio.file.Path root
+                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
+            queue.addAll(com.sphere.core.rootbackend.RootUserPipeline.macros(root));
+        }
+        if (queue.isEmpty()) {
+            AppLogger.info("No macro in user_scripts/ to compile.");
+            return;
+        }
+
+        AppLogger.info("Compiling " + queue.size() + " macros with ACLiC...");
+        for (java.nio.file.Path macro : queue) {
+            String path = com.sphere.core.rootbackend.RootUserPipeline.forCling(macro);
+            cling(c, "gROOT->LoadMacro(\"" + path + "+\")");
+        }
+    }
+
+    /** Builds both folders in order: the libraries first, then the macros. */
+    public static void rootBuildAll(String i, CommandExecutionContext c) {
+        AppLogger.info("Building includes/ then user_scripts/.");
+        rootIncludesBuild(":root includes build --all", c);
+        // The macros come after, so ACLiC already has the libraries it may need.
+        rootScriptCompileAll(":root script compile --all", c);
+    }
+
+    /** Same compiler family, ignoring the path and the version suffix. */
+    private static boolean sameCompilerFamily(String a, String b) {
+        return family(a).equals(family(b));
+    }
+
+    private static String family(String compiler) {
+        String name = java.nio.file.Path.of(compiler.trim().split("\\s+")[0])
+                        .getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        name = name.replaceAll("\\.exe$", "").replaceAll("-?\\d+(\\.\\d+)*$", "");
+        if (name.contains("clang")) return "clang";
+        if (name.contains("g++") || name.contains("gcc")) return "gcc";
+        return name;
+    }
+
+    private static long sizeOf(java.nio.file.Path p) {
+        try { return java.nio.file.Files.size(p); } catch (java.io.IOException e) { return 0L; }
     }
 
     public static void rootCompileIncludes(String i, CommandExecutionContext c) {

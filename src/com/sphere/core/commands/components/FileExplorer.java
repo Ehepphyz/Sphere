@@ -301,7 +301,11 @@ public class FileExplorer extends JTree {
                         File file = getFileFromNode((DefaultMutableTreeNode) path.getLastPathComponent());
 
                         if (file != null && file.isFile()) {
-                            if (editorFrame != null) {
+                            // An image goes to the image editor; the code editor
+                            // would only show its bytes.
+                            if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
+                                com.sphere.ui.ImageEditorFrame.show(file);
+                            } else if (editorFrame != null) {
                                 editorFrame.openFileInternally(file);
                             }
                         }

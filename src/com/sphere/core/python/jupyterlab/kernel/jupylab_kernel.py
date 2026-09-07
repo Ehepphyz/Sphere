@@ -277,6 +277,36 @@ def _reset():
     _send({"t": "reset"})
 
 
+_shm_replies = {}
+_shm_event = threading.Event()
+
+
+def _shm_wait_for(rid, timeout=10.0):
+    # The reply arrives on the reader thread, so this waits rather than reads.
+    deadline = time.monotonic() + timeout
+    while True:
+        if rid in _shm_replies:
+            return _shm_replies.pop(rid)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Sphere did not answer shared-memory request {rid}")
+        _shm_event.wait(remaining)
+        _shm_event.clear()
+
+
+def _install_shm():
+    # Optional: a kernel started without a shared region simply has no module.
+    if not os.environ.get("SPHERE_SHM_PATH"):
+        return
+    try:
+        import sphere_shm
+    except ImportError:
+        return
+    sphere_shm.set_broker_factory(
+        lambda: sphere_shm.KernelBroker(_send, _shm_wait_for))
+    builtins.sphere_shm = sphere_shm
+
+
 def _read_commands():
     # Reads Sphere's messages while a cell is running. Everything that must reach a
     # busy kernel -- an interrupt, an answer to input() -- arrives on this thread.
@@ -290,6 +320,10 @@ def _read_commands():
         except Exception:
             continue
         op = message.get("op")
+        if op == "shm_reply":
+            _shm_replies[message.get("rid")] = message
+            _shm_event.set()
+            continue
         if op == "exec":
             _requests.put(message)
         elif op == "input":
@@ -310,6 +344,8 @@ def _read_commands():
 
 
 def main():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    _install_shm()
     _send({"t": "ready", "version": SPHERE_KERNEL_VERSION,
            "python": sys.version.split()[0], "executable": sys.executable})
     reader = threading.Thread(target=_read_commands, name="command-reader", daemon=True)

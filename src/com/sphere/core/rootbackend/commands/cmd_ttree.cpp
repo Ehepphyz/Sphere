@@ -718,7 +718,7 @@ void send_response(ShmLayout &shm, const Proto::PacketHeader &req,
 
   if (payload_offset != 0) {
     // A committed heap chunk: publish where it is, not just how big it is.
-    if (payload_offset > 0xFFFFFFFFULL || payload_size > 0xFFFFFFFFU) {
+    if (payload_offset >= SHM_MAX_ADDRESSABLE || payload_size > 0xFFFFFFFFU) {
       msg.type = MsgType::INLINE_DATA;
       msg.cmd = static_cast<std::uint16_t>(Proto::PacketType::EVT_ERROR);
       msg.payload_size = 2;
@@ -727,7 +727,7 @@ void send_response(ShmLayout &shm, const Proto::PacketHeader &req,
       msg.inline_bytes[1] = 0;
     } else {
       msg.type = MsgType::SHM_REF;
-      msg.shm_ref.offset = static_cast<std::uint32_t>(payload_offset);
+      shm_ref_publish(msg.shm_ref, shm, payload_offset);
       msg.shm_ref.total_bytes = payload_size;
       msg.shm_ref.dtype = dtype;
       msg.shm_ref.ndim = 1;

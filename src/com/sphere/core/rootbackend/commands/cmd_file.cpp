@@ -265,7 +265,7 @@ void send_text(ShmLayout &shm, const Proto::PacketHeader &req,
   msg.cmd = static_cast<std::uint16_t>(type);
   msg.job_id = req.job_id;
   msg.req_id = req.req_id;
-  msg.shm_ref.offset = static_cast<std::uint32_t>(writer.offset());
+  shm_ref_publish(msg.shm_ref, shm, writer.offset());
   msg.shm_ref.total_bytes = static_cast<std::uint32_t>(text.size() + 1);
   msg.shm_ref.dtype = ShmDType::UInt8;
   msg.shm_ref.ndim = 1;

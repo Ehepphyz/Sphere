@@ -193,7 +193,7 @@ void handle_read_column(ShmLayout &shm, const Proto::PacketHeader &pkt, void *co
     msg.job_id = pkt.job_id;
     msg.req_id = pkt.req_id;
 
-    msg.shm_ref.offset = static_cast<std::uint32_t>(payload_off);
+    shm_ref_publish(msg.shm_ref, shm, payload_off);
     msg.shm_ref.total_bytes = static_cast<std::uint32_t>(total_bytes);
     msg.shm_ref.dtype = type_info.dtype;
     msg.shm_ref.ndim = 1;

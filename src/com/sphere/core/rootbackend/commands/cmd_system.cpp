@@ -331,12 +331,13 @@ static void send_response(ShmLayout &shm, std::uint64_t job_id,
 
   msg.job_id = static_cast<std::uint32_t>(job_id);
   msg.req_id = static_cast<std::uint32_t>(req_id);
-  if (writer.offset() > 0xFFFFFFFFULL || payload_len + 1 > 0xFFFFFFFFULL) {
+  if (writer.offset() >= SHM_MAX_ADDRESSABLE || payload_len + 1 > 0xFFFFFFFFULL) {
     get_telemetry().shm_allocation_failures.fetch_add(1,
                                                       std::memory_order_relaxed);
     return;
   }
-  msg.shm_ref.offset = static_cast<std::uint32_t>(writer.offset());
+  shm_ref_set_byte_offset(msg.shm_ref, writer.offset());
+  msg.shm_ref.generation = writer.handle().generation;
   msg.shm_ref.total_bytes = static_cast<std::uint32_t>(payload_len + 1);
   msg.shm_ref.dtype = ShmDType::UInt8;
   msg.shm_ref.ndim = 1;
@@ -795,8 +796,9 @@ void warm_up() {
 void handle_release_chunk(ShmLayout &shm, const Proto::PacketHeader &pkt,
                           void *context) {
   (void)context;
-  // The offset rides in job_id so that freeing never has to allocate first.
-  // Retiring is idempotent, so a client releasing twice is harmless.
+  // The engine answers this opcode itself, where the generation is still in
+  // reach. This entry stays for the older form that puts the byte offset in
+  // job_id and carries no generation to check.
   if (pkt.job_id != 0) {
     shm_heap_retire_chunk(shm, pkt.job_id);
   }

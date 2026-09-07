@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import com.sphere.core.rootbackend.RootBackend;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -86,10 +87,17 @@ public final class PythonKernelProcess {
                 : "No Python interpreter: set PYTHON_EXEC in settings.conf.");
         }
         Path script = KernelScript.materialize();
+        KernelScript.materializeShm();
 
         ProcessBuilder builder = new ProcessBuilder(executable, "-u",
                                                     script.toAbsolutePath().toString());
         builder.redirectErrorStream(false);
+        // Tells the kernel which region to map. Without it the kernel starts
+        // normally and simply has no shared-memory module.
+        final RootBackend backend = RootBackend.getInstance();
+        if (backend != null && !backend.shmRegionPath().isEmpty()) {
+            builder.environment().put("SPHERE_SHM_PATH", backend.shmRegionPath());
+        }
         process = builder.start();
         toKernel = new BufferedWriter(new OutputStreamWriter(
             process.getOutputStream(), StandardCharsets.UTF_8));
@@ -254,8 +262,43 @@ public final class PythonKernelProcess {
             case "complete" -> listener.onCompletion(id, intOf(message.get("start"), 0),
                                                      stringsOf(message.get("matches")));
             case "vars" -> listener.onVariables(id, itemsOf(message.get("items")));
+            case "shm_alloc" -> answerShmAlloc(message);
+            case "shm_release" -> answerShmRelease(message);
             default -> { }
         }
+    }
+
+    /**
+     * Hands the kernel a block of the shared region. Java owns the allocator, so
+     * the claim happens in one place rather than in a second implementation on
+     * the Python side. Only the request travels: the data itself never leaves the
+     * region.
+     */
+    private void answerShmAlloc(Map<String, Object> message) {
+        final int rid = intOf(message.get("rid"), 0);
+        final int bytes = intOf(message.get("bytes"), 0);
+        final int dtype = intOf(message.get("dtype"), 0);
+        final RootBackend backend = RootBackend.getInstance();
+
+        long offset = 0L;
+        int generation = 0;
+        if (backend != null && bytes > 0) {
+            RootBackend.HeapHandle handle = backend.acquireForClient(bytes, (short) dtype);
+            offset = handle.payloadOffset();
+            generation = handle.generation();
+        }
+        send(Map.of("op", "shm_reply", "rid", rid,
+                    "offset", offset, "generation", generation));
+    }
+
+    private void answerShmRelease(Map<String, Object> message) {
+        final RootBackend backend = RootBackend.getInstance();
+        if (backend == null) {
+            return;
+        }
+        final Object offset = message.get("offset");
+        backend.releaseForClient(offset instanceof Number n ? n.longValue() : 0L,
+                                 intOf(message.get("generation"), 0));
     }
 
     private static int intOf(Object value, int fallback) {

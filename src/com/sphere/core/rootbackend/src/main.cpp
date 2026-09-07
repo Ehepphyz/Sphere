@@ -226,11 +226,13 @@ bool parse_options(int argc, char **argv, Options &options) {
         std::cerr << "[Main] --size must be a positive byte count.\n";
         return false;
       }
-      // ShmRef::offset is a uint32, so nothing past 4 GiB can be addressed in
-      // an event. Refusing here beats handing out truncated offsets later.
-      if (options.shm_size > 0xFFFFFFFFULL) {
-        std::cerr << "[Main] --size cannot exceed 4 GiB: a heap offset travels "
-                     "as a 32-bit field.\n";
+      // ShmRef::offset is a uint32 counted in units of SHM_OFFSET_SHIFT bytes.
+      // Refusing here beats handing out truncated offsets later.
+      if (options.shm_size > Sphere::SHM_MAX_ADDRESSABLE) {
+        std::cerr << "[Main] --size cannot exceed "
+                  << (Sphere::SHM_MAX_ADDRESSABLE >> 30)
+                  << " GiB: a heap offset travels as a 32-bit field counted in "
+                  << (1u << Sphere::SHM_OFFSET_SHIFT) << "-byte units.\n";
         return false;
       }
     } else if (arg == "--ntuple") {
@@ -720,7 +722,7 @@ int main(int argc, char **argv) {
       std::string payload;
       if (reply.type == Sphere::MsgType::SHM_REF && reply.shm_ref.offset != 0) {
         // The handler answered through the shared heap; read the chunk.
-        const std::uint64_t offset = reply.shm_ref.offset;
+        const std::uint64_t offset = shm_ref_byte_offset(reply.shm_ref);
         const std::uint64_t size = reply.shm_ref.total_bytes;
         if (layout.base != nullptr && layout.header != nullptr &&
             offset < layout.header->total_size &&

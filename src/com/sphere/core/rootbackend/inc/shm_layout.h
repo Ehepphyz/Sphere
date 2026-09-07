@@ -168,6 +168,18 @@ struct alignas(CACHE_LINE_SIZE) ShmHeapRoot {
   std::atomic<std::uint64_t> hotness_by_kind[KIND_BUCKETS]{};
   std::atomic<std::uint64_t> hotness_by_producer[PRODUCER_BUCKETS]{};
   std::atomic<std::uint64_t> hotness_by_numa_node[MAX_RUNTIMES]{};
+
+  // Appended, so every offset above keeps the value the Java side already knows.
+  // One free list per size class. The head packs a 32-bit chunk offset with a
+  // 32-bit counter, so a pop cannot be fooled by a block that was freed and
+  // handed back between the read and the exchange.
+  alignas(CACHE_LINE_SIZE)
+      std::atomic<std::uint64_t> free_head[HEAP_SIZE_CLASSES]{};
+  std::atomic<std::uint64_t> free_bytes[HEAP_SIZE_CLASSES]{};
+  std::atomic<std::uint64_t> recycled_total{0};
+  std::atomic<std::uint64_t> carved_total{0};
+  std::atomic<std::uint64_t> stale_rejected{0};
+  std::uint64_t reserved_free[5]{};
 };
 
 struct alignas(CACHE_LINE_SIZE) Chunk {
@@ -179,7 +191,8 @@ struct alignas(CACHE_LINE_SIZE) Chunk {
   std::uint16_t encoding{0};
   std::atomic<std::uint16_t> flags{CHUNK_INCOMPLETE};
   std::uint32_t checksum{0};
-  std::uint32_t reserved{0};
+  // Bumped on every free, so an address kept across a recycle no longer matches.
+  std::atomic<std::uint32_t> generation{1};
 
   std::atomic<std::uint64_t> next_offset{0};
   std::atomic<std::uint64_t> next_kind_offset{0};
@@ -187,6 +200,19 @@ struct alignas(CACHE_LINE_SIZE) Chunk {
   std::atomic<std::uint64_t> next_offset_lvl2{0};
   std::atomic<std::uint64_t> next_offset_lvl4{0};
   std::atomic<std::uint64_t> next_offset_lvl8{0};
+
+  // Back links, so a freed block leaves the three indexes in constant time
+  // instead of a walk. They live in the padding the cache-line alignment already
+  // reserved, so the header stays 128 bytes and every offset the Java side knows
+  // keeps its value.
+  std::atomic<std::uint64_t> prev_offset{0};
+  std::atomic<std::uint64_t> prev_kind_offset{0};
+  std::atomic<std::uint64_t> prev_producer_offset{0};
+
+  // Which free list this block returns to.
+  std::uint16_t size_class{0};
+  std::uint16_t reserved_tail{0};
+  std::uint32_t reserved_tail2{0};
 };
 
 using ShmChunkHeader = Chunk;
@@ -389,10 +415,55 @@ get_heap_root(const ShmLayout &layout) noexcept {
 // Heap allocation
 // -----------------------------------------------------------------------------
 
+/// A block address paired with the generation it was handed out under.
+struct ShmHandle {
+  std::uint64_t payload_offset{0};
+  std::uint32_t generation{0};
+
+  [[nodiscard]] bool is_valid() const noexcept { return payload_offset != 0; }
+};
+
 [[nodiscard]] std::uint64_t shm_heap_alloc(ShmLayout &layout, std::size_t size,
                                            std::uint16_t kind = 0,
                                            std::uint16_t producer_id = 0,
                                            std::uint16_t encoding = 0) noexcept;
+
+/// Same allocation, returning the generation the caller must quote later.
+[[nodiscard]] ShmHandle shm_heap_acquire(ShmLayout &layout, std::size_t size,
+                                         std::uint16_t kind = 0,
+                                         std::uint16_t producer_id = 0,
+                                         std::uint16_t encoding = 0) noexcept;
+
+/**
+ * Returns a block to its free list. The generation must match the one handed
+ * out, so releasing twice, or releasing an address that has since been recycled,
+ * changes nothing and is counted rather than acted on.
+ */
+bool shm_heap_release(ShmLayout &layout, ShmHandle handle) noexcept;
+
+/**
+ * Checks a handle before its bytes are read. Returns nullptr when the block has
+ * been recycled, freed, or never existed.
+ */
+[[nodiscard]] std::byte *shm_heap_resolve(ShmLayout &layout,
+                                          ShmHandle handle) noexcept;
+
+/// Size class a payload of this size lands in, or -1 when it is too large.
+[[nodiscard]] int shm_heap_size_class(std::size_t payload_size) noexcept;
+
+/// Bytes currently parked in the free lists, ready to be handed out again.
+[[nodiscard]] std::uint64_t shm_heap_free_bytes(const ShmLayout &layout) noexcept;
+
+/// Handles refused because their generation no longer matched.
+[[nodiscard]] std::uint64_t
+shm_heap_stale_rejected(const ShmLayout &layout) noexcept;
+
+/**
+ * Fills a descriptor's address and generation from a live block, for the
+ * senders that allocate by raw offset and never saw a ShmHandle.
+ */
+void shm_ref_publish(ShmRef &ref, const ShmLayout &layout,
+                     std::uint64_t payload_offset) noexcept;
 
 void shm_chunk_commit(ShmLayout &layout, std::uint64_t payload_offset) noexcept;
 
@@ -561,10 +632,11 @@ std::size_t shm_heap_compact_logical(ShmLayout &layout) noexcept;
  */
 std::uint64_t shm_heap_rewind_if_idle(ShmLayout &layout) noexcept;
 
-void shm_heap_defragment(ShmLayout &layout) noexcept;
+// shm_heap_defragment and shm_relocate_chunk are gone: both moved live blocks,
+// and an offset handed to a Java reader or wrapped in a PyTorch tensor stays
+// live for as long as that holder wants it. Freed blocks are recycled in place
+// instead, which never invalidates an address anyone still holds.
 void shm_heap_update_prefetch(ShmLayout &layout, std::uint16_t kind) noexcept;
-void shm_relocate_chunk(ShmLayout &layout, std::uint64_t old_off,
-                        std::uint64_t new_off) noexcept;
 
 // -----------------------------------------------------------------------------
 // Journal and telemetry
@@ -602,8 +674,9 @@ public:
   ScopedChunkWriter(ShmLayout &layout, std::size_t size, std::uint16_t kind = 0,
                     std::uint16_t producer_id = 0,
                     std::uint16_t encoding = 0) noexcept
-      : layout_(&layout), payload_offset_(shm_heap_alloc(
-                              layout, size, kind, producer_id, encoding)) {
+      : layout_(&layout),
+        handle_(shm_heap_acquire(layout, size, kind, producer_id, encoding)),
+        payload_offset_(handle_.payload_offset) {
     if (payload_offset_ != 0) {
       header_ =
           const_cast<Chunk *>(shm_chunk_get_header_raw(*layout_, payload_offset_));
@@ -617,9 +690,9 @@ public:
   ScopedChunkWriter &operator=(const ScopedChunkWriter &) = delete;
 
   ScopedChunkWriter(ScopedChunkWriter &&other) noexcept
-      : layout_(other.layout_), payload_offset_(other.payload_offset_),
-        header_(other.header_), payload_ptr_(other.payload_ptr_),
-        committed_(other.committed_) {
+      : layout_(other.layout_), handle_(other.handle_),
+        payload_offset_(other.payload_offset_), header_(other.header_),
+        payload_ptr_(other.payload_ptr_), committed_(other.committed_) {
     other.disarm();
   }
 
@@ -627,6 +700,7 @@ public:
     if (this != &other) {
       rollback_if_open();
       layout_ = other.layout_;
+      handle_ = other.handle_;
       payload_offset_ = other.payload_offset_;
       header_ = other.header_;
       payload_ptr_ = other.payload_ptr_;
@@ -649,6 +723,9 @@ public:
   [[nodiscard]] std::uint64_t offset() const noexcept {
     return payload_offset_;
   }
+
+  /// The address and the generation the receiver must quote to read or free it.
+  [[nodiscard]] ShmHandle handle() const noexcept { return handle_; }
 
   void commit() noexcept {
     if (!committed_ && payload_offset_ != 0 && layout_ != nullptr) {
@@ -682,14 +759,13 @@ private:
 
   void rollback_if_open() noexcept {
     if (!committed_ && header_ != nullptr && layout_ != nullptr) {
-      
-      header_->flags.store(CHUNK_DIRTY, std::memory_order_release);
-      shm_heap_retire_chunk(*layout_, payload_offset_);
+      shm_heap_release(*layout_, handle_);
       committed_ = true;
     }
   }
 
   void disarm() noexcept {
+    handle_ = ShmHandle{};
     payload_offset_ = 0;
     header_ = nullptr;
     payload_ptr_ = nullptr;
@@ -697,6 +773,7 @@ private:
   }
 
   ShmLayout *layout_{nullptr};
+  ShmHandle handle_{};
   std::uint64_t payload_offset_{0};
   Chunk *header_{nullptr};
   std::byte *payload_ptr_{nullptr};

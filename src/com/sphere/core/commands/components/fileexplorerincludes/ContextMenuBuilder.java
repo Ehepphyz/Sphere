@@ -424,6 +424,13 @@ public class ContextMenuBuilder {
 
         String fileNameLower = file.getName().toLowerCase();
 
+        // PNG, JPG and SVG go to the image editor; the code editor would only
+        // show their bytes.
+        if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
+            SwingUtilities.invokeLater(() -> com.sphere.ui.ImageEditorFrame.show(file));
+            return;
+        }
+
         // Intercept and load Jupyter Notebook format targets via standalone view instance
         if (fileNameLower.endsWith(".ipynb")) {
             SwingUtilities.invokeLater(() -> {

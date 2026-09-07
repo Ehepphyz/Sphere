@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -393,17 +394,16 @@ ShmSession init_shm(bool create, const char *region_name,
 
     if (state == static_cast<std::uint32_t>(EngineState::CORRUPTED)) {
       throw std::runtime_error(
-          "Shared memory layout is marked CORRUPTED; the creator failed.");
+          "The shared region is marked corrupted: whatever created it did not "
+          "finish. Run root-bridge --init-shm on it to lay it out again.");
     }
 
     const std::uint32_t magic = header->magic.load(std::memory_order_acquire);
     const std::uint32_t version = header->version.load(std::memory_order_acquire);
     if (magic != SHM_MAGIC || version != SHM_VERSION) {
       fail_init(header, EngineError::ABI_MISMATCH,
-                "Shared memory ABI mismatch: magic=0x" +
-                    std::to_string(magic) + " version=" +
-                    std::to_string(version) + ", expected version " +
-                    std::to_string(SHM_VERSION) + ".");
+                "The shared region is not laid out the way this build reads it. "
+                "Run root-bridge --init-shm on it to lay it out again.");
     }
 
     // Rebuild the view strictly from the recorded offsets.
@@ -433,28 +433,162 @@ ShmSession init_shm(bool create, const char *region_name,
 // Heap allocation
 // ============================================================================
 
-std::uint64_t shm_heap_alloc(ShmLayout &layout, std::size_t size,
-                             std::uint16_t kind, std::uint16_t producer_id,
-                             std::uint16_t encoding) noexcept {
-  if (layout.data_heap == nullptr || layout.header == nullptr || size == 0) {
-    return 0;
+namespace {
+
+/// Packs a chunk offset with a counter, so a pop cannot be fooled by a block
+/// that was freed and handed back between reading the head and exchanging it.
+[[nodiscard]] inline std::uint64_t pack_free_head(std::uint64_t chunk_offset,
+                                                  std::uint32_t tag) noexcept {
+  return (static_cast<std::uint64_t>(tag) << 32) |
+         (chunk_offset >> SHM_OFFSET_SHIFT);
+}
+
+[[nodiscard]] inline std::uint64_t
+unpack_free_offset(std::uint64_t head) noexcept {
+  return (head & 0xFFFFFFFFULL) << SHM_OFFSET_SHIFT;
+}
+
+[[nodiscard]] inline std::uint32_t unpack_free_tag(std::uint64_t head) noexcept {
+  return static_cast<std::uint32_t>(head >> 32);
+}
+
+/// Adds a live block to the global, per-kind and per-producer indexes.
+void index_link(ShmLayout &layout, ShmHeapRoot *heap_root,
+                ShmChunkHeader *chunk, std::uint64_t chunk_offset) noexcept {
+  const std::uint64_t prev_last =
+      heap_root->off_last_chunk.exchange(chunk_offset, std::memory_order_acq_rel);
+  chunk->prev_offset.store(prev_last, std::memory_order_relaxed);
+  if (prev_last == 0) {
+    heap_root->off_first_chunk.store(chunk_offset, std::memory_order_release);
+  } else {
+    reinterpret_cast<ShmChunkHeader *>(layout.base + prev_last)
+        ->next_offset.store(chunk_offset, std::memory_order_release);
   }
 
-  // A size close to SIZE_MAX would wrap in the align_up below and slip past the
-  // capacity check as a small number. payload_size is a uint32 besides.
-  if (size > 0xFFFFFFFFULL) {
-    layout.header->last_error_code.store(
-        static_cast<std::uint32_t>(EngineError::OOM_HEAP),
-        std::memory_order_relaxed);
-    return 0;
+  if (chunk->kind < KIND_BUCKETS) {
+    const std::uint16_t k = chunk->kind;
+    const std::uint64_t prev =
+        heap_root->off_last_by_kind[k].exchange(chunk_offset,
+                                                std::memory_order_acq_rel);
+    chunk->prev_kind_offset.store(prev, std::memory_order_relaxed);
+    if (prev == 0) {
+      heap_root->off_first_by_kind[k].store(chunk_offset,
+                                            std::memory_order_release);
+    } else {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
+          ->next_kind_offset.store(chunk_offset, std::memory_order_release);
+    }
+    heap_root->off_prefetch_head_by_kind[k].store(chunk_offset,
+                                                  std::memory_order_release);
   }
 
-  auto *heap_hdr = get_heap_header(layout);
-  auto *heap_root = get_heap_root(layout);
+  if (chunk->producer_id < PRODUCER_BUCKETS) {
+    const std::uint16_t p = chunk->producer_id;
+    const std::uint64_t prev =
+        heap_root->off_last_by_producer[p].exchange(chunk_offset,
+                                                    std::memory_order_acq_rel);
+    chunk->prev_producer_offset.store(prev, std::memory_order_relaxed);
+    if (prev == 0) {
+      heap_root->off_first_by_producer[p].store(chunk_offset,
+                                                std::memory_order_release);
+    } else {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
+          ->next_producer_offset.store(chunk_offset, std::memory_order_release);
+    }
+    heap_root->off_prefetch_head_by_producer[p].store(chunk_offset,
+                                                      std::memory_order_release);
+  }
 
-  const std::size_t total_alloc_size =
-      align_up(sizeof(ShmChunkHeader) + size, CACHE_LINE_SIZE);
+  if (chunk->kind == 1) {
+    heap_root->off_prefetch_head.store(chunk_offset, std::memory_order_release);
+  }
+}
 
+/// Removes a block from the three indexes, in constant time via the back links.
+void index_unlink(ShmLayout &layout, ShmHeapRoot *heap_root,
+                  ShmChunkHeader *chunk, std::uint64_t chunk_offset) noexcept {
+  auto detach = [&](std::atomic<std::uint64_t> &prev_link,
+                    std::atomic<std::uint64_t> &next_link,
+                    std::atomic<std::uint64_t> &head,
+                    std::atomic<std::uint64_t> &tail) {
+    const std::uint64_t prev = prev_link.load(std::memory_order_relaxed);
+    const std::uint64_t next = next_link.load(std::memory_order_relaxed);
+    if (head.load(std::memory_order_relaxed) == chunk_offset) {
+      head.store(next, std::memory_order_release);
+    }
+    if (tail.load(std::memory_order_relaxed) == chunk_offset) {
+      tail.store(prev, std::memory_order_release);
+    }
+    prev_link.store(0, std::memory_order_relaxed);
+    next_link.store(0, std::memory_order_relaxed);
+    return std::pair<std::uint64_t, std::uint64_t>{prev, next};
+  };
+
+  {
+    const auto [prev, next] =
+        detach(chunk->prev_offset, chunk->next_offset,
+               heap_root->off_first_chunk, heap_root->off_last_chunk);
+    if (prev != 0) {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
+          ->next_offset.store(next, std::memory_order_release);
+    }
+    if (next != 0) {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + next)
+          ->prev_offset.store(prev, std::memory_order_release);
+    }
+  }
+
+  if (chunk->kind < KIND_BUCKETS) {
+    const std::uint16_t k = chunk->kind;
+    const auto [prev, next] = detach(
+        chunk->prev_kind_offset, chunk->next_kind_offset,
+        heap_root->off_first_by_kind[k], heap_root->off_last_by_kind[k]);
+    if (prev != 0) {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
+          ->next_kind_offset.store(next, std::memory_order_release);
+    }
+    if (next != 0) {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + next)
+          ->prev_kind_offset.store(prev, std::memory_order_release);
+    }
+    if (heap_root->off_prefetch_head_by_kind[k].load(
+            std::memory_order_relaxed) == chunk_offset) {
+      heap_root->off_prefetch_head_by_kind[k].store(prev,
+                                                    std::memory_order_release);
+    }
+  }
+
+  if (chunk->producer_id < PRODUCER_BUCKETS) {
+    const std::uint16_t p = chunk->producer_id;
+    const auto [prev, next] =
+        detach(chunk->prev_producer_offset, chunk->next_producer_offset,
+               heap_root->off_first_by_producer[p],
+               heap_root->off_last_by_producer[p]);
+    if (prev != 0) {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
+          ->next_producer_offset.store(next, std::memory_order_release);
+    }
+    if (next != 0) {
+      reinterpret_cast<ShmChunkHeader *>(layout.base + next)
+          ->prev_producer_offset.store(prev, std::memory_order_release);
+    }
+    if (heap_root->off_prefetch_head_by_producer[p].load(
+            std::memory_order_relaxed) == chunk_offset) {
+      heap_root->off_prefetch_head_by_producer[p].store(
+          prev, std::memory_order_release);
+    }
+  }
+
+  if (heap_root->off_prefetch_head.load(std::memory_order_relaxed) ==
+      chunk_offset) {
+    heap_root->off_prefetch_head.store(0, std::memory_order_release);
+  }
+}
+
+/// Charges the per-kind and per-producer admission quotas.
+[[nodiscard]] bool charge_quotas(ShmLayout &layout, ShmHeapHeader *heap_hdr,
+                                 std::uint16_t kind,
+                                 std::uint16_t producer_id) noexcept {
   bool kind_charged = false;
   if (kind < KIND_BUCKETS) {
     const std::uint64_t quota =
@@ -466,7 +600,7 @@ std::uint64_t shm_heap_alloc(ShmLayout &layout, std::size_t size,
         layout.header->last_error_code.store(
             static_cast<std::uint32_t>(EngineError::OOM_HEAP),
             std::memory_order_relaxed);
-        return 0;
+        return false;
       }
       if (heap_hdr->allocations_by_kind[kind].compare_exchange_weak(
               current, current + 1, std::memory_order_relaxed,
@@ -477,7 +611,6 @@ std::uint64_t shm_heap_alloc(ShmLayout &layout, std::size_t size,
     }
   }
 
-  bool producer_charged = false;
   if (producer_id < PRODUCER_BUCKETS) {
     const std::uint64_t quota =
         heap_hdr->quota_by_producer[producer_id].load(std::memory_order_relaxed);
@@ -492,147 +625,270 @@ std::uint64_t shm_heap_alloc(ShmLayout &layout, std::size_t size,
         layout.header->last_error_code.store(
             static_cast<std::uint32_t>(EngineError::OOM_HEAP),
             std::memory_order_relaxed);
-        return 0;
+        return false;
       }
       if (heap_hdr->allocations_by_producer[producer_id]
               .compare_exchange_weak(current, current + 1,
                                      std::memory_order_relaxed,
                                      std::memory_order_relaxed)) {
-        producer_charged = true;
         break;
       }
     }
   }
+  return true;
+}
 
-  // Bump allocation.
-  const std::uint64_t capacity =
-      heap_hdr->total_capacity.load(std::memory_order_relaxed);
-  std::uint64_t offset =
+void refund_quotas(ShmHeapHeader *heap_hdr, std::uint16_t kind,
+                   std::uint16_t producer_id) noexcept {
+  if (kind < KIND_BUCKETS) {
+    heap_hdr->allocations_by_kind[kind].fetch_sub(1, std::memory_order_relaxed);
+  }
+  if (producer_id < PRODUCER_BUCKETS) {
+    heap_hdr->allocations_by_producer[producer_id].fetch_sub(
+        1, std::memory_order_relaxed);
+  }
+}
+
+void publish_heap_gauges(ShmLayout &layout, ShmHeapHeader *heap_hdr) noexcept {
+  auto *stats = shm_engine_stats(layout);
+  if (stats == nullptr) {
+    return;
+  }
+  const std::uint64_t used =
       heap_hdr->allocated_bytes.load(std::memory_order_relaxed);
-  for (;;) {
-    if (offset + total_alloc_size > capacity) {
-      if (kind_charged) {
-        heap_hdr->allocations_by_kind[kind].fetch_sub(
-            1, std::memory_order_relaxed);
-      }
-      if (producer_charged) {
-        heap_hdr->allocations_by_producer[producer_id].fetch_sub(
-            1, std::memory_order_relaxed);
-      }
-      layout.header->last_error_code.store(
-          static_cast<std::uint32_t>(EngineError::OOM_HEAP),
-          std::memory_order_relaxed);
-      return 0;
+  stats->heap_usage_bytes.store(used, std::memory_order_relaxed);
+  const std::uint64_t reclaimable =
+      heap_hdr->reclaimable_bytes.load(std::memory_order_relaxed);
+  const std::uint64_t score = (used > 0) ? ((reclaimable * 100) / used) : 0;
+  stats->heap_fragmentation_score.store(score, std::memory_order_relaxed);
+  layout.header->heap_fragmentation_score.store(
+      static_cast<std::uint32_t>(score), std::memory_order_relaxed);
+}
+
+} // namespace
+
+int shm_heap_size_class(std::size_t payload_size) noexcept {
+  const std::size_t needed = payload_size + sizeof(ShmChunkHeader);
+  for (std::size_t i = 0; i < HEAP_SIZE_CLASSES; ++i) {
+    if (needed <= HEAP_CLASS_BYTES[i]) {
+      return static_cast<int>(i);
     }
-    if (heap_hdr->allocated_bytes.compare_exchange_weak(
-            offset, offset + total_alloc_size, std::memory_order_relaxed,
-            std::memory_order_relaxed)) {
+  }
+  return -1;
+}
+
+ShmHandle shm_heap_acquire(ShmLayout &layout, std::size_t size,
+                           std::uint16_t kind, std::uint16_t producer_id,
+                           std::uint16_t encoding) noexcept {
+  if (layout.data_heap == nullptr || layout.header == nullptr || size == 0) {
+    return {};
+  }
+
+  const int cls = shm_heap_size_class(size);
+  if (cls < 0) {
+    layout.header->last_error_code.store(
+        static_cast<std::uint32_t>(EngineError::OOM_HEAP),
+        std::memory_order_relaxed);
+    return {};
+  }
+
+  auto *heap_hdr = get_heap_header(layout);
+  auto *heap_root = get_heap_root(layout);
+
+  if (!charge_quotas(layout, heap_hdr, kind, producer_id)) {
+    return {};
+  }
+
+  std::uint64_t chunk_offset = 0;
+  bool recycled = false;
+
+  // A block already paid for is worth more than a fresh one.
+  std::uint64_t head = heap_root->free_head[cls].load(std::memory_order_acquire);
+  while (head != 0) {
+    const std::uint64_t candidate_offset = unpack_free_offset(head);
+    auto *candidate =
+        reinterpret_cast<ShmChunkHeader *>(layout.base + candidate_offset);
+    const std::uint64_t next =
+        candidate->next_offset.load(std::memory_order_relaxed);
+    const std::uint64_t replacement =
+        (next == 0) ? 0
+                    : pack_free_head(next, unpack_free_tag(head) + 1);
+    if (heap_root->free_head[cls].compare_exchange_weak(
+            head, replacement, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      chunk_offset = candidate_offset;
+      recycled = true;
       break;
     }
   }
 
-  const std::uint64_t chunk_offset =
-      layout.header->off_data_heap + heap_metadata_size() + offset;
+  if (!recycled) {
+    const std::uint64_t block_bytes = HEAP_CLASS_BYTES[cls];
+    const std::uint64_t capacity =
+        heap_hdr->total_capacity.load(std::memory_order_relaxed);
+    std::uint64_t offset =
+        heap_hdr->allocated_bytes.load(std::memory_order_relaxed);
+    for (;;) {
+      if (offset + block_bytes > capacity) {
+        refund_quotas(heap_hdr, kind, producer_id);
+        layout.header->last_error_code.store(
+            static_cast<std::uint32_t>(EngineError::OOM_HEAP),
+            std::memory_order_relaxed);
+        return {};
+      }
+      if (heap_hdr->allocated_bytes.compare_exchange_weak(
+              offset, offset + block_bytes, std::memory_order_relaxed,
+              std::memory_order_relaxed)) {
+        break;
+      }
+    }
+    chunk_offset =
+        layout.header->off_data_heap + heap_metadata_size() + offset;
+    ::new (static_cast<void *>(layout.base + chunk_offset)) ShmChunkHeader();
+    heap_root->carved_total.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    heap_root->free_bytes[cls].fetch_sub(HEAP_CLASS_BYTES[cls],
+                                         std::memory_order_relaxed);
+    heap_root->recycled_total.fetch_add(1, std::memory_order_relaxed);
+    heap_hdr->reclaimable_bytes.fetch_sub(HEAP_CLASS_BYTES[cls],
+                                          std::memory_order_relaxed);
+  }
 
-  auto *chunk =
-      ::new (static_cast<void *>(layout.base + chunk_offset)) ShmChunkHeader();
+  auto *chunk = reinterpret_cast<ShmChunkHeader *>(layout.base + chunk_offset);
+  const std::uint32_t generation =
+      chunk->generation.load(std::memory_order_relaxed);
+
   chunk->magic = CHUNK_MAGIC;
   chunk->payload_size = static_cast<std::uint32_t>(size);
   chunk->epoch = heap_hdr->epoch.load(std::memory_order_relaxed);
   chunk->kind = kind;
   chunk->producer_id = producer_id;
   chunk->encoding = encoding;
-  chunk->flags.store(CHUNK_INCOMPLETE, std::memory_order_relaxed);
   chunk->checksum = 0;
+  chunk->size_class = static_cast<std::uint16_t>(cls);
+  chunk->flags.store(CHUNK_INCOMPLETE, std::memory_order_relaxed);
 
   std::atomic_thread_fence(std::memory_order_release);
 
-  // Splice into the global list.
-  const std::uint64_t prev_last =
-      heap_root->off_last_chunk.exchange(chunk_offset, std::memory_order_acq_rel);
-  if (prev_last == 0) {
-    heap_root->off_first_chunk.store(chunk_offset, std::memory_order_release);
-  } else {
-    auto *last = reinterpret_cast<ShmChunkHeader *>(layout.base + prev_last);
-    last->next_offset.store(chunk_offset, std::memory_order_release);
-  }
-
-  if (kind < KIND_BUCKETS) {
-    const std::uint64_t prev = heap_root->off_last_by_kind[kind].exchange(
-        chunk_offset, std::memory_order_acq_rel);
-    if (prev == 0) {
-      heap_root->off_first_by_kind[kind].store(chunk_offset,
-                                               std::memory_order_release);
-    } else {
-      auto *last = reinterpret_cast<ShmChunkHeader *>(layout.base + prev);
-      last->next_kind_offset.store(chunk_offset, std::memory_order_release);
-    }
-    heap_root->off_prefetch_head_by_kind[kind].store(chunk_offset,
-                                                     std::memory_order_release);
-  }
-
-  if (producer_id < PRODUCER_BUCKETS) {
-    const std::uint64_t prev = heap_root->off_last_by_producer[producer_id]
-                                   .exchange(chunk_offset,
-                                             std::memory_order_acq_rel);
-    if (prev == 0) {
-      heap_root->off_first_by_producer[producer_id].store(
-          chunk_offset, std::memory_order_release);
-    } else {
-      auto *last = reinterpret_cast<ShmChunkHeader *>(layout.base + prev);
-      last->next_producer_offset.store(chunk_offset, std::memory_order_release);
-    }
-    heap_root->off_prefetch_head_by_producer[producer_id].store(
-        chunk_offset, std::memory_order_release);
-  }
-
-  // Skip-list levels for coarse scanning.
-  const std::uint32_t seq =
-      heap_root->n_chunks.fetch_add(1, std::memory_order_relaxed) + 1;
-  if ((seq & 1u) == 0) {
-    const std::uint64_t prev =
-        heap_root->off_last_lvl2.exchange(chunk_offset, std::memory_order_acq_rel);
-    if (prev != 0) {
-      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
-          ->next_offset_lvl2.store(chunk_offset, std::memory_order_release);
-    }
-  }
-  if ((seq & 3u) == 0) {
-    const std::uint64_t prev =
-        heap_root->off_last_lvl4.exchange(chunk_offset, std::memory_order_acq_rel);
-    if (prev != 0) {
-      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
-          ->next_offset_lvl4.store(chunk_offset, std::memory_order_release);
-    }
-  }
-  if ((seq & 7u) == 0) {
-    const std::uint64_t prev =
-        heap_root->off_last_lvl8.exchange(chunk_offset, std::memory_order_acq_rel);
-    if (prev != 0) {
-      reinterpret_cast<ShmChunkHeader *>(layout.base + prev)
-          ->next_offset_lvl8.store(chunk_offset, std::memory_order_release);
-    }
-  }
-
-  if (kind == 1) {
-    heap_root->off_prefetch_head.store(chunk_offset, std::memory_order_release);
-  }
-
+  index_link(layout, heap_root, chunk, chunk_offset);
+  heap_root->n_chunks.fetch_add(1, std::memory_order_relaxed);
   heap_hdr->active_allocations.fetch_add(1, std::memory_order_relaxed);
+  publish_heap_gauges(layout, heap_hdr);
 
-  if (auto *stats = shm_engine_stats(layout); stats != nullptr) {
-    const std::uint64_t used =
-        heap_hdr->allocated_bytes.load(std::memory_order_relaxed);
-    stats->heap_usage_bytes.store(used, std::memory_order_relaxed);
-    const std::uint64_t reclaimable =
-        heap_hdr->reclaimable_bytes.load(std::memory_order_relaxed);
-    const std::uint64_t score = (used > 0) ? ((reclaimable * 100) / used) : 0;
-    stats->heap_fragmentation_score.store(score, std::memory_order_relaxed);
-    layout.header->heap_fragmentation_score.store(
-        static_cast<std::uint32_t>(score), std::memory_order_relaxed);
+  return ShmHandle{chunk_offset + sizeof(ShmChunkHeader), generation};
+}
+
+std::uint64_t shm_heap_alloc(ShmLayout &layout, std::size_t size,
+                             std::uint16_t kind, std::uint16_t producer_id,
+                             std::uint16_t encoding) noexcept {
+  return shm_heap_acquire(layout, size, kind, producer_id, encoding)
+      .payload_offset;
+}
+
+bool shm_heap_release(ShmLayout &layout, ShmHandle handle) noexcept {
+  if (layout.base == nullptr || layout.data_heap == nullptr ||
+      !handle.is_valid()) {
+    return false;
   }
 
-  return chunk_offset + sizeof(ShmChunkHeader);
+  auto *heap_root = get_heap_root(layout);
+  auto *chunk = chunk_from_payload(layout, handle.payload_offset);
+  if (chunk == nullptr || chunk->magic != CHUNK_MAGIC) {
+    heap_root->stale_rejected.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
+  // Bumping the generation is what makes every other copy of this address stale,
+  // so it has to succeed exactly once. Losing the exchange means someone else
+  // already freed the block.
+  std::uint32_t expected = handle.generation;
+  if (!chunk->generation.compare_exchange_strong(expected, expected + 1,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+    heap_root->stale_rejected.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
+  const std::uint64_t chunk_offset =
+      handle.payload_offset - sizeof(ShmChunkHeader);
+  auto *heap_hdr = get_heap_header(layout);
+
+  index_unlink(layout, heap_root, chunk, chunk_offset);
+  chunk->flags.store(CHUNK_FREE, std::memory_order_release);
+  refund_quotas(heap_hdr, chunk->kind, chunk->producer_id);
+  heap_hdr->active_allocations.fetch_sub(1, std::memory_order_relaxed);
+  heap_root->n_chunks.fetch_sub(1, std::memory_order_relaxed);
+
+  const int cls = (chunk->size_class < HEAP_SIZE_CLASSES)
+                      ? static_cast<int>(chunk->size_class)
+                      : shm_heap_size_class(chunk->payload_size);
+  if (cls < 0) {
+    return true; // outside every class: cannot be recycled, but it is retired
+  }
+
+  std::uint64_t head = heap_root->free_head[cls].load(std::memory_order_acquire);
+  for (;;) {
+    chunk->next_offset.store(unpack_free_offset(head),
+                             std::memory_order_relaxed);
+    const std::uint64_t replacement =
+        pack_free_head(chunk_offset, unpack_free_tag(head) + 1);
+    if (heap_root->free_head[cls].compare_exchange_weak(
+            head, replacement, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      break;
+    }
+  }
+
+  heap_root->free_bytes[cls].fetch_add(HEAP_CLASS_BYTES[cls],
+                                       std::memory_order_relaxed);
+  heap_hdr->reclaimable_bytes.fetch_add(HEAP_CLASS_BYTES[cls],
+                                        std::memory_order_relaxed);
+  publish_heap_gauges(layout, heap_hdr);
+  return true;
+}
+
+std::byte *shm_heap_resolve(ShmLayout &layout, ShmHandle handle) noexcept {
+  if (layout.base == nullptr || !handle.is_valid()) {
+    return nullptr;
+  }
+  auto *chunk = chunk_from_payload(layout, handle.payload_offset);
+  if (chunk == nullptr || chunk->magic != CHUNK_MAGIC) {
+    return nullptr;
+  }
+  if (chunk->generation.load(std::memory_order_acquire) != handle.generation ||
+      (chunk->flags.load(std::memory_order_acquire) & CHUNK_FREE) != 0) {
+    get_heap_root(layout)->stale_rejected.fetch_add(1,
+                                                    std::memory_order_relaxed);
+    return nullptr;
+  }
+  return layout.base + handle.payload_offset;
+}
+
+std::uint64_t shm_heap_free_bytes(const ShmLayout &layout) noexcept {
+  if (layout.data_heap == nullptr) {
+    return 0;
+  }
+  const auto *heap_root = get_heap_root(layout);
+  std::uint64_t total = 0;
+  for (std::size_t i = 0; i < HEAP_SIZE_CLASSES; ++i) {
+    total += heap_root->free_bytes[i].load(std::memory_order_relaxed);
+  }
+  return total;
+}
+
+void shm_ref_publish(ShmRef &ref, const ShmLayout &layout,
+                     std::uint64_t payload_offset) noexcept {
+  shm_ref_set_byte_offset(ref, payload_offset);
+  const auto *chunk = chunk_from_payload(layout, payload_offset);
+  ref.generation =
+      (chunk != nullptr) ? chunk->generation.load(std::memory_order_acquire) : 0;
+}
+
+std::uint64_t shm_heap_stale_rejected(const ShmLayout &layout) noexcept {
+  if (layout.data_heap == nullptr) {
+    return 0;
+  }
+  return get_heap_root(layout)->stale_rejected.load(std::memory_order_relaxed);
 }
 
 void shm_chunk_commit(ShmLayout &layout,
@@ -726,6 +982,14 @@ void shm_heap_reset(ShmLayout &layout) noexcept {
   heap_root->off_last_lvl2.store(0, std::memory_order_release);
   heap_root->off_last_lvl4.store(0, std::memory_order_release);
   heap_root->off_last_lvl8.store(0, std::memory_order_release);
+
+  // The bump pointer is going back to the start, so every block parked in a free
+  // list is about to be overwritten. Dropping the heads first keeps the
+  // allocator from handing one of them out again.
+  for (std::size_t i = 0; i < HEAP_SIZE_CLASSES; ++i) {
+    heap_root->free_head[i].store(0, std::memory_order_release);
+    heap_root->free_bytes[i].store(0, std::memory_order_release);
+  }
 
   if (auto *stats = shm_engine_stats(layout); stats != nullptr) {
     stats->heap_usage_bytes.store(0, std::memory_order_relaxed);
@@ -955,19 +1219,36 @@ std::uint64_t shm_chunk_next_payload(const ShmLayout &layout,
   return follow(layout, offset, &Chunk::next_offset);
 }
 
+namespace {
+
+/// Advances `steps` links along the main list.
+[[nodiscard]] std::uint64_t stride(const ShmLayout &layout,
+                                   std::uint64_t offset, int steps) noexcept {
+  std::uint64_t current = offset;
+  for (int i = 0; i < steps && current != 0; ++i) {
+    current = shm_chunk_next_payload(layout, current);
+  }
+  return current;
+}
+
+} // namespace
+
+// The level pointers are no longer kept up to date: a recycled block would leave
+// stale links behind in lists nothing reads. Striding the main list gives the
+// same answer.
 std::uint64_t shm_chunk_next_payload_lvl2(const ShmLayout &layout,
                                           std::uint64_t offset) noexcept {
-  return follow(layout, offset, &Chunk::next_offset_lvl2);
+  return stride(layout, offset, 2);
 }
 
 std::uint64_t shm_chunk_next_payload_lvl4(const ShmLayout &layout,
                                           std::uint64_t offset) noexcept {
-  return follow(layout, offset, &Chunk::next_offset_lvl4);
+  return stride(layout, offset, 4);
 }
 
 std::uint64_t shm_chunk_next_payload_lvl8(const ShmLayout &layout,
                                           std::uint64_t offset) noexcept {
-  return follow(layout, offset, &Chunk::next_offset_lvl8);
+  return stride(layout, offset, 8);
 }
 
 std::uint64_t shm_chunk_scan(const ShmLayout &layout, std::uint64_t start,
@@ -1318,28 +1599,11 @@ void shm_heap_retire_chunk(ShmLayout &layout,
   if (chunk == nullptr || chunk->magic != CHUNK_MAGIC) {
     return;
   }
-
-  const std::uint16_t previous =
-      chunk->flags.fetch_or(CHUNK_TOMBSTONE, std::memory_order_acq_rel);
-  if ((previous & CHUNK_TOMBSTONE) != 0) {
-    return; // already retired; do not double-decrement
-  }
-
-  auto *heap_hdr = get_heap_header(layout);
-  heap_hdr->active_allocations.fetch_sub(1, std::memory_order_relaxed);
-
-  const std::uint64_t chunk_bytes =
-      align_up(sizeof(ShmChunkHeader) + chunk->payload_size, CACHE_LINE_SIZE);
-  heap_hdr->reclaimable_bytes.fetch_add(chunk_bytes, std::memory_order_relaxed);
-
-  if (chunk->kind < KIND_BUCKETS) {
-    heap_hdr->allocations_by_kind[chunk->kind].fetch_sub(
-        1, std::memory_order_relaxed);
-  }
-  if (chunk->producer_id < PRODUCER_BUCKETS) {
-    heap_hdr->allocations_by_producer[chunk->producer_id].fetch_sub(
-        1, std::memory_order_relaxed);
-  }
+  // Callers that never held a generation retire by address; read the live one so
+  // the block still reaches its free list.
+  shm_heap_release(layout,
+                   ShmHandle{payload_offset,
+                             chunk->generation.load(std::memory_order_acquire)});
 }
 
 // ============================================================================
@@ -1355,106 +1619,23 @@ std::size_t shm_heap_compact_logical(ShmLayout &layout) noexcept {
   const std::uint64_t safe_epoch = shm_get_min_active_reader_epoch(layout);
 
   std::uint64_t curr = heap_root->off_first_chunk.load(std::memory_order_acquire);
-  std::uint64_t prev = 0;
   std::size_t reclaimed = 0;
-
-  std::uint64_t prev_kind[KIND_BUCKETS] = {0};
-  std::uint64_t prev_prod[PRODUCER_BUCKETS] = {0};
 
   while (curr != 0) {
     auto *chunk = reinterpret_cast<ShmChunkHeader *>(layout.base + curr);
-
     const std::uint64_t next = chunk->next_offset.load(std::memory_order_acquire);
-    const std::uint64_t next_kind =
-        chunk->next_kind_offset.load(std::memory_order_acquire);
-    const std::uint64_t next_prod =
-        chunk->next_producer_offset.load(std::memory_order_acquire);
     const std::uint16_t flags = chunk->flags.load(std::memory_order_acquire);
 
-    const bool tombstoned = (flags & CHUNK_TOMBSTONE) != 0;
-    const bool safe = tombstoned && chunk->epoch < safe_epoch;
-
-    if (safe) {
-      if (prev != 0) {
-        auto *prev_chunk =
-            reinterpret_cast<ShmChunkHeader *>(layout.base + prev);
-        prev_chunk->next_offset.store(next, std::memory_order_release);
-        if (next == 0) {
-          heap_root->off_last_chunk.store(prev, std::memory_order_release);
-        }
-
-        auto repair = [](std::atomic<std::uint64_t> &prev_link,
-                         std::atomic<std::uint64_t> &curr_link,
-                         std::uint64_t removed, std::uint64_t fallback) {
-          if (prev_link.load(std::memory_order_relaxed) == removed) {
-            const std::uint64_t target =
-                curr_link.load(std::memory_order_relaxed);
-            prev_link.store(target != 0 ? target : fallback,
-                            std::memory_order_release);
-          }
-        };
-        repair(prev_chunk->next_offset_lvl2, chunk->next_offset_lvl2, curr, next);
-        repair(prev_chunk->next_offset_lvl4, chunk->next_offset_lvl4, curr, next);
-        repair(prev_chunk->next_offset_lvl8, chunk->next_offset_lvl8, curr, next);
-      } else {
-        heap_root->off_first_chunk.store(next, std::memory_order_release);
-        if (next == 0) {
-          heap_root->off_last_chunk.store(0, std::memory_order_release);
-          heap_root->off_last_lvl2.store(0, std::memory_order_release);
-          heap_root->off_last_lvl4.store(0, std::memory_order_release);
-          heap_root->off_last_lvl8.store(0, std::memory_order_release);
-        }
-      }
-
-      if (chunk->kind < KIND_BUCKETS) {
-        const std::uint16_t k = chunk->kind;
-        if (prev_kind[k] != 0) {
-          reinterpret_cast<ShmChunkHeader *>(layout.base + prev_kind[k])
-              ->next_kind_offset.store(next_kind, std::memory_order_release);
-          if (next_kind == 0) {
-            heap_root->off_last_by_kind[k].store(prev_kind[k],
-                                                 std::memory_order_release);
-          }
-        } else {
-          heap_root->off_first_by_kind[k].store(next_kind,
-                                                std::memory_order_release);
-          if (next_kind == 0) {
-            heap_root->off_last_by_kind[k].store(0, std::memory_order_release);
-          }
-        }
-      }
-
-      if (chunk->producer_id < PRODUCER_BUCKETS) {
-        const std::uint16_t p = chunk->producer_id;
-        if (prev_prod[p] != 0) {
-          reinterpret_cast<ShmChunkHeader *>(layout.base + prev_prod[p])
-              ->next_producer_offset.store(next_prod, std::memory_order_release);
-          if (next_prod == 0) {
-            heap_root->off_last_by_producer[p].store(prev_prod[p],
-                                                     std::memory_order_release);
-          }
-        } else {
-          heap_root->off_first_by_producer[p].store(next_prod,
-                                                    std::memory_order_release);
-          if (next_prod == 0) {
-            heap_root->off_last_by_producer[p].store(0,
-                                                     std::memory_order_release);
-          }
-        }
-      }
-
-      chunk->flags.store(CHUNK_FREE, std::memory_order_release);
-      ++reclaimed;
-    } else {
-      prev = curr;
-      if (chunk->kind < KIND_BUCKETS) {
-        prev_kind[chunk->kind] = curr;
-      }
-      if (chunk->producer_id < PRODUCER_BUCKETS) {
-        prev_prod[chunk->producer_id] = curr;
+    if ((flags & CHUNK_TOMBSTONE) != 0 && chunk->epoch < safe_epoch) {
+      const std::uint64_t payload = curr + sizeof(ShmChunkHeader);
+      const std::uint32_t generation =
+          chunk->generation.load(std::memory_order_acquire);
+      if (shm_heap_release(layout, ShmHandle{payload, generation})) {
+        reclaimed += HEAP_CLASS_BYTES[chunk->size_class < HEAP_SIZE_CLASSES
+                                          ? chunk->size_class
+                                          : 0];
       }
     }
-
     curr = next;
   }
 
@@ -1478,10 +1659,22 @@ std::uint64_t shm_heap_rewind_if_idle(ShmLayout &layout) noexcept {
     return 0;
   }
 
+  // With free lists in place the heap rarely needs this at all: a block returns
+  // to its class and is handed out again without the bump pointer moving.
+
   const std::uint64_t released =
       heap_hdr->allocated_bytes.exchange(0, std::memory_order_acq_rel);
   if (released == 0) {
     return 0;
+  }
+
+
+  // The bump pointer is going back to the start, so every block parked in a free
+  // list is about to be overwritten. Dropping the heads first keeps the
+  // allocator from handing one of them out again.
+  for (std::size_t i = 0; i < HEAP_SIZE_CLASSES; ++i) {
+    heap_root->free_head[i].store(0, std::memory_order_release);
+    heap_root->free_bytes[i].store(0, std::memory_order_release);
   }
 
   heap_hdr->reclaimable_bytes.store(0, std::memory_order_release);
@@ -1513,183 +1706,6 @@ std::uint64_t shm_heap_rewind_if_idle(ShmLayout &layout) noexcept {
   return released;
 }
 
-void shm_heap_defragment(ShmLayout &layout) noexcept {
-  if (layout.base == nullptr || layout.data_heap == nullptr) {
-    return;
-  }
-
-  auto *heap_hdr = get_heap_header(layout);
-  auto *heap_root = get_heap_root(layout);
-
-  if (shm_has_active_readers(layout)) {
-    return;
-  }
-
-  heap_root->flags.fetch_or(SHM_HEAP_FLAG_DEFRAG_IN_PROGRESS,
-                            std::memory_order_acq_rel);
-
-  const std::uint64_t safe_epoch = shm_get_min_active_reader_epoch(layout);
-  const std::uint64_t heap_data_start =
-      layout.header->off_data_heap + heap_metadata_size();
-
-  std::uint64_t curr = heap_root->off_first_chunk.load(std::memory_order_acquire);
-  std::uint64_t write_offset = heap_data_start;
-  std::uint64_t prev_written = 0;
-  std::uint64_t total_bytes = 0;
-  std::uint32_t seq = 0;
-
-  std::uint64_t prev_kind[KIND_BUCKETS] = {0};
-  std::uint64_t prev_prod[PRODUCER_BUCKETS] = {0};
-  std::uint64_t prev_lvl2 = 0;
-  std::uint64_t prev_lvl4 = 0;
-  std::uint64_t prev_lvl8 = 0;
-
-  for (std::size_t i = 0; i < KIND_BUCKETS; ++i) {
-    heap_root->off_first_by_kind[i].store(0, std::memory_order_relaxed);
-    heap_root->off_last_by_kind[i].store(0, std::memory_order_relaxed);
-  }
-  for (std::size_t i = 0; i < PRODUCER_BUCKETS; ++i) {
-    heap_root->off_first_by_producer[i].store(0, std::memory_order_relaxed);
-    heap_root->off_last_by_producer[i].store(0, std::memory_order_relaxed);
-  }
-  heap_root->off_last_lvl2.store(0, std::memory_order_relaxed);
-  heap_root->off_last_lvl4.store(0, std::memory_order_relaxed);
-  heap_root->off_last_lvl8.store(0, std::memory_order_relaxed);
-
-  while (curr != 0) {
-    auto *chunk = reinterpret_cast<ShmChunkHeader *>(layout.base + curr);
-    const std::uint64_t next = chunk->next_offset.load(std::memory_order_acquire);
-    const std::uint16_t flags = chunk->flags.load(std::memory_order_acquire);
-
-    const bool tombstoned = (flags & CHUNK_TOMBSTONE) != 0;
-    const bool drop = (flags & CHUNK_FREE) != 0 ||
-                      (tombstoned && chunk->epoch < safe_epoch);
-    if (drop) {
-      curr = next;
-      continue;
-    }
-
-    const std::uint64_t chunk_bytes =
-        align_up(sizeof(ShmChunkHeader) + chunk->payload_size, CACHE_LINE_SIZE);
-
-    if (curr != write_offset) {
-      std::memmove(layout.base + write_offset, layout.base + curr, chunk_bytes);
-    }
-    const std::uint64_t target = write_offset;
-    auto *moved = reinterpret_cast<ShmChunkHeader *>(layout.base + target);
-
-    moved->next_offset.store(0, std::memory_order_relaxed);
-    moved->next_kind_offset.store(0, std::memory_order_relaxed);
-    moved->next_producer_offset.store(0, std::memory_order_relaxed);
-    moved->next_offset_lvl2.store(0, std::memory_order_relaxed);
-    moved->next_offset_lvl4.store(0, std::memory_order_relaxed);
-    moved->next_offset_lvl8.store(0, std::memory_order_relaxed);
-
-    if (prev_written != 0) {
-      reinterpret_cast<ShmChunkHeader *>(layout.base + prev_written)
-          ->next_offset.store(target, std::memory_order_release);
-    } else {
-      heap_root->off_first_chunk.store(target, std::memory_order_release);
-    }
-
-    if (moved->kind < KIND_BUCKETS) {
-      const std::uint16_t k = moved->kind;
-      if (prev_kind[k] != 0) {
-        reinterpret_cast<ShmChunkHeader *>(layout.base + prev_kind[k])
-            ->next_kind_offset.store(target, std::memory_order_release);
-      } else {
-        heap_root->off_first_by_kind[k].store(target, std::memory_order_release);
-      }
-      prev_kind[k] = target;
-      heap_root->off_last_by_kind[k].store(target, std::memory_order_release);
-    }
-
-    if (moved->producer_id < PRODUCER_BUCKETS) {
-      const std::uint16_t p = moved->producer_id;
-      if (prev_prod[p] != 0) {
-        reinterpret_cast<ShmChunkHeader *>(layout.base + prev_prod[p])
-            ->next_producer_offset.store(target, std::memory_order_release);
-      } else {
-        heap_root->off_first_by_producer[p].store(target,
-                                                  std::memory_order_release);
-      }
-      prev_prod[p] = target;
-      heap_root->off_last_by_producer[p].store(target, std::memory_order_release);
-    }
-
-    ++seq;
-    if ((seq & 1u) == 0) {
-      if (prev_lvl2 != 0) {
-        reinterpret_cast<ShmChunkHeader *>(layout.base + prev_lvl2)
-            ->next_offset_lvl2.store(target, std::memory_order_release);
-      }
-      prev_lvl2 = target;
-      heap_root->off_last_lvl2.store(target, std::memory_order_release);
-    }
-    if ((seq & 3u) == 0) {
-      if (prev_lvl4 != 0) {
-        reinterpret_cast<ShmChunkHeader *>(layout.base + prev_lvl4)
-            ->next_offset_lvl4.store(target, std::memory_order_release);
-      }
-      prev_lvl4 = target;
-      heap_root->off_last_lvl4.store(target, std::memory_order_release);
-    }
-    if ((seq & 7u) == 0) {
-      if (prev_lvl8 != 0) {
-        reinterpret_cast<ShmChunkHeader *>(layout.base + prev_lvl8)
-            ->next_offset_lvl8.store(target, std::memory_order_release);
-      }
-      prev_lvl8 = target;
-      heap_root->off_last_lvl8.store(target, std::memory_order_release);
-    }
-
-    prev_written = target;
-    write_offset += chunk_bytes;
-    total_bytes += chunk_bytes;
-    curr = next;
-  }
-
-  heap_root->n_chunks.store(seq, std::memory_order_release);
-  if (prev_written != 0) {
-    heap_root->off_last_chunk.store(prev_written, std::memory_order_release);
-  } else {
-    heap_root->off_first_chunk.store(0, std::memory_order_release);
-    heap_root->off_last_chunk.store(0, std::memory_order_release);
-  }
-
-  heap_hdr->allocated_bytes.store(total_bytes, std::memory_order_release);
-  heap_hdr->reclaimable_bytes.store(0, std::memory_order_release);
-
-  if (auto *stats = shm_engine_stats(layout); stats != nullptr) {
-    stats->heap_usage_bytes.store(total_bytes, std::memory_order_relaxed);
-    stats->heap_fragmentation_score.store(0, std::memory_order_relaxed);
-  }
-  layout.header->heap_fragmentation_score.store(0, std::memory_order_relaxed);
-
-  heap_root->flags.fetch_and(~SHM_HEAP_FLAG_DEFRAG_IN_PROGRESS,
-                             std::memory_order_acq_rel);
-}
-
-void shm_relocate_chunk(ShmLayout &layout, std::uint64_t old_off,
-                        std::uint64_t new_off) noexcept {
-  if (layout.base == nullptr || layout.header == nullptr || old_off == 0 ||
-      new_off == 0 || old_off == new_off) {
-    return;
-  }
-  if (old_off >= layout.header->total_size ||
-      new_off >= layout.header->total_size) {
-    return;
-  }
-
-  const auto *src =
-      reinterpret_cast<const ShmChunkHeader *>(layout.base + old_off);
-  const std::size_t bytes =
-      align_up(sizeof(ShmChunkHeader) + src->payload_size, CACHE_LINE_SIZE);
-  if (new_off + bytes > layout.header->total_size) {
-    return;
-  }
-  std::memmove(layout.base + new_off, layout.base + old_off, bytes);
-}
 
 // ============================================================================
 // Journal
@@ -1794,7 +1810,7 @@ void shm_extract_tensor_meta(const ShmLayout &layout, const BridgeMessage &msg,
     return;
   }
 
-  const std::uint64_t offset = msg.shm_ref.offset;
+  const std::uint64_t offset = shm_ref_byte_offset(msg.shm_ref);
   const std::uint64_t bytes = msg.shm_ref.total_bytes;
   const std::uint64_t total = layout.header->total_size;
 
