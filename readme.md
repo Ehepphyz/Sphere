@@ -6,17 +6,22 @@
 My long‑term objectives also include integrating Geant4, MG5, and Herwig, in order to extend the system into a full HEP simulation and analysis pipeline.
 
 ![Image 1](images/image1.png)
-![Image 2](images/image2.png)
-![Image 3](images/image3.png)
 ![Image 4](images/image4.png)
+![Image 5](images/image5.png)
 
 ## **Why It Is a Sandbox**
 
 ### **• On‑the‑fly execution**  
 The interactive CLI lets you inject and test code snippets in C++, Python, Julia in real time.
 
+![Image 2](images/image2.png)
+![Image 3](images/image3.png)
+![Image 7](images/image7.png)
+
 ### **• Isolated and self‑contained environment**  
 The application includes its own variable managers, an internal code editor (`QuickCodeEditorFrame`), integrated terminals, and a temporary workspace.
+
+![Image 8](images/image8.png)
 
 ### **• Safe diagnostics**  
 It provides telemetry tools (`CppMetricsPanel`) and startup diagnostics to evaluate memory performance or physics computations live.
@@ -43,6 +48,8 @@ An interactive CLI with autocompletion (global TAB interception) and command his
 
 ## **Native C++ Backend & CERN ROOT Integration**  
 Sphere embeds a highly optimized C++ backend (`CppBackend`, `CppDiagnosticsEngine`) and communicates with CERN ROOT through a native bridge (`RootBackend` / `RootBridgeCompiler`).
+
+![Image 6](images/image6.png)
 
 ---
 
@@ -325,7 +332,7 @@ The diagram above abstracts the queueing layer; the following expands the **Hybr
 
 ## 8. Environment Setup Adjustments
 Remove the .windows or .linux extension corresponding to the operating system you are using.
-Then edit settings.conf and update the PATH entries so they point directly to the executable.
+Then edit settings.conf and update the PATH entries.
 
 ## 9. Installation
 

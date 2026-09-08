@@ -53,9 +53,13 @@ public class QuickCodeEditorFrame extends JFrame {
         }
 
         // Every explorer, console and command that opens a file lands here, so an
-        // image is turned away once rather than in each of them.
+        // image or a .root file is turned away once rather than in each of them.
         if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
             com.sphere.ui.ImageEditorFrame.show(file);
+            return;
+        }
+        if (com.sphere.components.rootview.RootFile.isRootFile(file)) {
+            com.sphere.ui.RootViewerFrame.show(file);
             return;
         }
 

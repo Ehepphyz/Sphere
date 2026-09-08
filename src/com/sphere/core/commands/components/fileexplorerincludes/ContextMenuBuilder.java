@@ -431,6 +431,12 @@ public class ContextMenuBuilder {
             return;
         }
 
+        // A .root file goes to the ROOT viewer for the same reason.
+        if (com.sphere.components.rootview.RootFile.isRootFile(file)) {
+            SwingUtilities.invokeLater(() -> com.sphere.ui.RootViewerFrame.show(file));
+            return;
+        }
+
         // Intercept and load Jupyter Notebook format targets via standalone view instance
         if (fileNameLower.endsWith(".ipynb")) {
             SwingUtilities.invokeLater(() -> {

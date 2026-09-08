@@ -72,9 +72,14 @@ public class WindowManager {
         if (file == null) return;
 
         // This path builds the frame directly rather than going through
-        // openFileInternally, so an image is turned away here as well.
+        // openFileInternally, so an image and a .root file are turned away here
+        // as well.
         if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
             com.sphere.ui.ImageEditorFrame.show(file);
+            return;
+        }
+        if (com.sphere.components.rootview.RootFile.isRootFile(file)) {
+            com.sphere.ui.RootViewerFrame.show(file);
             return;
         }
 
