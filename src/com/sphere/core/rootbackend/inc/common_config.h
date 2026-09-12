@@ -97,7 +97,9 @@ inline constexpr std::uint32_t SHM_MAGIC = 0x53504852;
 
 // Shared memory layout version.
 
-inline constexpr std::uint32_t SHM_VERSION = 3;
+// Raised to 4 when the bulk ring partition was added: an older region no
+// longer matches and is laid out again instead of being read wrongly.
+inline constexpr std::uint32_t SHM_VERSION = 4;
 
 // Wire protocol version for PacketHeader
 inline constexpr std::uint32_t PROTO_VERSION = 3;
@@ -123,6 +125,16 @@ inline constexpr std::uint64_t SHM_MAX_ADDRESSABLE =
 
 // Size of the schema partition, in bytes.
 inline constexpr std::size_t SCHEMA_HEAP_SIZE = 1 * 1024 * 1024;
+
+// Bulk transport ring: whole columns, baskets and pages travel here instead
+// of through the chunk heap. One slot holds 4 KiB, so a 32 KiB basket takes
+// eight and a 64 KiB page sixteen.
+inline constexpr std::uint32_t BULK_RING_SLOT_SIZE = 4096;
+inline constexpr std::uint64_t BULK_RING_SLOTS = 16384; // 64 MiB of payload
+
+// A block larger than this share of the ring goes through the heap: parking
+// it here would starve every other producer.
+inline constexpr std::uint64_t BULK_RING_MAX_BLOCK_SLOTS = BULK_RING_SLOTS / 4;
 
 // Number of hash buckets for grouping memory chunks by message kind.
 inline constexpr std::size_t KIND_BUCKETS = 16;

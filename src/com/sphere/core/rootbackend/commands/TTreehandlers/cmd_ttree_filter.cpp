@@ -180,18 +180,16 @@ void handle_apply_filter(ShmLayout &shm, const Proto::PacketHeader &pkt, void *c
 
   // Allocate 1 bit per entry
   std::size_t bitmask_bytes = (total_entries + 7) / 8;
-  std::uint64_t payload_off = shm_heap_alloc_data(shm, bitmask_bytes);
-  if (payload_off == 0) {
+  const BulkBlock block = shm_bulk_acquire(shm, bitmask_bytes);
+  if (!block) {
     tree->SetBranchStatus("*", 1); // Reset status on failure
     send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
 
-  auto *bitmask = reinterpret_cast<std::uint8_t *>(shm.base + payload_off);
+  auto *bitmask = reinterpret_cast<std::uint8_t *>(block.data);
   std::memset(bitmask, 0, bitmask_bytes);
-
-  std::uint64_t passed_count = 0;
 
   // Event loop: Evaluate formula for each entry
   for (std::uint64_t i = 0; i < total_entries; ++i) {
@@ -204,27 +202,22 @@ void handle_apply_filter(ShmLayout &shm, const Proto::PacketHeader &pkt, void *c
 
     if (formula.EvalInstance(0) != 0.0) {
       bitmask[i / 8] |= static_cast<std::uint8_t>(1u << (i % 8));
-      ++passed_count;
     }
   }
 
   // Restore branch statuses
   tree->SetBranchStatus("*", 1);
 
-  shm_chunk_commit(shm, payload_off);
+  shm_bulk_commit(shm, block);
 
-  // Send zero-copy descriptor
+  // Send the zero-copy descriptor
   if (shm.evt_ring) {
     BridgeMessage msg{};
-    msg.type = MsgType::SHM_REF;
     msg.job_id = pkt.job_id;
     msg.req_id = pkt.req_id;
 
-    shm_ref_publish(msg.shm_ref, shm, payload_off);
-    msg.shm_ref.total_bytes = static_cast<std::uint32_t>(bitmask_bytes);
-    msg.shm_ref.dtype = ShmDType::UInt8;
-    msg.shm_ref.ndim = 1;
-    msg.shm_ref.shape[0] = static_cast<std::uint32_t>(total_entries);
+    shm_bulk_describe(msg, shm, block, bitmask_bytes, ShmDType::UInt8,
+                      static_cast<std::uint32_t>(total_entries));
 
     shm.evt_ring->push(msg);
   }

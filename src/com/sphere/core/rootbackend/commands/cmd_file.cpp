@@ -11,12 +11,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <cstring>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -26,8 +26,8 @@ namespace Sphere::cmd::file {
 namespace {
 
 /**
-* Thread-safe registry for managing active ROOT file handles.
-*/
+ * Thread-safe registry for managing active ROOT file handles.
+ */
 /// Short name derived from the path, so a human can type it.
 std::string short_name(const std::string &path) {
   std::size_t begin = path.find_last_of("/\\");
@@ -47,9 +47,9 @@ struct FileEntry {
 };
 
 /**
-* Open ROOT files, addressable by a small number or by a short name. Both are
-* handed back when the file opens, because a human types whichever is shorter.
-*/
+ * Open ROOT files, addressable by a small number or by a short name. Both are
+ * handed back when the file opens, because a human types whichever is shorter.
+ */
 class FileRegistry {
 public:
   struct Handle {
@@ -206,46 +206,8 @@ private:
 };
 
 /**
-* Helper function to dispatch an event response back through the
-* shared memory ring buffer with spin-yield retry logic.
-*/
-void send_response(ShmLayout &shm, const Proto::PacketHeader &req,
-                   Proto::PacketType type, std::uint16_t flags = 0,
-                   std::uint32_t payload_size = 0) {
-  if (!shm.evt_ring) {
-    return;
-  }
-
-  BridgeMessage msg{};
-  msg.type = MsgType::INLINE_DATA;
-  msg.cmd = static_cast<std::uint16_t>(type);
-  msg.flags = flags;
-  msg.payload_size = static_cast<std::uint8_t>(
-      std::min<std::uint32_t>(payload_size, sizeof(msg.inline_bytes)));
-  msg.job_id = req.job_id;
-  msg.req_id = req.req_id;
-
-  constexpr int max_retries = 100;
-  bool pushed = false;
-
-  for (int retry = 0; retry < max_retries; ++retry) {
-    if (shm.evt_ring->push(msg)) {
-      pushed = true;
-      break;
-    }
-    std::this_thread::yield();
-  }
-
-  if (!pushed) {
-    std::cerr << "[CmdFile] Error: Ring buffer exhausted after retries. "
-                 "Dropped event message for job_id: "
-              << req.job_id << ", req_id: " << req.req_id << "\n";
-  }
-}
-
-/**
-* Text reply through the shared heap: a handle, a list, or a reason.
-*/
+ * Text reply through the shared heap: a handle, a list, or a reason.
+ */
 void send_text(ShmLayout &shm, const Proto::PacketHeader &req,
                Proto::PacketType type, const std::string &text) {
   if (shm.evt_ring == nullptr) {
@@ -282,10 +244,9 @@ void send_text(ShmLayout &shm, const Proto::PacketHeader &req,
 }
 
 /**
-* Helper function to extract a string path from the shared payload.
-*/
-std::string_view extract_path(ShmLayout &shm,
-                              const Proto::PacketHeader &pkt) {
+ * Helper function to extract a string path from the shared payload.
+ */
+std::string_view extract_path(ShmLayout &shm, const Proto::PacketHeader &pkt) {
   if (pkt.payload_size == 0) {
     return {};
   }
@@ -307,7 +268,8 @@ std::string_view extract_path(ShmLayout &shm,
 
 } // anonymous namespace
 
-void handle_open(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+void handle_open(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                 void *context) {
   (void)context;
 
   const std::string_view path_view = extract_path(shm, pkt);
@@ -332,7 +294,8 @@ void handle_open(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) 
                 handle.name);
 }
 
-void handle_close(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+void handle_close(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                  void *context) {
   (void)context;
 
   const std::string token(extract_path(shm, pkt));
@@ -354,13 +317,15 @@ void handle_close(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context)
 
 void close_all_files() { FileRegistry::instance().close_all(); }
 
-void handle_close_all(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+void handle_close_all(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                      void *context) {
   (void)context;
   FileRegistry::instance().close_all();
   send_text(shm, pkt, Proto::PacketType::EVT_OK, "all files closed");
 }
 
-void handle_save(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+void handle_save(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                 void *context) {
   (void)context;
 
   const std::string token(extract_path(shm, pkt));
@@ -380,7 +345,8 @@ void handle_save(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) 
   send_text(shm, pkt, Proto::PacketType::EVT_OK, "SAVED  " + token);
 }
 
-void handle_list(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
+void handle_list(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                 void *context) {
   (void)context;
   send_text(shm, pkt, Proto::PacketType::EVT_OK,
             FileRegistry::instance().list());

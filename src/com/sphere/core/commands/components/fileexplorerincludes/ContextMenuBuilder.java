@@ -131,6 +131,15 @@ public class ContextMenuBuilder {
             JMenuItem removeFav = createModernMenuItem("Remove from Favorites");
             removeFav.addActionListener(e -> FavoritesManager.removeFavorite(sourceFile));
             menu.add(removeFav);
+
+            if (explorer != null) {
+                menu.add(new ThinSeparator());
+
+                JCheckBoxMenuItem hiddenItem =
+                        createModernCheckItem("Display Hiddens", explorer.isShowHidden());
+                hiddenItem.addActionListener(e -> explorer.setShowHidden(hiddenItem.isSelected()));
+                menu.add(hiddenItem);
+            }
         }
 
         /* -------------------------------------------------------------
@@ -191,6 +200,47 @@ public class ContextMenuBuilder {
      * Helper to build fully custom flat menu items with manually
      * drawn background selections and aligned fonts.
      *--------------------------------------------------------------*/
+    /** Same look as createModernMenuItem, with a tick drawn when selected. */
+    private static JCheckBoxMenuItem createModernCheckItem(String text, boolean selected) {
+        JCheckBoxMenuItem item = new JCheckBoxMenuItem(text, selected) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                ButtonModel model = getModel();
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+                ThemePalette palette = ThemeManager.getCurrentPalette();
+
+                if (model.isArmed()) {
+                    g2.setColor(palette != null ? palette.getButtonPressed() : new Color(0x3A3A3A));
+                    g2.fillRoundRect(4, 2, getWidth() - 8, getHeight() - 4, 6, 6);
+                    g2.setColor(Color.WHITE);
+                } else {
+                    g2.setColor(palette != null ? palette.getTextPrimary() : Color.LIGHT_GRAY);
+                }
+
+                if (isSelected()) {
+                    g2.setStroke(new BasicStroke(1.6f));
+                    int cy = getHeight() / 2;
+                    g2.drawLine(12, cy, 15, cy + 4);
+                    g2.drawLine(15, cy + 4, 21, cy - 4);
+                }
+
+                g2.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
+                FontMetrics fm = g2.getFontMetrics();
+                int textY = (getHeight() - fm.getHeight()) / 2 + fm.getAscent();
+
+                g2.drawString(getText(), 28, textY);
+                g2.dispose();
+            }
+        };
+
+        item.setOpaque(false);
+        item.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 12));
+        return item;
+    }
+
     private static JMenuItem createModernMenuItem(String text) {
         JMenuItem item = new JMenuItem(text) {
             @Override

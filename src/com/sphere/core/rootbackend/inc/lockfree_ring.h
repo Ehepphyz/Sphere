@@ -52,7 +52,8 @@ inline constexpr ShmDType Uint8 = ShmDType::UInt8;
 enum class MsgType : std::uint8_t {
   EMPTY = 0,
   INLINE_DATA = 1, // small payload carried inside the message itself
-  SHM_REF = 2      // offset reference into the shared-memory data heap
+  SHM_REF = 2,     // offset reference into the shared-memory data heap
+  RING_REF = 3     // slot range in the bulk transport ring
 };
 
 /// Maximum tensor rank describable by ShmRef.
@@ -82,6 +83,34 @@ constexpr void shm_ref_set_byte_offset(ShmRef &ref,
   ref.offset = static_cast<std::uint32_t>(byte_offset >> SHM_OFFSET_SHIFT);
 }
 
+/**
+* Zero-copy descriptor for a slot range in the bulk transport ring. The range
+* belongs to the receiver until it retires it; no allocation, no generation,
+* and no release command on the way back.
+*/
+struct RingRef {
+  // Split in halves: the message union is only four-byte aligned.
+  std::uint32_t index_lo{0};
+  std::uint32_t index_hi{0};
+  std::uint32_t slot_count{0};  // slots the payload occupies
+  std::uint32_t total_bytes{0}; // payload length, in bytes
+  ShmDType dtype{ShmDType::UInt8};
+  std::uint8_t ndim{0};
+  std::uint16_t reserved{0};
+  std::uint32_t shape[SHM_REF_MAX_DIMS]{};
+};
+
+[[nodiscard]] constexpr std::uint64_t
+ring_ref_index(const RingRef &ref) noexcept {
+  return (static_cast<std::uint64_t>(ref.index_hi) << 32) | ref.index_lo;
+}
+
+constexpr void ring_ref_set_index(RingRef &ref,
+                                  std::uint64_t index) noexcept {
+  ref.index_lo = static_cast<std::uint32_t>(index & 0xFFFFFFFFULL);
+  ref.index_hi = static_cast<std::uint32_t>(index >> 32);
+}
+
 /// Number of inline payload bytes available in a BridgeMessage.
 inline constexpr std::size_t BRIDGE_INLINE_CAPACITY = 44;
 
@@ -101,6 +130,7 @@ struct alignas(CACHE_LINE_SIZE) BridgeMessage {
   union {                        // offset 20
     std::uint8_t inline_bytes[BRIDGE_INLINE_CAPACITY];
     ShmRef shm_ref;
+    RingRef ring_ref;
   };
 };
 
@@ -128,6 +158,12 @@ static_assert(offsetof(BridgeMessage, shm_ref) == 20,
               "ABI: shm_ref offset drift.");
 static_assert(sizeof(ShmRef) <= BRIDGE_INLINE_CAPACITY,
               "ABI: ShmRef no longer fits in the message union.");
+static_assert(sizeof(RingRef) == BRIDGE_INLINE_CAPACITY,
+              "ABI: RingRef must fill the message union exactly.");
+static_assert(alignof(RingRef) == 4,
+              "ABI: RingRef must not raise the alignment of BridgeMessage.");
+static_assert(offsetof(BridgeMessage, ring_ref) == 20,
+              "ABI: ring_ref offset drift.");
 
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "ABI: 64-bit atomics must be lock-free for cross-process use.");

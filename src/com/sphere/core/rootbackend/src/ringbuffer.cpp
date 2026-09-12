@@ -86,6 +86,20 @@ std::uint64_t *tsc_consume_ptr(RingHeader *ring) noexcept {
                                            aligned_payload + produce_bytes);
 }
 
+/// Publication state of the producer slots, one entry per slot.
+std::atomic<std::uint64_t> *pub_state_ptr(RingHeader *ring) noexcept {
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  return reinterpret_cast<std::atomic<std::uint64_t> *>(
+      reinterpret_cast<std::byte *>(tsc_consume_ptr(ring)) +
+      static_cast<std::size_t>(cap) * sizeof(std::uint64_t));
+}
+
+/// Publication state of the consumer slots, one entry per slot.
+std::atomic<std::uint64_t> *read_state_ptr(RingHeader *ring) noexcept {
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  return pub_state_ptr(ring) + static_cast<std::size_t>(cap);
+}
+
 void mark_produced_tsc(RingHeader *ring, std::uint64_t w) noexcept {
   const std::uint32_t mask =
       ring->tsc_sample_mask.load(std::memory_order_relaxed);
@@ -112,23 +126,30 @@ void mark_consumed_tsc(RingHeader *ring, std::uint64_t r) noexcept {
   tsc_consume_ptr(ring)[r & (cap - 1)] = ring_rdtsc();
 }
 
-void publish_in_order(std::atomic<std::uint64_t> &publish_index,
-                      std::uint64_t target, std::uint64_t n) noexcept {
-  constexpr unsigned kSpinBudget = 64;   // cheap: the predecessor is running
-  constexpr unsigned kYieldBudget = 512; // it was descheduled; hand over the CPU
+/// Records that the slot claimed under `idx` now carries its data.
+inline void publish_slot(std::atomic<std::uint64_t> *state, std::uint64_t cap,
+                         std::uint64_t idx) noexcept {
+  state[idx & (cap - 1)].store(idx + 1, std::memory_order_release);
+}
 
-  unsigned attempts = 0;
-  while (publish_index.load(std::memory_order_acquire) != target) {
-    if (attempts < kSpinBudget) {
-      ring_pause();
-    } else if (attempts < kYieldBudget) {
-      std::this_thread::yield();
-    } else {
-      std::this_thread::sleep_for(std::chrono::microseconds(50));
+/**
+* Moves a cursor over the slots published behind it and stops at the first
+* one still missing. Nobody waits for anybody: a slot claimed by a party that
+* dies before publishing holds the cursor there, but every other party keeps
+* claiming and publishing, and the cursor moves again as soon as the gap is
+* filled.
+*/
+void advance_cursor(std::atomic<std::uint64_t> &cursor,
+                    std::atomic<std::uint64_t> *state,
+                    std::uint64_t cap) noexcept {
+  std::uint64_t seen = cursor.load(std::memory_order_relaxed);
+  while (state[seen & (cap - 1)].load(std::memory_order_acquire) == seen + 1) {
+    if (cursor.compare_exchange_weak(seen, seen + 1,
+                                     std::memory_order_acq_rel,
+                                     std::memory_order_relaxed)) {
+      ++seen;
     }
-    ++attempts;
   }
-  publish_index.store(target + n, std::memory_order_release);
 }
 
 } // namespace
@@ -240,11 +261,17 @@ RingReservation ring_reserve(RingHeader *ring) noexcept {
 
     if ((w - r) >= cap) {
       if (policy == RingDropPolicy::DROP_OLDEST) {
-        std::uint64_t old_r = r;
-        if (ring->read_claim.compare_exchange_strong(
-                old_r, r + 1, std::memory_order_acq_rel,
+        // Retire the oldest entry exactly as a consumer would. Claiming it
+        // through read_claim is what keeps a reader and this producer from
+        // both retiring the same slot.
+        std::uint64_t victim = ring->read_claim.load(std::memory_order_relaxed);
+        if (victim < ring->write_idx.load(std::memory_order_acquire) &&
+            ring->read_claim.compare_exchange_strong(
+                victim, victim + 1, std::memory_order_acq_rel,
                 std::memory_order_relaxed)) {
-          publish_in_order(ring->read_idx, r, 1);
+          mark_consumed_tsc(ring, victim);
+          publish_slot(read_state_ptr(ring), cap, victim);
+          advance_cursor(ring->read_idx, read_state_ptr(ring), cap);
           ring->dropped_count.fetch_add(1, std::memory_order_relaxed);
           continue;
         }
@@ -272,8 +299,13 @@ void ring_commit(RingHeader *ring, const RingReservation &reservation) noexcept 
   if (ring == nullptr || reservation.slot == nullptr) {
     return;
   }
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  if (cap == 0) {
+    return;
+  }
   mark_produced_tsc(ring, reservation.index);
-  publish_in_order(ring->write_idx, reservation.index, 1);
+  publish_slot(pub_state_ptr(ring), cap, reservation.index);
+  advance_cursor(ring->write_idx, pub_state_ptr(ring), cap);
   ring_touch_hotness(ring);
 }
 
@@ -308,15 +340,84 @@ RingReservation ring_reserve_multi(RingHeader *ring,
   return reservation;
 }
 
+RingReservation ring_reserve_contiguous(RingHeader *ring,
+                                        std::uint64_t slots) noexcept {
+  RingReservation reservation{};
+  if (ring == nullptr || slots == 0) {
+    return reservation;
+  }
+
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  if (cap == 0 || slots > cap) {
+    return reservation;
+  }
+
+  std::uint64_t w = ring->write_claim.load(std::memory_order_relaxed);
+  std::uint64_t filler = 0;
+  for (;;) {
+    const std::uint64_t pos = w & (cap - 1);
+    filler = (pos + slots <= cap) ? 0 : (cap - pos);
+    const std::uint64_t need = filler + slots;
+    const std::uint64_t r = ring->read_idx.load(std::memory_order_acquire);
+    if ((w - r) + need > cap) {
+      return reservation; // the caller falls back to the heap
+    }
+    if (ring->write_claim.compare_exchange_weak(w, w + need,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_relaxed)) {
+      break;
+    }
+    ring_pause();
+  }
+
+  if (filler != 0) {
+    std::atomic<std::uint64_t> *pub = pub_state_ptr(ring);
+    std::atomic<std::uint64_t> *rd = read_state_ptr(ring);
+    for (std::uint64_t i = 0; i < filler; ++i) {
+      publish_slot(rd, cap, w + i);
+      publish_slot(pub, cap, w + i);
+    }
+    advance_cursor(ring->write_idx, pub, cap);
+    advance_cursor(ring->read_idx, rd, cap);
+  }
+
+  reservation.index = w + filler;
+  reservation.slot = ring_slot_ptr(ring, reservation.index);
+  return reservation;
+}
+
+void ring_retire_range(RingHeader *ring, std::uint64_t index,
+                       std::uint64_t slots) noexcept {
+  if (ring == nullptr || slots == 0) {
+    return;
+  }
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  if (cap == 0) {
+    return;
+  }
+  // One timestamp for the block, not one per slot.
+  mark_consumed_tsc(ring, index);
+  std::atomic<std::uint64_t> *rd = read_state_ptr(ring);
+  for (std::uint64_t i = 0; i < slots; ++i) {
+    publish_slot(rd, cap, index + i);
+  }
+  advance_cursor(ring->read_idx, rd, cap);
+}
+
 void ring_commit_multi(RingHeader *ring, const RingReservation &reservation,
                        std::uint64_t slots) noexcept {
   if (ring == nullptr || reservation.slot == nullptr || slots == 0) {
     return;
   }
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  if (cap == 0) {
+    return;
+  }
   for (std::uint64_t i = 0; i < slots; ++i) {
     mark_produced_tsc(ring, reservation.index + i);
+    publish_slot(pub_state_ptr(ring), cap, reservation.index + i);
   }
-  publish_in_order(ring->write_idx, reservation.index, slots);
+  advance_cursor(ring->write_idx, pub_state_ptr(ring), cap);
   ring_touch_hotness(ring);
 }
 
@@ -357,8 +458,13 @@ void ring_release_read(RingHeader *ring,
   if (ring == nullptr || reservation.slot == nullptr) {
     return;
   }
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  if (cap == 0) {
+    return;
+  }
   mark_consumed_tsc(ring, reservation.index);
-  publish_in_order(ring->read_idx, reservation.index, 1);
+  publish_slot(read_state_ptr(ring), cap, reservation.index);
+  advance_cursor(ring->read_idx, read_state_ptr(ring), cap);
 }
 
 // ============================================================================
@@ -601,6 +707,16 @@ bool ring_compact(RingHeader *ring) noexcept {
 
   if (w != r || wc != w || rc != r) {
     return false;
+  }
+
+  // The per-slot state is keyed on the index that wrote it, so it has to go
+  // back to zero with the cursors.
+  const std::uint64_t cap = ring->capacity.load(std::memory_order_relaxed);
+  std::atomic<std::uint64_t> *pub = pub_state_ptr(ring);
+  std::atomic<std::uint64_t> *rd = read_state_ptr(ring);
+  for (std::uint64_t i = 0; i < cap; ++i) {
+    pub[i].store(0, std::memory_order_relaxed);
+    rd[i].store(0, std::memory_order_relaxed);
   }
 
   ring->write_claim.store(0, std::memory_order_relaxed);

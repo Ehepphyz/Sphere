@@ -42,7 +42,9 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final long CACHE_LINE_SIZE = 64L;
 
     public static final int SHM_MAGIC = 0x53504852; // 'SPHR'
-    public static final int SHM_VERSION = 3;
+    // 4 since the bulk ring partition was added: an older region is laid out
+    // again rather than read with the wrong offsets.
+    public static final int SHM_VERSION = 4;
     public static final int PROTO_VERSION = 3;
 
     // ---- ShmHeader (inc/shm_layout.h), 1408 bytes at region offset 0 --------
@@ -80,6 +82,8 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final long HDR_SIZE_TX_LOG        = 576L;
     public static final long HDR_OFF_DATA_HEAP      = 584L;
     public static final long HDR_SIZE_DATA_HEAP     = 592L;
+    public static final long HDR_OFF_BULK_RING      = 608L;
+    public static final long HDR_SIZE_BULK_RING     = 616L;
     public static final long HDR_JOURNAL_CAPACITY   = 600L;
 
     public static final long HDR_CLUSTER_RUNTIME_IDS = 640L; // 64 x int32
@@ -113,6 +117,7 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final byte MSG_TYPE_EMPTY       = 0;
     public static final byte MSG_TYPE_INLINE_DATA = 1;
     public static final byte MSG_TYPE_SHM_REF     = 2;
+    public static final byte MSG_TYPE_RING_REF    = 3;
 
     // ---- ShmRef, 40 bytes, overlaid on the union at MSG_OFF_UNION ----------
     // The offset is counted in units of 64 bytes, which is why a uint32 can
@@ -126,6 +131,17 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final long REF_OFF_NDIM        = 13L; // 1 byte
     public static final long REF_OFF_RESERVED    = 14L; // 2 bytes
     public static final long REF_OFF_SHAPE       = 16L; // 6 x uint32
+
+    // ---- RingRef, 44 bytes, overlaid on the same union --------------------
+    // A slot range in the bulk transport ring. The range belongs to this side
+    // until it is handed back, so there is no allocation and no generation.
+    public static final long RREF_OFF_INDEX_LO    = 0L;  // uint32
+    public static final long RREF_OFF_INDEX_HI    = 4L;  // uint32
+    public static final long RREF_OFF_SLOT_COUNT  = 8L;  // uint32
+    public static final long RREF_OFF_TOTAL_BYTES = 12L; // uint32
+    public static final long RREF_OFF_DTYPE       = 16L; // 1 byte
+    public static final long RREF_OFF_NDIM        = 17L; // 1 byte
+    public static final long RREF_OFF_SHAPE       = 20L; // 6 x uint32
 
     public static final int  SHM_OFFSET_SHIFT = 6;
 
@@ -813,8 +829,14 @@ public final class RootBackend implements AutoCloseable, Backend {
     // One decoded event from the C++ engine.
     public record BridgeEvent(byte transport, short cmd, short flags, int jobId, int reqId,
                               byte[] inlineBytes, long shmOffset, long shmBytes,
-                              int shmGeneration, byte dtype, int[] shape) {
-        public boolean isShmRef() { return transport == MSG_TYPE_SHM_REF; }
+                              int shmGeneration, byte dtype, int[] shape,
+                              long ringIndex, int ringSlots) {
+        public boolean isShmRef()  { return transport == MSG_TYPE_SHM_REF; }
+        public boolean isRingRef() { return transport == MSG_TYPE_RING_REF; }
+
+        /** True when the payload travelled outside the message, either way. */
+        public boolean carriesBlock() { return isShmRef() || isRingRef(); }
+
         public boolean isError()  { return cmd == EVT_ERROR; }
 
         public int status() {
@@ -884,6 +906,31 @@ public final class RootBackend implements AutoCloseable, Backend {
         final int jobId = ringSegment.get(ValueLayout.JAVA_INT, dataOffset + MSG_OFF_JOB_ID);
         final int reqId = ringSegment.get(ValueLayout.JAVA_INT, dataOffset + MSG_OFF_REQ_ID);
 
+        if (transport == MSG_TYPE_RING_REF) {
+            final long refBase = dataOffset + MSG_OFF_UNION;
+            final long index = (Integer.toUnsignedLong(ringSegment.get(
+                                    ValueLayout.JAVA_INT, refBase + RREF_OFF_INDEX_HI)) << 32)
+                | Integer.toUnsignedLong(ringSegment.get(
+                      ValueLayout.JAVA_INT, refBase + RREF_OFF_INDEX_LO));
+            final int slots =
+                ringSegment.get(ValueLayout.JAVA_INT, refBase + RREF_OFF_SLOT_COUNT);
+            final long ringBytes = Integer.toUnsignedLong(
+                ringSegment.get(ValueLayout.JAVA_INT, refBase + RREF_OFF_TOTAL_BYTES));
+            final byte ringDtype =
+                ringSegment.get(ValueLayout.JAVA_BYTE, refBase + RREF_OFF_DTYPE);
+            final int ringNdim = Math.min(SHM_REF_MAX_DIMS, Byte.toUnsignedInt(
+                ringSegment.get(ValueLayout.JAVA_BYTE, refBase + RREF_OFF_NDIM)));
+
+            final int[] ringShape = new int[ringNdim];
+            for (int d = 0; d < ringNdim; d++) {
+                ringShape[d] = ringSegment.get(ValueLayout.JAVA_INT,
+                                               refBase + RREF_OFF_SHAPE + (4L * d));
+            }
+            return new BridgeEvent(transport, cmd, flags, jobId, reqId,
+                                   new byte[0], 0L, ringBytes, 0, ringDtype, ringShape,
+                                   index, slots);
+        }
+
         if (transport == MSG_TYPE_SHM_REF) {
             final long refBase = dataOffset + MSG_OFF_UNION;
             final long offset = refByteOffset(Integer.toUnsignedLong(
@@ -902,7 +949,8 @@ public final class RootBackend implements AutoCloseable, Backend {
                                            refBase + REF_OFF_SHAPE + (4L * d));
             }
             return new BridgeEvent(transport, cmd, flags, jobId, reqId,
-                                   new byte[0], offset, bytes, generation, dtype, shape);
+                                   new byte[0], offset, bytes, generation, dtype, shape,
+                                   0L, 0);
         }
 
         final int length = Math.min(payloadSize, BRIDGE_INLINE_CAPACITY);
@@ -912,7 +960,7 @@ public final class RootBackend implements AutoCloseable, Backend {
                                inline, 0, length);
         }
         return new BridgeEvent(transport, cmd, flags, jobId, reqId,
-                               inline, 0L, 0L, 0, (byte) 0, new int[0]);
+                               inline, 0L, 0L, 0, (byte) 0, new int[0], 0L, 0);
     }
 
     /**
@@ -1236,6 +1284,8 @@ public final class RootBackend implements AutoCloseable, Backend {
             BridgeEvent dropped = unmatchedEvents.poll();
             if (dropped != null && dropped.isShmRef()) {
                 owner.releaseReferencedChunk(dropped.shmOffset(), dropped.shmGeneration());
+            } else if (dropped != null && dropped.isRingRef()) {
+                owner.retireRingRange(dropped.ringIndex(), dropped.ringSlots());
             }
             unmatchedEvents.offer(event);
         }
@@ -1264,6 +1314,134 @@ public final class RootBackend implements AutoCloseable, Backend {
             return null;
         }
         return unmatchedEvents.poll();
+    }
+
+    // ---- Bulk transport ring ----------------------------------------------
+    // Mirrors RingHeader: the two cursors sit on their own cache lines, and the
+    // per-slot state arrays follow the payload.
+    private static final long RING_HDR_WRITE_IDX  = 0L;
+    private static final long RING_HDR_READ_IDX   = 64L;
+    private static final long RING_HDR_CAPACITY   = 128L;
+    private static final long RING_HDR_SLOT_SIZE  = 136L;
+    private static final long RING_HDR_READ_CLAIM = 240L;
+    private static final long RING_HDR_BYTES      = 512L;
+
+    private long ringBase = -1L; // -1 before the lookup, 0 when there is none
+    private long ringCapacity;
+    private long ringSlotSize;
+    private long ringPayloadBase;
+    private long ringReadStateBase;
+
+    /** Reads the ring geometry once. False when the region carries no ring. */
+    private synchronized boolean bulkRingReady() {
+        if (ringBase >= 0L) {
+            return ringBase > 0L;
+        }
+        ringBase = 0L;
+        if (shmBaseSegment == null) {
+            return false;
+        }
+        final long base = shmBaseSegment.get(ValueLayout.JAVA_LONG, HDR_OFF_BULK_RING);
+        if (base <= 0L || base >= shmBaseSegment.byteSize()) {
+            return false;
+        }
+        final long capacity = (long) RAW_LONG_HANDLE.getVolatile(
+            shmBaseSegment, base + RING_HDR_CAPACITY);
+        final long slotSize = Integer.toUnsignedLong(
+            shmBaseSegment.get(ValueLayout.JAVA_INT, base + RING_HDR_SLOT_SIZE));
+        if (capacity <= 0L || (capacity & (capacity - 1L)) != 0L || slotSize <= 0L) {
+            return false;
+        }
+
+        final long payload = base + RING_HDR_BYTES;
+        final long alignedPayload = (capacity * slotSize + 7L) & ~7L;
+        ringCapacity = capacity;
+        ringSlotSize = slotSize;
+        ringPayloadBase = payload;
+        // Two timestamp arrays and the producer state come before ours.
+        ringReadStateBase = payload + alignedPayload + (3L * capacity * 8L);
+        if (ringReadStateBase + (capacity * 8L) > shmBaseSegment.byteSize()) {
+            return false;
+        }
+        ringBase = base;
+        return true;
+    }
+
+    /** Copies one block out of the bulk ring and hands its slots back. */
+    public byte[] readRingBytes(long index, int slots, long length) {
+        if (!bulkRingReady() || slots <= 0 || length <= 0) {
+            return new byte[0];
+        }
+        final long start =
+            ringPayloadBase + (index & (ringCapacity - 1L)) * ringSlotSize;
+        if (length > shmBaseSegment.byteSize() - start) {
+            AppLogger.error("Bulk ring: block at slot " + index
+                + " runs past the end of the region.");
+            return new byte[0];
+        }
+
+        byte[] out = new byte[(int) Math.min(length, Integer.MAX_VALUE)];
+        MemorySegment.copy(shmBaseSegment, ValueLayout.JAVA_BYTE, start, out, 0, out.length);
+        retireRingRange(index, slots);
+        return out;
+    }
+
+    /**
+     * Hands a slot range back to the engine. Each slot is marked on its own, so
+     * blocks read out of order are returned without holding up the others.
+     */
+    public void retireRingRange(long index, int slots) {
+        if (!bulkRingReady() || slots <= 0) {
+            return;
+        }
+        final long mask = ringCapacity - 1L;
+        for (int i = 0; i < slots; i++) {
+            final long slot = index + i;
+            RAW_LONG_HANDLE.setRelease(shmBaseSegment,
+                ringReadStateBase + ((slot & mask) * 8L), slot + 1L);
+        }
+
+        // Step the cursor over every slot handed back behind it and stop at the
+        // first one still held.
+        long seen = (long) RAW_LONG_HANDLE.getVolatile(
+            shmBaseSegment, ringBase + RING_HDR_READ_IDX);
+        while ((long) RAW_LONG_HANDLE.getVolatile(
+                   shmBaseSegment, ringReadStateBase + ((seen & mask) * 8L)) == seen + 1L) {
+            final long got = (long) RAW_LONG_HANDLE.compareAndExchange(
+                shmBaseSegment, ringBase + RING_HDR_READ_IDX, seen, seen + 1L);
+            seen = (got == seen) ? (seen + 1L) : got;
+        }
+
+        // read_claim only trails the cursor on this ring; keep it coherent.
+        long claim = (long) RAW_LONG_HANDLE.getVolatile(
+            shmBaseSegment, ringBase + RING_HDR_READ_CLAIM);
+        while (claim < seen) {
+            final long got = (long) RAW_LONG_HANDLE.compareAndExchange(
+                shmBaseSegment, ringBase + RING_HDR_READ_CLAIM, claim, seen);
+            if (got == claim) {
+                break;
+            }
+            claim = got;
+        }
+    }
+
+    /** Bytes of a reply, whichever transport carried it. */
+    public byte[] referencedBytes(BridgeEvent reply) {
+        if (reply.isRingRef()) {
+            return readRingBytes(reply.ringIndex(), reply.ringSlots(), reply.shmBytes());
+        }
+        return readReferencedBytes(reply.shmOffset(), reply.shmBytes(),
+                                   reply.shmGeneration());
+    }
+
+    /** The same bytes read as a null-terminated string. */
+    private String referencedText(BridgeEvent reply) {
+        final byte[] bytes = referencedBytes(reply);
+        int end = 0;
+        while (end < bytes.length && bytes[end] != 0) {
+            end++;
+        }
+        return new String(bytes, 0, end, StandardCharsets.UTF_8);
     }
 
     public byte[] readReferencedBytes(long regionOffset, long length) {
@@ -1665,13 +1843,32 @@ public final class RootBackend implements AutoCloseable, Backend {
         final long headSlot = root + ROOT_FREE_HEAD_OFF + cls * 8L;
         long chunk = 0L;
 
+        // The engine writes these lists too. Emptiness is carried by the offset
+        // alone, so the tag keeps growing when the list drains; a head with a
+        // zero offset is an empty list, not a block at offset 0.
+        final long heapFirst = heap + HEAP_METADATA_SIZE;
+        final long heapEnd = heap
+            + shmBaseSegment.get(ValueLayout.JAVA_LONG, HDR_SIZE_DATA_HEAP);
+
         long head = (long) RAW_LONG_HANDLE.getVolatile(shmBaseSegment, headSlot);
-        while (head != 0L) {
+        while (unpackFreeOffset(head) != 0L) {
             final long candidate = unpackFreeOffset(head);
+            // The region outlives both processes: an offset written by a run
+            // that no longer matches this layout must not be read through.
+            if (candidate < heapFirst || candidate + HEAP_CLASS_BYTES[cls] > heapEnd) {
+                final long empty = packFreeHead(0L, unpackFreeTag(head) + 1L);
+                final long seenStale = (long) RAW_LONG_HANDLE.compareAndExchange(
+                    shmBaseSegment, headSlot, head, empty);
+                if (seenStale == head) {
+                    RAW_LONG_HANDLE.getAndAdd(shmBaseSegment, root + ROOT_STALE_OFF, 1L);
+                    break;
+                }
+                head = seenStale;
+                continue;
+            }
             final long next = (long) RAW_LONG_HANDLE.getVolatile(
                 shmBaseSegment, candidate + CHUNK_NEXT_OFF);
-            final long replacement = (next == 0L)
-                ? 0L : packFreeHead(next, unpackFreeTag(head) + 1L);
+            final long replacement = packFreeHead(next, unpackFreeTag(head) + 1L);
             final long seen = (long) RAW_LONG_HANDLE.compareAndExchange(
                 shmBaseSegment, headSlot, head, replacement);
             if (seen == head) {
@@ -1880,14 +2077,8 @@ public final class RootBackend implements AutoCloseable, Backend {
         if (reply == null) {
             return null;
         }
-        if (reply.isShmRef()) {
-            byte[] bytes = readReferencedBytes(reply.shmOffset(), reply.shmBytes(),
-                                               reply.shmGeneration());
-            int end = 0;
-            while (end < bytes.length && bytes[end] != 0) {
-                end++;
-            }
-            return new String(bytes, 0, end, StandardCharsets.UTF_8);
+        if (reply.carriesBlock()) {
+            return referencedText(reply);
         }
         final String text = reply.message();
         return text.isEmpty() ? describeEvent(reply) : text;
@@ -1935,14 +2126,8 @@ public final class RootBackend implements AutoCloseable, Backend {
             return null;
         }
 
-        if (reply.isShmRef()) {
-            byte[] bytes = readReferencedBytes(reply.shmOffset(), reply.shmBytes(),
-                                               reply.shmGeneration());
-            int end = 0;
-            while (end < bytes.length && bytes[end] != 0) {
-                end++;
-            }
-            return new String(bytes, 0, end, StandardCharsets.UTF_8);
+        if (reply.carriesBlock()) {
+            return referencedText(reply);
         }
         return reply.message();
     }

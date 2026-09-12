@@ -63,6 +63,9 @@ public class FileExplorer extends JTree {
 
     private QuickCodeEditorFrame editorFrame;
 
+    /** Listing of dot files, driven by the context menu. Off by default. */
+    private boolean showHidden = false;
+
     /**
      * Constructs a new File Explorer sidebar component linked to the shared workspace editor.
      * @param editorFrame The persistent workbench frame used to open code and text files.
@@ -79,6 +82,9 @@ public class FileExplorer extends JTree {
         installExpansionBehavior();
         installMouseBehavior();
         startWatcher();
+
+        // Opening on a single collapsed volume shows nothing useful.
+        SwingUtilities.invokeLater(this::expandToUserHome);
     }
 
     /* -------------------------------------------------------------------------
@@ -97,6 +103,122 @@ public class FileExplorer extends JTree {
         }
 
         return new DefaultTreeModel(root);
+    }
+
+    /* -------------------------------------------------------------------------
+    *  Initial expansion
+    */
+    /**
+     * Opens the tree down to the user's home directory so the panel does not
+     * start on a single collapsed volume. Linux only: elsewhere the root list
+     * holds several volumes and the choice would be arbitrary.
+     */
+    private void expandToUserHome() {
+        assertEDT();
+
+        String os = System.getProperty("os.name", "");
+        if (!os.toLowerCase(java.util.Locale.ROOT).contains("linux")) {
+            return;
+        }
+
+        File home = new File(System.getProperty("user.home", ""));
+        if (!home.isDirectory()) {
+            return;
+        }
+
+        // From the volume down to the home directory, so the walk below is ordered.
+        java.util.Deque<File> chain = new java.util.ArrayDeque<>();
+        for (File step = home.getAbsoluteFile(); step != null; step = step.getParentFile()) {
+            chain.addFirst(step);
+        }
+
+        TreePath path = expandChain(chain);
+        setSelectionPath(path);
+        scrollPathToVisible(path);
+    }
+
+    /** Opens every level of the chain and returns the deepest path reached. */
+    private TreePath expandChain(Iterable<File> chain) {
+        assertEDT();
+
+        DefaultMutableTreeNode parent = (DefaultMutableTreeNode) getModel().getRoot();
+        TreePath path = new TreePath(parent);
+
+        for (File step : chain) {
+            DefaultMutableTreeNode child = findChildFor(parent, step);
+            if (child == null) {
+                break;
+            }
+            path = path.pathByAddingChild(child);
+            // Expanding runs the lazy loader, which is what fills the next level.
+            expandPath(path);
+            parent = child;
+        }
+        return path;
+    }
+
+    /* -------------------------------------------------------------------------
+    *  Hidden entries
+    */
+    /** True when dot files are listed. */
+    public boolean isShowHidden() {
+        return showHidden;
+    }
+
+    /** Shows or hides dot files and rebuilds the tree so the change is immediate. */
+    public void setShowHidden(boolean visible) {
+        assertEDT();
+        if (showHidden == visible) {
+            return;
+        }
+        showHidden = visible;
+        reloadKeepingExpansion();
+    }
+
+    /** Reloads every folder from disk, reopening those that were open. */
+    private void reloadKeepingExpansion() {
+        assertEDT();
+
+        java.util.List<java.util.List<File>> opened = new java.util.ArrayList<>();
+        java.util.Enumeration<TreePath> expanded =
+                getExpandedDescendants(new TreePath(getModel().getRoot()));
+        if (expanded != null) {
+            while (expanded.hasMoreElements()) {
+                java.util.List<File> chain = new java.util.ArrayList<>();
+                for (Object step : expanded.nextElement().getPath()) {
+                    if (step instanceof DefaultMutableTreeNode node
+                            && node.getUserObject() instanceof File f) {
+                        chain.add(f.getAbsoluteFile());
+                    }
+                }
+                if (!chain.isEmpty()) {
+                    opened.add(chain);
+                }
+            }
+        }
+
+        nodeIndex.clear();
+        setModel(createTreeModel());
+
+        for (java.util.List<File> chain : opened) {
+            expandChain(chain);
+        }
+        if (opened.isEmpty()) {
+            expandToUserHome();
+        }
+    }
+
+    /** Child node carrying the given directory, or null when it is not listed. */
+    private DefaultMutableTreeNode findChildFor(DefaultMutableTreeNode parent, File target) {
+        File wanted = target.getAbsoluteFile();
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            DefaultMutableTreeNode child = (DefaultMutableTreeNode) parent.getChildAt(i);
+            if (child.getUserObject() instanceof File f
+                    && f.getAbsoluteFile().equals(wanted)) {
+                return child;
+            }
+        }
+        return null;
     }
 
     private void assertEDT() {
@@ -168,7 +290,7 @@ public class FileExplorer extends JTree {
         });
 
         for (File f : files) {
-            if (f.isHidden()) continue;
+            if (!showHidden && f.isHidden()) continue;
 
             DefaultMutableTreeNode node = new DefaultMutableTreeNode(f);
             nodeIndex.put(f.getAbsoluteFile(), node);
@@ -506,7 +628,7 @@ public class FileExplorer extends JTree {
         // Filter out hidden files to match the loadChildren behavior
         java.util.List<File> currentFiles = new java.util.ArrayList<>();
         for (File f : files) {
-            if (!f.isHidden()) {
+            if (showHidden || !f.isHidden()) {
                 currentFiles.add(f);
             }
         }
@@ -600,7 +722,7 @@ public class FileExplorer extends JTree {
             if (files != null) {
                 node.removeAllChildren();
                 for (File f : files) {
-                    if (f.isHidden()) continue;
+                    if (!showHidden && f.isHidden()) continue;
                     DefaultMutableTreeNode childNode = nodeIndex.get(f.getAbsoluteFile());
                     if (childNode == null) {
                         childNode = new DefaultMutableTreeNode(f);

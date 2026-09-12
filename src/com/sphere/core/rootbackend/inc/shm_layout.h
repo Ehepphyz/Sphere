@@ -127,7 +127,11 @@ struct alignas(CACHE_LINE_SIZE) ShmHeader {
   std::uint64_t off_data_heap{0};
   std::uint64_t size_data_heap{0};
   std::uint64_t journal_capacity{0};
-  std::uint64_t reserved3[4]{};
+  // Appended into the reserved words, so every offset above keeps the value
+  // the Java side already knows.
+  std::uint64_t off_bulk_ring{0};
+  std::uint64_t size_bulk_ring{0};
+  std::uint64_t reserved3[2]{};
 
   // ---- Cluster membership: 1 when runtime `i` is attached, 0 otherwise ----
   alignas(CACHE_LINE_SIZE)
@@ -249,6 +253,7 @@ struct ShmLayout {
   std::byte *data_heap{nullptr};
   std::byte *schema_heap{nullptr};
   std::byte *tx_log{nullptr};
+  std::byte *bulk_ring{nullptr};
 
   [[nodiscard]] bool is_valid() const noexcept {
     return base != nullptr && header != nullptr && cmd_ring != nullptr &&
@@ -664,6 +669,45 @@ void shm_extract_tensor_meta(const ShmLayout &layout, const BridgeMessage &msg,
 [[nodiscard]] std::uint64_t shm_crc_failures_total() noexcept;
 [[nodiscard]] std::uint64_t
 shm_crc_failures_by_kind(std::uint16_t kind) noexcept;
+
+// -----------------------------------------------------------------------------
+// Bulk transport
+// -----------------------------------------------------------------------------
+
+/// One block of payload, on whichever transport took it.
+struct BulkBlock {
+  std::byte *data{nullptr};
+  std::uint64_t index{0};      // ring: first slot; heap: payload offset
+  std::uint32_t slot_count{0}; // ring only
+  std::uint32_t generation{0}; // heap only
+  bool on_ring{false};
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return data != nullptr;
+  }
+};
+
+/// False when SPHERE_BULK_TRANSPORT=heap asks for the chunk heap instead.
+[[nodiscard]] bool shm_bulk_ring_enabled() noexcept;
+
+/**
+* Reserves room for one block. The ring takes it when it is enabled, the block
+* fits and there is room; otherwise the chunk heap does, so the caller never
+* has to care which. Write the payload, then commit.
+*/
+[[nodiscard]] BulkBlock shm_bulk_acquire(ShmLayout &layout,
+                                         std::size_t bytes) noexcept;
+
+/// Makes the block readable by the receiver.
+void shm_bulk_commit(ShmLayout &layout, const BulkBlock &block) noexcept;
+
+/// Gives the block back without publishing anything the receiver can read.
+void shm_bulk_abort(ShmLayout &layout, const BulkBlock &block) noexcept;
+
+/// Fills the message the receiver reads the block through.
+void shm_bulk_describe(BridgeMessage &msg, const ShmLayout &layout,
+                       const BulkBlock &block, std::size_t bytes,
+                       ShmDType dtype, std::uint32_t count) noexcept;
 
 // -----------------------------------------------------------------------------
 // Scoped writer

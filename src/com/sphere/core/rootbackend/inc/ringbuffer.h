@@ -146,19 +146,22 @@ ring_total_shm_size(std::uint64_t capacity, std::uint32_t slot_size) noexcept {
   }
   const std::size_t aligned_payload = (raw_payload + 7) & ~std::size_t{7};
 
+  // Four arrays of one entry per slot follow the payload: two timestamps,
+  // and the two publication states that let a cursor step over the slots
+  // already written without waiting for anyone.
   if (static_cast<std::size_t>(capacity) >
-      max_size / (2 * sizeof(std::uint64_t))) {
+      max_size / (4 * sizeof(std::uint64_t))) {
     return 0;
   }
-  const std::size_t tsc_buffers =
-      2 * (static_cast<std::size_t>(capacity) * sizeof(std::uint64_t));
+  const std::size_t side_arrays =
+      4 * (static_cast<std::size_t>(capacity) * sizeof(std::uint64_t));
 
   const std::size_t header_size = sizeof(RingHeader);
   if (aligned_payload > max_size - header_size ||
-      tsc_buffers > max_size - (header_size + aligned_payload)) {
+      side_arrays > max_size - (header_size + aligned_payload)) {
     return 0;
   }
-  return header_size + aligned_payload + tsc_buffers;
+  return header_size + aligned_payload + side_arrays;
 }
 
 /**
@@ -208,6 +211,19 @@ void ring_commit(RingHeader *ring, const RingReservation &reservation) noexcept;
 /// Claims `slots` contiguous entries. Returns an empty reservation on failure.
 [[nodiscard]] RingReservation ring_reserve_multi(RingHeader *ring,
                                                  std::uint64_t slots) noexcept;
+
+/**
+* Claims `slots` entries that are contiguous in memory, so the caller can write
+* one block straight into them. A run that would straddle the end of the buffer
+* is preceded by filler entries, retired on both sides at once so the receiver
+* is never told about them.
+*/
+[[nodiscard]] RingReservation
+ring_reserve_contiguous(RingHeader *ring, std::uint64_t slots) noexcept;
+
+/// Hands a range back to the producers. Used by the receiver of a block.
+void ring_retire_range(RingHeader *ring, std::uint64_t index,
+                       std::uint64_t slots) noexcept;
 
 /// Publishes a multi-slot reservation.
 void ring_commit_multi(RingHeader *ring, const RingReservation &reservation,

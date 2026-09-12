@@ -180,8 +180,10 @@ decompress_record(const std::uint8_t *src, std::size_t src_size,
 #if defined(SPHERE_HAVE_LZMA)
       std::size_t in_pos = 0;
       std::size_t out_pos = 0;
+      // liblzma dereferences memlimit; a null pointer is rejected outright.
+      std::uint64_t memlimit = UINT64_MAX;
       const lzma_ret res = lzma_stream_buffer_decode(
-          nullptr, 0, nullptr, in, &in_pos, in_size, out, &out_pos,
+          &memlimit, 0, nullptr, in, &in_pos, in_size, out, &out_pos,
           block.uncompressed_size);
       if (res != LZMA_OK) {
         result.error = "lzma_stream_buffer_decode failed on block " +
@@ -332,7 +334,7 @@ public:
     }
 
     std::vector<DecompressResult> results(jobs.size());
-    std::atomic<std::size_t> remaining{jobs.size()};
+    std::size_t remaining = jobs.size();
     std::mutex done_mutex;
     std::condition_variable done_cv;
 
@@ -347,8 +349,11 @@ public:
           if (!slot->ok) {
             error_count_.fetch_add(1, std::memory_order_relaxed);
           }
-          if (remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            std::lock_guard<std::mutex> done_lock(done_mutex);
+          // The counter, the predicate and the notification share one mutex, so
+          // the waiter cannot leave and destroy them while this thread is still
+          // using them.
+          std::lock_guard<std::mutex> done_lock(done_mutex);
+          if (--remaining == 0) {
             done_cv.notify_one();
           }
         });
@@ -358,9 +363,7 @@ public:
     cv_.notify_all();
 
     std::unique_lock<std::mutex> done_lock(done_mutex);
-    done_cv.wait(done_lock, [&remaining] {
-      return remaining.load(std::memory_order_acquire) == 0;
-    });
+    done_cv.wait(done_lock, [&remaining] { return remaining == 0; });
 
     return results;
   }
@@ -405,7 +408,12 @@ private:
         task = std::move(tasks_.front());
         tasks_.pop();
       }
-      task();
+      // A throwing task would otherwise escape the thread and abort the process.
+      try {
+        task();
+      } catch (...) {
+        error_count_.fetch_add(1, std::memory_order_relaxed);
+      }
       pending_tasks_count_.fetch_sub(1, std::memory_order_relaxed);
     }
   }

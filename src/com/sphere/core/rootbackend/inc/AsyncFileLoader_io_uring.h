@@ -166,6 +166,9 @@ public:
     if (ret < 0) {
       last_error_ =
           "io_uring_register_files failed: " + std::string(std::strerror(-ret));
+      // Keeping the table would let submit_read_fixed pass its index check and
+      // then submit against a ring that has no registered file.
+      registered_files_.clear();
       files_registered_ = false;
       return false;
     }
@@ -203,10 +206,13 @@ public:
 
 #if SPHERE_ENABLE_IO_URING
     if (ring_valid_) {
-      if (registered_base_ != nullptr) {
+      const bool fixed_buffer =
+          buffers_registered_ && registered_base_ != nullptr;
+      if (fixed_buffer) {
         auto *dst = static_cast<std::uint8_t *>(buffer_ptr);
         if (dst < registered_base_ ||
-            dst + bytes > registered_base_ + registered_size_) {
+            bytes > static_cast<std::uint32_t>(registered_size_) ||
+            dst > registered_base_ + registered_size_ - bytes) {
           last_error_ = "submit_read_fixed: destination outside the registered "
                         "buffer";
           return false;
@@ -223,8 +229,13 @@ public:
         }
       }
 
-      ::io_uring_prep_read_fixed(sqe, file_idx, buffer_ptr, bytes,
-                                 static_cast<off_t>(offset), buf_index);
+      if (fixed_buffer) {
+        ::io_uring_prep_read_fixed(sqe, file_idx, buffer_ptr, bytes,
+                                   static_cast<off_t>(offset), buf_index);
+      } else {
+        // Without a registered buffer the fixed variant fails with -EFAULT.
+        ::io_uring_prep_read(sqe, file_idx, buffer_ptr, bytes, offset);
+      }
       sqe->flags |= IOSQE_FIXED_FILE;
       sqe->user_data = user_data;
       ++pending_sqes_;

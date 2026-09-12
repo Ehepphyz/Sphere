@@ -654,7 +654,12 @@ std::size_t Engine::rebalance_numa_queues() {
     task.source_node_id = static_cast<std::uint16_t>(shallowest);
     if (!queues_per_node_normal_[shallowest]->push(task)) {
       // The destination filled up; put it back rather than dropping the task.
-      (void)queues_per_node_normal_[deepest]->push(task);
+      // A producer may have taken the slot we just freed, so the return value
+      // decides whether the task survived.
+      if (!queues_per_node_normal_[deepest]->push(task)) {
+        tasks_rejected_.fetch_add(1, std::memory_order_relaxed);
+        log::metrics().cmd_ring_drops.fetch_add(1, std::memory_order_relaxed);
+      }
       break;
     }
     ++moved;

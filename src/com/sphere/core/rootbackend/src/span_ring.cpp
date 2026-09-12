@@ -3,6 +3,7 @@
 #include "span_ring.h"
 #include "logger.h"
 
+#include <cstring>
 #include <thread>
 
 #if defined(_WIN32)

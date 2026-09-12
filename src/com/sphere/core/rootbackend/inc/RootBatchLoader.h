@@ -343,6 +343,11 @@ inspect_field_pages(const RNTupleNS::RNTupleDescriptor &descriptor,
       const auto &page_range = cluster.GetPageRange(column_id);
       for (const auto &page : page_range.GetPageInfos()) {
         const auto &locator = page.GetLocator();
+        // Only kTypeFile locators carry a file offset. Zero pages and object
+        // stores hold no payload on disk and must not be read.
+        if (locator.GetType() != ROOT::RNTupleLocator::kTypeFile) {
+          continue;
+        }
         emit(locator.template GetPosition<std::uint64_t>(),
              static_cast<std::uint32_t>(locator.GetNBytesOnStorage()));
       }

@@ -3,6 +3,8 @@
 // Region construction, bump heap, chunk index and journal.
 
 #include "shm_layout.h"
+
+#include "ringbuffer.h"
 #include "common_config.h"
 #include "platform.h"
 #include "span_ring.h"
@@ -15,6 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <stdexcept>
@@ -216,6 +219,9 @@ std::size_t shm_required_size() noexcept {
   offset = align_up(offset + SCHEMA_HEAP_SIZE, CACHE_LINE_SIZE);
   offset = align_up(offset + (JOURNAL_CAPACITY * sizeof(BridgeMessage)),
                     CACHE_LINE_SIZE);
+  offset = align_up(offset + ring_total_shm_size(BULK_RING_SLOTS,
+                                                 BULK_RING_SLOT_SIZE),
+                    CACHE_LINE_SIZE);
   // Everything after this point is the data heap; require room for its
   // bookkeeping plus at least a few megabytes of payload.
   return offset + heap_metadata_size() + (4u * 1024u * 1024u);
@@ -339,6 +345,23 @@ ShmSession init_shm(bool create, const char *region_name,
     header->journal_capacity = JOURNAL_CAPACITY;
     layout.tx_log = layout.base + tx_off;
 
+    // --- bulk transport ring ---
+    const std::size_t bulk_bytes =
+        ring_total_shm_size(BULK_RING_SLOTS, BULK_RING_SLOT_SIZE);
+    const std::size_t bulk_off = reserve(bulk_bytes, "the bulk ring");
+    header->off_bulk_ring = bulk_off;
+    header->size_bulk_ring = bulk_bytes;
+    layout.bulk_ring = layout.base + bulk_off;
+    RingHeader *bulk = ring_init_in_shm(layout.bulk_ring, bulk_bytes,
+                                        BULK_RING_SLOTS, BULK_RING_SLOT_SIZE);
+    if (bulk == nullptr) {
+      fail_init(header, EngineError::REGION_TOO_SMALL,
+                "The bulk ring partition could not be laid out.");
+    }
+    // One block spans many slots; stamping each one would cost more than it
+    // reports. One slot in 256 is enough to follow the latency.
+    bulk->tsc_sample_mask.store(255, std::memory_order_relaxed);
+
     // --- data heap: everything that is left ---
     header->off_data_heap = offset;
     header->size_data_heap = region_size - offset;
@@ -417,6 +440,9 @@ ShmSession init_shm(bool create, const char *region_name,
     layout.schema_heap = layout.base + header->off_schema_heap;
     layout.tx_log = layout.base + header->off_tx_log;
     layout.data_heap = layout.base + header->off_data_heap;
+    layout.bulk_ring = (header->off_bulk_ring != 0)
+                           ? (layout.base + header->off_bulk_ring)
+                           : nullptr;
 
     if (!layout.cmd_ring->is_initialized() ||
         !layout.evt_ring->is_initialized()) {
@@ -703,16 +729,36 @@ ShmHandle shm_heap_acquire(ShmLayout &layout, std::size_t size,
   bool recycled = false;
 
   // A block already paid for is worth more than a fresh one.
+  // Emptiness is carried by the offset alone: the tag must keep growing even
+  // when the list drains, otherwise a stale head can be reproduced exactly.
+  const std::uint64_t heap_first =
+      layout.header->off_data_heap + heap_metadata_size();
+  const std::uint64_t heap_end =
+      layout.header->off_data_heap + layout.header->size_data_heap;
+
   std::uint64_t head = heap_root->free_head[cls].load(std::memory_order_acquire);
-  while (head != 0) {
+  while (unpack_free_offset(head) != 0) {
     const std::uint64_t candidate_offset = unpack_free_offset(head);
+    // The region outlives the process: a head can carry an offset written by a
+    // run that no longer matches this layout. Drop the list rather than read
+    // through it.
+    if (candidate_offset < heap_first ||
+        candidate_offset + HEAP_CLASS_BYTES[cls] > heap_end) {
+      const std::uint64_t empty = pack_free_head(0, unpack_free_tag(head) + 1);
+      if (heap_root->free_head[cls].compare_exchange_weak(
+              head, empty, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        heap_root->stale_rejected.fetch_add(1, std::memory_order_relaxed);
+        break;
+      }
+      continue;
+    }
     auto *candidate =
         reinterpret_cast<ShmChunkHeader *>(layout.base + candidate_offset);
     const std::uint64_t next =
         candidate->next_offset.load(std::memory_order_relaxed);
     const std::uint64_t replacement =
-        (next == 0) ? 0
-                    : pack_free_head(next, unpack_free_tag(head) + 1);
+        pack_free_head(next, unpack_free_tag(head) + 1);
     if (heap_root->free_head[cls].compare_exchange_weak(
             head, replacement, std::memory_order_acq_rel,
             std::memory_order_acquire)) {
@@ -874,6 +920,104 @@ std::uint64_t shm_heap_free_bytes(const ShmLayout &layout) noexcept {
     total += heap_root->free_bytes[i].load(std::memory_order_relaxed);
   }
   return total;
+}
+
+// ============================================================================
+// Bulk transport
+// ============================================================================
+
+bool shm_bulk_ring_enabled() noexcept {
+  // Read once: the transport is a deployment choice, not a per-call one.
+  static const bool enabled = [] {
+    const char *choice = std::getenv("SPHERE_BULK_TRANSPORT");
+    return choice == nullptr || std::strcmp(choice, "heap") != 0;
+  }();
+  return enabled;
+}
+
+BulkBlock shm_bulk_acquire(ShmLayout &layout, std::size_t bytes) noexcept {
+  BulkBlock block{};
+  if (bytes == 0) {
+    return block;
+  }
+
+  if (layout.bulk_ring != nullptr && shm_bulk_ring_enabled()) {
+    const std::uint64_t slots =
+        (bytes + BULK_RING_SLOT_SIZE - 1) / BULK_RING_SLOT_SIZE;
+    if (slots <= BULK_RING_MAX_BLOCK_SLOTS) {
+      auto *ring = reinterpret_cast<RingHeader *>(layout.bulk_ring);
+      const RingReservation reservation = ring_reserve_contiguous(ring, slots);
+      if (reservation.slot != nullptr) {
+        block.data = reservation.slot;
+        block.index = reservation.index;
+        block.slot_count = static_cast<std::uint32_t>(slots);
+        block.on_ring = true;
+        return block;
+      }
+    }
+  }
+
+  // The ring is off, the block is too large for it, or it is full.
+  const ShmHandle handle = shm_heap_acquire(layout, bytes, 1, 0, 0);
+  if (handle.payload_offset == 0) {
+    return block;
+  }
+  block.data = layout.base + handle.payload_offset;
+  block.index = handle.payload_offset;
+  block.generation = handle.generation;
+  return block;
+}
+
+void shm_bulk_commit(ShmLayout &layout, const BulkBlock &block) noexcept {
+  if (block.data == nullptr) {
+    return;
+  }
+  if (block.on_ring) {
+    ring_commit_multi(reinterpret_cast<RingHeader *>(layout.bulk_ring),
+                      RingReservation{block.data, block.index},
+                      block.slot_count);
+    return;
+  }
+  shm_chunk_commit(layout, block.index);
+}
+
+void shm_bulk_abort(ShmLayout &layout, const BulkBlock &block) noexcept {
+  if (block.data == nullptr) {
+    return;
+  }
+  if (block.on_ring) {
+    // A claimed range cannot be taken back: publish it, then hand it over.
+    auto *ring = reinterpret_cast<RingHeader *>(layout.bulk_ring);
+    ring_commit_multi(ring, RingReservation{block.data, block.index},
+                      block.slot_count);
+    ring_retire_range(ring, block.index, block.slot_count);
+    return;
+  }
+  shm_heap_retire_chunk(layout, block.index);
+}
+
+void shm_bulk_describe(BridgeMessage &msg, const ShmLayout &layout,
+                       const BulkBlock &block, std::size_t bytes,
+                       ShmDType dtype, std::uint32_t count) noexcept {
+  if (block.on_ring) {
+    msg.type = MsgType::RING_REF;
+    msg.ring_ref = RingRef{};
+    ring_ref_set_index(msg.ring_ref, block.index);
+    msg.ring_ref.slot_count = block.slot_count;
+    msg.ring_ref.total_bytes = static_cast<std::uint32_t>(bytes);
+    msg.ring_ref.dtype = dtype;
+    msg.ring_ref.ndim = 1;
+    msg.ring_ref.shape[0] = count;
+    return;
+  }
+
+  msg.type = MsgType::SHM_REF;
+  msg.shm_ref = ShmRef{};
+  shm_ref_publish(msg.shm_ref, layout, block.index);
+  msg.shm_ref.total_bytes = static_cast<std::uint32_t>(bytes);
+  msg.shm_ref.dtype = dtype;
+  msg.shm_ref.ndim = 1;
+  msg.shm_ref.shape[0] = count;
 }
 
 void shm_ref_publish(ShmRef &ref, const ShmLayout &layout,

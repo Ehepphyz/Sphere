@@ -289,9 +289,13 @@ CPUCapabilities detect_cpu_capabilities() noexcept {
     const bool avx = (ecx & (1 << 28)) != 0;
 
     if (osxsave && avx) {
-      // Read XCR0 register via inline assembly
-      std::uint64_t xcr0 = 0;
-      asm volatile("xgetbv" : "=A"(xcr0) : "c"(0));
+      // Read XCR0 register via inline assembly. On x86-64 the "A" constraint
+      // means RAX alone, which drops EDX and leaves it undeclared as written.
+      std::uint32_t xcr0_lo = 0;
+      std::uint32_t xcr0_hi = 0;
+      asm volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+      const std::uint64_t xcr0 =
+          (static_cast<std::uint64_t>(xcr0_hi) << 32) | xcr0_lo;
 
       const bool ymm_supported = (xcr0 & 0x6) == 0x6;
       const bool zmm_supported = (xcr0 & 0xE0) == 0xE0;

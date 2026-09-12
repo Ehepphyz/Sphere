@@ -155,15 +155,16 @@ void handle_read_column(ShmLayout &shm, const Proto::PacketHeader &pkt, void *co
   const std::size_t total_bytes =
       static_cast<std::size_t>(count) * type_info.elem_size;
 
-  // Allocate contiguous data block directly within the shared memory heap
-  std::uint64_t payload_off = shm_heap_alloc_data(shm, total_bytes);
-  if (payload_off == 0) {
+  // The bulk ring takes the block when it can, the chunk heap otherwise.
+  const BulkBlock block = shm_bulk_acquire(shm, total_bytes);
+  if (!block) {
     send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_SHM_OOM);
     return;
   }
 
-  auto *dest_base = reinterpret_cast<std::uint8_t *>(shm.base + payload_off);
+  auto *dest_base = reinterpret_cast<std::uint8_t *>(block.data);
+  bool read_failed = false;
 
   {
     BranchStatusGuard guard(tree);
@@ -172,7 +173,12 @@ void handle_read_column(ShmLayout &shm, const Proto::PacketHeader &pkt, void *co
     // Fast zero-copy memory transfer loop using GetValuePointer()
     for (std::int64_t i = 0; i < count; ++i) {
       std::int64_t entry_idx = start_entry + i;
-      br->GetEntry(entry_idx);
+      // A failed read would otherwise leave the previous entry in the leaf
+      // buffer and publish it as if it were new data.
+      if (br->GetEntry(entry_idx) < 0) {
+        read_failed = true;
+        break;
+      }
 
       void *src_ptr = leaf->GetValuePointer();
       std::uint8_t *dest_ptr = dest_base + (i * type_info.elem_size);
@@ -184,20 +190,24 @@ void handle_read_column(ShmLayout &shm, const Proto::PacketHeader &pkt, void *co
   } // Guard automatically restores SetBranchStatus("*", 1) upon scope
     // destruction
 
-  shm_chunk_commit(shm, payload_off);
+  if (read_failed) {
+    // Nothing was published, so the room goes straight back.
+    shm_bulk_abort(shm, block);
+    send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
+                  ResponseStatus::ERROR_GENERIC);
+    return;
+  }
 
-  // Push zero-copy shared memory descriptor to the event ring buffer
+  shm_bulk_commit(shm, block);
+
+  // Push the zero-copy descriptor to the event ring
   if (shm.evt_ring) {
     BridgeMessage msg{};
-    msg.type = MsgType::SHM_REF;
     msg.job_id = pkt.job_id;
     msg.req_id = pkt.req_id;
 
-    shm_ref_publish(msg.shm_ref, shm, payload_off);
-    msg.shm_ref.total_bytes = static_cast<std::uint32_t>(total_bytes);
-    msg.shm_ref.dtype = type_info.dtype;
-    msg.shm_ref.ndim = 1;
-    msg.shm_ref.shape[0] = static_cast<std::uint32_t>(count);
+    shm_bulk_describe(msg, shm, block, total_bytes, type_info.dtype,
+                      static_cast<std::uint32_t>(count));
 
     shm.evt_ring->push(msg);
   }
