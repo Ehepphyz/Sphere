@@ -125,6 +125,12 @@ public final class RootInspector extends ViewSurface {
         binModel.set(null);
     }
 
+    public void showGraph2D(RootGraph2D g) {
+        objectText.setText(describeGraph2D(g));
+        objectText.setCaretPosition(0);
+        binModel.set(null);
+    }
+
     public void showMessage(String text) {
         objectText.setText(text);
         binModel.set(null);
@@ -211,6 +217,34 @@ public final class RootInspector extends ViewSurface {
         line(b, "underflow", String.format(Locale.ROOT, "%.6g", h.underflow()));
         line(b, "overflow", String.format(Locale.ROOT, "%.6g", h.overflow()));
         line(b, "weights kept", h.sumw2.length > 0 ? "yes" : "no, errors are sqrt(n)");
+        return b.toString();
+    }
+
+    private static String describeGraph2D(RootGraph2D g) {
+        StringBuilder b = new StringBuilder();
+        line(b, "class", g.className);
+        line(b, "name", g.name);
+        line(b, "title", g.title);
+        b.append('\n');
+        line(b, "points", String.valueOf(g.size()));
+        line(b, "x from", String.format(Locale.ROOT, "%.6g to %.6g",
+                                        g.minX(), g.maxX()));
+        line(b, "y from", String.format(Locale.ROOT, "%.6g to %.6g",
+                                        g.minY(), g.maxY()));
+        line(b, "z from", String.format(Locale.ROOT, "%.6g to %.6g",
+                                        g.minZ(), g.maxZ()));
+        line(b, "errors on z", g.hasErrors() ? "yes" : "no");
+        b.append('\n');
+        final int shown = Math.min(g.size(), 400);
+        b.append(String.format(Locale.ROOT, "%6s %14s %14s %14s%n",
+                               "i", "x", "y", "z"));
+        for (int i = 0; i < shown; i++) {
+            b.append(String.format(Locale.ROOT, "%6d %14.6g %14.6g %14.6g%n",
+                                   i, g.x[i], g.y[i], g.z[i]));
+        }
+        if (shown < g.size()) {
+            b.append("    ... ").append(g.size() - shown).append(" more\n");
+        }
         return b.toString();
     }
 

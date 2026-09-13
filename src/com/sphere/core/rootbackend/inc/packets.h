@@ -55,6 +55,7 @@ enum class PacketType : std::uint16_t {
   // File inspection
   CMD_FILE_SCAN = 27,
   CMD_FILE_LIST = 28,
+  CMD_FILE_KEYS = 29,
 
   // Event types (responses / acknowledgments)
   EVT_OK = 100,

@@ -1,6 +1,7 @@
 // commands/cmd_ttree.cpp
 
 #include "cmd_ttree.h"
+#include "cmd_file.h"
 #include "command_registry.h"
 #include "TTreehandlers/ttree_common.h"
 #include "lockfree_ring.h"
@@ -8,7 +9,10 @@
 #include <ROOT/RVec.hxx>
 #include <ROOT/TProcessExecutor.hxx>
 #include <TBranch.h>
+#include <TClass.h>
+#include <TDirectory.h>
 #include <TFile.h>
+#include <TKey.h>
 #include <TInterpreter.h>
 #include <TROOT.h>
 #include <TTree.h>
@@ -304,6 +308,86 @@ void export_vector_branch_to_arrow(void *shm_buffer,
 // ============================================================================
 void register_tree(std::uint32_t job_id, TTree *tree) {
   register_tree_handle(job_id, tree);
+}
+
+namespace {
+
+/// Walks a directory, adding the path of every tree under it.
+void collect_trees(TDirectory *dir, const std::string &prefix,
+                   std::string &into, int depth) {
+  if (dir == nullptr || depth > 16) {
+    return;
+  }
+  TIter next(dir->GetListOfKeys());
+  while (TKey *key = static_cast<TKey *>(next())) {
+    TClass *cls = TClass::GetClass(key->GetClassName());
+    if (cls == nullptr) {
+      continue;
+    }
+    const std::string path = prefix.empty() ? std::string(key->GetName())
+                                            : prefix + "/" + key->GetName();
+    if (cls->InheritsFrom(TTree::Class())) {
+      into += "    " + path + "\n";
+    } else if (cls->InheritsFrom(TDirectory::Class())) {
+      // Only a directory is opened here: naming a tree costs nothing, reading
+      // one would.
+      collect_trees(dynamic_cast<TDirectory *>(key->ReadObj()), path, into,
+                    depth + 1);
+    }
+  }
+}
+
+} // namespace
+
+std::string list_trees(std::uint32_t file_id) {
+  TFile *file = Sphere::cmd::file::file_for(file_id);
+  if (file == nullptr) {
+    return {};
+  }
+  std::string out;
+  collect_trees(file, std::string(), out, 0);
+  return out;
+}
+
+bool attach_tree(std::uint32_t job_id, std::string_view request) {
+  if (request.empty()) {
+    return false;
+  }
+  const std::size_t tab = request.find('\t');
+  const std::string file_token(
+      tab == std::string_view::npos ? request : request.substr(0, tab));
+  const std::string tree_path(
+      tab == std::string_view::npos ? std::string()
+                                    : std::string(request.substr(tab + 1)));
+
+  const std::uint32_t file_id = Sphere::cmd::file::resolve_file(file_token);
+  TFile *file = Sphere::cmd::file::file_for(file_id);
+  if (file == nullptr) {
+    return false;
+  }
+
+  TTree *tree = nullptr;
+  if (!tree_path.empty()) {
+    file->GetObject(tree_path.c_str(), tree);
+  } else {
+    // No name given: take the first tree the file holds, which is what a file
+    // written with a single tree makes people expect.
+    TIter next(file->GetListOfKeys());
+    while (TKey *key = static_cast<TKey *>(next())) {
+      TClass *cls = TClass::GetClass(key->GetClassName());
+      if (cls != nullptr && cls->InheritsFrom(TTree::Class())) {
+        tree = dynamic_cast<TTree *>(key->ReadObj());
+        break;
+      }
+    }
+  }
+  if (tree == nullptr) {
+    return false;
+  }
+
+  unregister_tree_handle(job_id);
+  register_tree_handle(job_id, tree);
+  return true;
 }
 
 void register_tree_handle(std::uint32_t job_id, TTree *tree) {

@@ -6,7 +6,10 @@
 #include "packets.h"
 #include "shm_layout.h"
 
+#include <TClass.h>
+#include <TDirectory.h>
 #include <TFile.h>
+#include <TKey.h>
 #include <TList.h>
 
 #include <algorithm>
@@ -105,6 +108,12 @@ public:
     }
     auto it = by_name_.find(token);
     return (it != by_name_.end()) ? it->second : 0;
+  }
+
+  /// The id to use when the caller named none; 0 unless exactly one is open.
+  std::uint32_t only_file() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return files_.size() == 1 ? files_.begin()->first : 0;
   }
 
   bool close_file(std::uint32_t id) {
@@ -266,6 +275,90 @@ std::string_view extract_path(ShmLayout &shm, const Proto::PacketHeader &pkt) {
   return std::string_view(raw_ptr, pkt.payload_size);
 }
 
+/// One key, as the walk found it.
+struct KeyRow {
+  int depth{0};
+  std::string cls;
+  std::string name;
+  std::string title;
+  short cycle{0};
+  int bytes{0};
+};
+
+// Past this a console listing is no longer readable, and the count tells the
+// rest of the story.
+constexpr std::size_t kMaxKeyRows = 4000;
+
+/// Walks a directory, recording every key under it.
+void collect_keys(TDirectory *dir, int depth, std::vector<KeyRow> &into,
+                  std::size_t &skipped) {
+  if (dir == nullptr || depth > 16) {
+    return;
+  }
+  TIter next(dir->GetListOfKeys());
+  while (TKey *key = static_cast<TKey *>(next())) {
+    if (into.size() >= kMaxKeyRows) {
+      ++skipped;
+      continue;
+    }
+    KeyRow row;
+    row.depth = depth;
+    row.cls = key->GetClassName();
+    row.name = key->GetName();
+    row.title = key->GetTitle();
+    row.cycle = key->GetCycle();
+    row.bytes = key->GetNbytes();
+    into.push_back(row);
+
+    TClass *cls = TClass::GetClass(key->GetClassName());
+    if (cls != nullptr && cls->InheritsFrom(TDirectory::Class())) {
+      // Only a directory is opened here: naming an object costs nothing,
+      // reading one would.
+      collect_keys(dynamic_cast<TDirectory *>(key->ReadObj()), depth + 1, into,
+                   skipped);
+    }
+  }
+}
+
+/// Lays the rows out in columns, nesting shown by indent.
+std::string render_keys(const std::vector<KeyRow> &rows, std::size_t skipped) {
+  std::size_t class_width = 0;
+  std::size_t name_width = 0;
+  std::size_t bytes_width = 0;
+  for (const KeyRow &row : rows) {
+    class_width = std::max(class_width,
+                           static_cast<std::size_t>(row.depth) * 2 +
+                               row.cls.size());
+    name_width = std::max(name_width, row.name.size());
+    bytes_width = std::max(bytes_width, std::to_string(row.bytes).size());
+  }
+
+  std::string out;
+  for (const KeyRow &row : rows) {
+    const std::size_t indent = static_cast<std::size_t>(row.depth) * 2;
+    out.append(indent, ' ');
+    out += row.cls;
+    out.append(class_width - indent - row.cls.size() + 2, ' ');
+    out += row.name;
+    out.append(name_width - row.name.size() + 2, ' ');
+    out += ";" + std::to_string(row.cycle);
+    const std::string bytes = std::to_string(row.bytes);
+    out.append(bytes_width - bytes.size() + 2, ' ');
+    out += bytes + " bytes";
+    if (!row.title.empty() && row.title != row.name) {
+      out += "  " + row.title;
+    }
+    out += "\n";
+  }
+  if (skipped != 0) {
+    out += "... and at least " + std::to_string(skipped) + " more\n";
+  }
+  if (!out.empty() && out.back() == '\n') {
+    out.pop_back();
+  }
+  return out;
+}
+
 } // anonymous namespace
 
 void handle_open(ShmLayout &shm, const Proto::PacketHeader &pkt,
@@ -345,11 +438,53 @@ void handle_save(ShmLayout &shm, const Proto::PacketHeader &pkt,
   send_text(shm, pkt, Proto::PacketType::EVT_OK, "SAVED  " + token);
 }
 
+void reply_text(ShmLayout &shm, const Proto::PacketHeader &req,
+                Proto::PacketType type, const std::string &text) {
+  send_text(shm, req, type, text);
+}
+
+TFile *file_for(std::uint32_t id) {
+  return FileRegistry::instance().get_file(id);
+}
+
+std::uint32_t resolve_file(const std::string &token) {
+  return FileRegistry::instance().resolve(token);
+}
+
 void handle_list(ShmLayout &shm, const Proto::PacketHeader &pkt,
                  void *context) {
   (void)context;
   send_text(shm, pkt, Proto::PacketType::EVT_OK,
             FileRegistry::instance().list());
+}
+
+void handle_keys(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                 void *context) {
+  (void)context;
+
+  const std::string token(extract_path(shm, pkt));
+  const std::uint32_t id = token.empty()
+                               ? FileRegistry::instance().only_file()
+                               : FileRegistry::instance().resolve(token);
+  TFile *file = FileRegistry::instance().get_file(id);
+  if (file == nullptr) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              token.empty()
+                  ? "ERROR: say which file. Usage: :root file ls <id|name>"
+                  : "ERROR: no open file called '" + token +
+                        "'. Try :root file list");
+    return;
+  }
+
+  std::vector<KeyRow> rows;
+  std::size_t skipped = 0;
+  collect_keys(file, 0, rows, skipped);
+  if (rows.empty()) {
+    send_text(shm, pkt, Proto::PacketType::EVT_OK,
+              std::string(file->GetName()) + " holds no object");
+    return;
+  }
+  send_text(shm, pkt, Proto::PacketType::EVT_OK, render_keys(rows, skipped));
 }
 
 void register_all() {
@@ -360,6 +495,7 @@ void register_all() {
                             &handle_close_all);
   registry.register_command(Proto::PacketType::CMD_SAVE_FILE, &handle_save);
   registry.register_command(Proto::PacketType::CMD_FILE_LIST, &handle_list);
+  registry.register_command(Proto::PacketType::CMD_FILE_KEYS, &handle_keys);
 }
 
 } // namespace Sphere::cmd::file

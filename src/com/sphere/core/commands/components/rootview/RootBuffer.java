@@ -147,6 +147,19 @@ public final class RootBuffer {
         return new Header(version, start, end);
     }
 
+    /**
+     * True when reading stopped within the object a header opened.
+     *
+     * Members that were read in the wrong shape carry the position past the end
+     * the object declared, so this is what tells a decoder it lost its place.
+     */
+    public boolean landedInside(Header header) {
+        if (!header.hasCount()) {
+            return true;
+        }
+        return position() <= header.end;
+    }
+
     /** Jumps to where a class header said its object ends. */
     public void endObject(Header header) {
         if (header.hasCount() && header.end <= buffer.limit() && header.end >= 0) {
@@ -180,6 +193,46 @@ public final class RootBuffer {
         final String title = string();
         endObject(header);
         return new String[] {name, title};
+    }
+
+    /** The next four bytes as a signed integer, without consuming them. */
+    public int peekI32() {
+        if (buffer.remaining() < 4) {
+            return -1;
+        }
+        return buffer.getInt(buffer.position());
+    }
+
+    /**
+     * Reads a member declared as a pointer whose length is another member, the
+     * way TGraph declares fX with [fNpoints].
+     *
+     * Such a member carries no length of its own: the streamer writes one flag
+     * byte and then the values. A TArray, which is what fSumw2 and the bin edges
+     * are, does carry its length -- reading one as the other is what leaves a
+     * graph empty while the histograms come out right. Files that did write a
+     * length are still accepted, since a length can only be there when it equals
+     * the count already read.
+     */
+    public double[] readSizedArray(int count, boolean singlePrecision) {
+        if (count <= 0) {
+            if (hasRemaining()) {
+                u8();
+            }
+            return new double[0];
+        }
+        if (peekI32() == count) {
+            skip(4);
+        } else if (hasRemaining()) {
+            u8();
+        }
+        final int width = singlePrecision ? 4 : 8;
+        final int n = Math.min(count, buffer.remaining() / width);
+        double[] out = new double[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = singlePrecision ? buffer.getFloat() : buffer.getDouble();
+        }
+        return out;
     }
 
     public double[] readArrayD() {

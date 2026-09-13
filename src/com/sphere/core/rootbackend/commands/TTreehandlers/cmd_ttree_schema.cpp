@@ -1,6 +1,7 @@
 // commands/TTreeHandlers/cmd_ttree_schema.cpp
 #include "ttree_common.h"
 #include "cmd_ttree.h"
+#include "cmd_file.h"
 
 #include <TBranch.h>
 #include <TLeaf.h>
@@ -21,7 +22,41 @@ void handle_inspect(ShmLayout &shm, const Proto::PacketHeader &pkt, void *contex
   (void)context;
 
   TTree *tree = get_tree(pkt.job_id);
+  std::string request;
+  if (tree == nullptr && pkt.payload_size > 0) {
+    // A payload names the tree to work on, so this is also where a job id gets
+    // bound to one. Without a payload the call behaves as it always did.
+    request = read_payload_text(shm, pkt);
+    if (attach_tree(pkt.job_id, request)) {
+      tree = get_tree(pkt.job_id);
+    }
+  }
   if (!tree) {
+    // A bare status code leaves nothing to act on: say what was asked for and
+    // what the file holds instead.
+    if (!request.empty()) {
+      const std::size_t tab = request.find('\t');
+      const std::string file_token =
+          tab == std::string::npos ? request : request.substr(0, tab);
+      const std::string wanted =
+          tab == std::string::npos ? std::string() : request.substr(tab + 1);
+      const std::uint32_t file_id = Sphere::cmd::file::resolve_file(file_token);
+
+      std::string message;
+      if (file_id == 0) {
+        message = "no file \"" + file_token
+                + "\" is open. Open it first with :root file open <path>";
+      } else {
+        const std::string trees = list_trees(file_id);
+        message = "no tree named \"" + wanted + "\" in file " + file_token;
+        message += trees.empty()
+            ? ".\nThis file holds no TTree at all."
+            : ". It holds:\n" + trees;
+      }
+      Sphere::cmd::file::reply_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+                                    message);
+      return;
+    }
     send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_TREE);
     return;

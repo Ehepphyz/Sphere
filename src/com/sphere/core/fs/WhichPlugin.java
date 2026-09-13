@@ -1,6 +1,7 @@
 package com.sphere.core.fs;
 
 import com.sphere.core.CommandRouter;
+import com.sphere.core.commands.CommandDefinitions;
 import com.sphere.utils.AppLogger;
 import com.sphere.utils.SettingsManager;
 
@@ -61,8 +62,14 @@ public class WhichPlugin implements CommandRouter.CommandPlugin {
         if (input == null) return false;
         String t = input.trim();
         if (t.startsWith("::")) return false;
-        return t.equals(":which") || t.startsWith(":which ")
-            || t.equals(":env") || t.startsWith(":env ");
+        if (!(t.equals(":which") || t.startsWith(":which ")
+              || t.equals(":env") || t.startsWith(":env "))) {
+            return false;
+        }
+        // Plugins are consulted before the command table, so claiming every
+        // ":env ..." hid ":env list", ":env activate" and the rest behind the
+        // variable reporter. A line the table already answers is left to it.
+        return CommandDefinitions.find(t) == null;
     }
 
     @Override

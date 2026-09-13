@@ -1,4 +1,4 @@
-# Sphere (Science Physic High Energy Research Environment)
+# Sphere (Science Physics High Energy Research Environment)
 
 **Sphere** functions as an experimental environment (a sandbox) or an advanced visual REPL. It allows to test scripts, run code on the fly, and inspect data without having to recompile large applications.
 

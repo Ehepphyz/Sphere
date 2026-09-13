@@ -76,6 +76,10 @@ public final class RootViewerPanel extends ViewSurface {
     private RootNode current;
     private TitleListener titleListener;
 
+    /** The handle the engine gave for this file, 0 when it was never asked. */
+    private int engineFileId;
+    private int nextJobId = 1;
+
     /** Names and titles the user has changed, and the objects dropped. */
     private final Map<RootNode, String[]> renamed = new HashMap<>();
     private final Set<RootNode> dropped = new HashSet<>();
@@ -278,6 +282,7 @@ public final class RootViewerPanel extends ViewSurface {
             root = file.tree();
             renamed.clear();
             dropped.clear();
+            engineFileId = 0;
             tree.setModel(new RootTreeModel(root));
             expandTop();
             inspector.showFile(file, root);
@@ -413,24 +418,64 @@ public final class RootViewerPanel extends ViewSurface {
         if (dropped.contains(node)) {
             plot.showMessage(node.name + " is marked to be dropped");
         }
+        if (node.branch) {
+            drawBranch(node);
+            return;
+        }
+        if (node.isTree()) {
+            openTree(node);
+            return;
+        }
 
         try {
             byte[] payload = file.payload(node.key);
             if (node.isHistogram()) {
                 RootHistogram h = RootHistogram.decode(payload, node.className);
+                if (!h.consistent) {
+                    reportUndecoded(node, h.className + " did not read back the way "
+                        + "its own class says it was written");
+                    return;
+                }
                 plot.showHistogram(h);
                 inspector.showHistogram(h);
                 plot.setStyle(currentStyle());
+                if (h.dimensions > 1) {
+                    // A three axis histogram is shown one slice at a time, and
+                    // saying so beats letting it pass for the whole thing.
+                    setStatus(String.format(Locale.ROOT,
+                        "%s  --  %s, %d by %d cells%s",
+                        node.pathFrom(root), node.className,
+                        h.xAxis.bins, h.yAxis.bins,
+                        h.dimensions > 2 ? ", first slice of the third axis" : ""));
+                    return;
+                }
+            } else if (node.isGraph2D()) {
+                RootGraph2D g = RootGraph2D.decode(payload, node.className);
+                if (g.size() == 0 || !g.consistent) {
+                    reportUndecoded(node, g.size() == 0
+                        ? node.className + " came back with no points"
+                        : node.className + " did not read back the way its own "
+                          + "class says it was written");
+                    return;
+                }
+                plot.showGraph2D(g);
+                inspector.showGraph2D(g);
+                points.setSelected(true);
             } else if (node.isGraph()) {
                 RootGraph g = RootGraph.decode(payload, node.className);
+                if (g.size() == 0 || !g.consistent) {
+                    reportUndecoded(node, g.size() == 0
+                        ? node.className + " came back with no points"
+                        : node.className + " did not read back the way its own "
+                          + "class says it was written");
+                    return;
+                }
                 plot.showGraph(g);
                 inspector.showGraph(g);
                 points.setSelected(true);
             } else {
-                final String message = node.isTree()
-                    ? node.name + " is a TTree. Its metadata is here; reading its "
-                      + "branches needs the ROOT backend."
-                    : node.className + " is not drawn by this viewer.";
+                final String message =
+                    node.className + " is not drawn by this viewer.";
                 plot.showMessage(message);
                 inspector.showMessage(message + "\n\n"
                     + String.format(Locale.ROOT, "%,d bytes on disk, %,d once read.",
@@ -457,6 +502,186 @@ public final class RootViewerPanel extends ViewSurface {
             inspector.showMessage(message);
             setStatus(message);
         }
+    }
+
+    // ---- what only the ROOT backend can read --------------------------------
+
+    private static com.sphere.core.rootbackend.RootBackend backend() {
+        com.sphere.core.rootbackend.RootBackend backend =
+            com.sphere.core.rootbackend.RootBackend.getInstance();
+        return backend != null && backend.isAvailable() ? backend : null;
+    }
+
+    /**
+     * Asks the engine for a tree's branches and hangs them under its node.
+     *
+     * A TTree's baskets need ROOT itself, so this is the one place the viewer
+     * stops reading the file on its own and asks the backend instead. The
+     * branches become children of the tree, and selecting one draws it.
+     */
+    private void openTree(RootNode node) {
+        if (!node.children.isEmpty()) {
+            plot.showMessage("Pick a branch of " + node.name);
+            inspector.showMessage(node.name + " holds "
+                + node.children.size() + " branches. Select one to draw it.");
+            return;
+        }
+        com.sphere.core.rootbackend.RootBackend engine = backend();
+        if (engine == null) {
+            final String message = node.name + " is a TTree: reading its branches "
+                + "needs the ROOT backend, which is not running.";
+            plot.showMessage(message);
+            inspector.showMessage(message);
+            setStatus(message);
+            return;
+        }
+
+        final String path = file.getPath().toAbsolutePath().toString();
+        final String treePath = node.pathFrom(root);
+        final String inner = treePath.contains("/")
+            ? treePath.substring(treePath.indexOf('/') + 1) : node.name;
+        final int jobId = nextJobId++;
+        node.jobId = jobId;
+
+        plot.showMessage("Asking the backend for " + node.name + "...");
+        setStatus("asking the backend for " + inner);
+
+        new javax.swing.SwingWorker<String[], Void>() {
+            @Override
+            protected String[] doInBackground() {
+                if (engineFileId == 0) {
+                    engineFileId = engine.openFileAwait(path, 20_000L);
+                }
+                if (engineFileId == 0) {
+                    return new String[] {null, null};
+                }
+                final String info = engine.treeAttachAwait(
+                    jobId, String.valueOf(engineFileId), inner, 30_000L);
+                if (info == null || info.startsWith("ERROR")) {
+                    return new String[] {null, info};
+                }
+                return new String[] {info, engine.treeBranchesAwait(jobId, 30_000L)};
+            }
+
+            @Override
+            protected void done() {
+                String[] answer;
+                try {
+                    answer = get();
+                } catch (Exception failed) {
+                    answer = new String[] {null, null};
+                }
+                fillBranches(node, answer[0], answer[1]);
+            }
+        }.execute();
+    }
+
+    /** Turns the engine's two answers into the branch nodes under a tree. */
+    private void fillBranches(RootNode node, String info, String branches) {
+        if (info == null) {
+            final String message = node.name + ": the backend did not open it"
+                + (branches == null ? "." : " (" + branches + ").");
+            plot.showMessage(message);
+            inspector.showMessage(message);
+            setStatus(message);
+            return;
+        }
+        Object described = Json.parse(info);
+        final long entries = Json.number(described, "entries", 0);
+
+        for (Object entry : Json.list(Json.parse(branches), "branches")) {
+            final String name = Json.text(entry, "name", "");
+            if (name.isEmpty()) {
+                continue;
+            }
+            String type = Json.text(entry, "class", "");
+            java.util.List<Object> leaves = Json.list(entry, "leaves");
+            if (type.isEmpty() && !leaves.isEmpty()) {
+                type = Json.text(leaves.get(0), "type", "");
+            }
+            RootNode child = new RootNode(name, Json.text(entry, "title", ""),
+                                          type.isEmpty() ? "branch" : type, null);
+            child.branch = true;
+            child.jobId = node.jobId;
+            node.children.add(child);
+        }
+
+        applyFilter();
+        TreePath path = pathTo(node);
+        if (path != null) {
+            tree.expandPath(path);
+            tree.setSelectionPath(path);
+        }
+        final String message = String.format(Locale.ROOT,
+            "%s: %,d entries, %d branches. Select one to draw it.",
+            node.name, entries, node.children.size());
+        plot.showMessage(message);
+        inspector.showMessage(message);
+        setStatus(message);
+    }
+
+    /** Reads one branch through the engine and bins it into a histogram. */
+    private void drawBranch(RootNode node) {
+        com.sphere.core.rootbackend.RootBackend engine = backend();
+        if (engine == null || node.jobId == 0) {
+            final String message = node.name + ": the backend is no longer there.";
+            plot.showMessage(message);
+            setStatus(message);
+            return;
+        }
+        plot.showMessage("Reading " + node.name + "...");
+        setStatus("reading " + node.name);
+
+        final int jobId = node.jobId;
+        final String branch = node.name;
+        new javax.swing.SwingWorker<double[], Void>() {
+            @Override
+            protected double[] doInBackground() {
+                return engine.treeColumnAwait(jobId, branch, 60_000L);
+            }
+
+            @Override
+            protected void done() {
+                double[] values;
+                try {
+                    values = get();
+                } catch (Exception failed) {
+                    values = new double[0];
+                }
+                if (values.length == 0) {
+                    final String message = branch + ": the backend returned no "
+                        + "values. A branch of objects cannot be binned this way.";
+                    plot.showMessage(message);
+                    inspector.showMessage(message);
+                    setStatus(message);
+                    return;
+                }
+                RootHistogram h = RootHistogram.fromValues(
+                    branch, branch + "  (" + values.length + " entries)",
+                    values, 100);
+                plot.showHistogram(h);
+                plot.setStyle(currentStyle());
+                inspector.showHistogram(h);
+                setStatus(String.format(Locale.ROOT,
+                    "%s  --  %,d values read through the backend",
+                    branch, values.length));
+            }
+        }.execute();
+    }
+
+    /**
+     * Says what went wrong on the plot itself.
+     *
+     * An object that decodes to nothing used to leave an empty frame, which
+     * looks like an empty measurement rather than a reader that lost its place.
+     */
+    private void reportUndecoded(RootNode node, String reason) {
+        final String message = node.name + ": " + reason + ".";
+        plot.showMessage(message);
+        inspector.showMessage(message + "\n\n"
+            + String.format(Locale.ROOT, "%,d bytes on disk, %,d once read.",
+                            node.key.storedBytes(), node.key.objlen));
+        setStatus(message);
     }
 
     private RootPlot.Style currentStyle() {

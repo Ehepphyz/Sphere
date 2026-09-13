@@ -15,6 +15,11 @@ public final class RootNode {
     public boolean directory;
     public String note;
 
+    /** Set on a node that stands for a branch of a tree rather than a key. */
+    public boolean branch;
+    /** The job id the engine bound this node's tree to, 0 when none. */
+    public int jobId;
+
     public RootNode(String name, String title, String className, RootKey key) {
         this.name = name == null ? "" : name;
         this.title = title == null ? "" : title;
@@ -23,12 +28,24 @@ public final class RootNode {
     }
 
     public boolean isHistogram() {
+        // TH2Poly shares the prefix but not the layout: its bins are shapes.
+        if (className.startsWith("TH2Poly")) {
+            return false;
+        }
         return className.startsWith("TH1") || className.startsWith("TH2")
             || className.startsWith("TH3") || className.startsWith("TProfile");
     }
 
     public boolean isGraph() {
+        // A TGraph2D is not built on TGraph and has three arrays, not two.
+        if (isGraph2D()) {
+            return false;
+        }
         return className.startsWith("TGraph");
+    }
+
+    public boolean isGraph2D() {
+        return className.startsWith("TGraph2D");
     }
 
     public boolean isTree() {
@@ -42,7 +59,7 @@ public final class RootNode {
 
     /** True when this reader can decode the object without ROOT. */
     public boolean isReadableHere() {
-        return isHistogram() || isGraph() || isTree();
+        return isHistogram() || isGraph() || isGraph2D() || isTree();
     }
 
     /** The path from the file down to this node, for the status bar. */

@@ -101,11 +101,11 @@ public class CommandDefinitions {
         register(":root file ls", "List keys inside an opened ROOT file handle. Usage: :root file ls [file_id]", Handlers::rootLs);
         register(":root file info", "Display metadata info for an open file handle. Usage: :root file info <file_id>", Handlers::rootFileInfo);
         register(":root file write", "Flush and write an open file. Usage: :root file write <id|name>", Handlers::rootFileWrite);
-        register(":root file keys", "List all key structures inside active ROOT directory", Handlers::rootFileKeys);
+        register(":root file keys", "List keys inside an opened ROOT file handle. Usage: :root file keys [file_id]", Handlers::rootFileKeys);
         register(":root file scan", "Report a ROOT file's health, structure and basket layout. Usage: :root file scan <path> [--json]", Handlers::rootFileScan);
         register(":root file cd", "Change directory inside ROOT file. Usage: :root file cd <path>", Handlers::rootFileCd);
         register(":root file pwd", "Print current working directory inside active ROOT file", Handlers::rootFilePwd);
-        register(":root file dir", "Display active ROOT directory contents", Handlers::rootFileDir);
+        register(":root file dir", "List keys inside an opened ROOT file handle. Usage: :root file dir [file_id]", Handlers::rootFileDir);
         register(":root file get", "Extract object from ROOT file handle. Usage: :root file get <name>", Handlers::rootFileGet);
         register(":root file recreate", "Recreate a ROOT file, overwriting existing contents", Handlers::rootFileRecreate);
         register(":root file open-update", "Open ROOT file in UPDATE mode", Handlers::rootFileOpenUpdate);
@@ -119,6 +119,7 @@ public class CommandDefinitions {
         register(":root sys uptime", "Engine uptime (CMD_SYS_UPTIME)", Handlers::rootSysUptime);
         register(":root sys config", "root-config value from the engine. Usage: :root sys config <flag>", Handlers::rootSysConfig);
         register(":root schema discover", "Describe a TTree schema (CMD_SCHEMA_DISCOVER). Usage: :root schema discover <tree_id>", Handlers::rootSchemaDiscover);
+        register(":root tree attach", "Bind a tree to an id, which the other tree commands then use. Usage: :root tree attach <tree_id> <file_id|name> <tree_path>", Handlers::rootTreeAttach);
         register(":root tree column", "Read one branch as a column (CMD_TTREE_READ_COLUMN). Usage: :root tree column <tree_id> <branch>", Handlers::rootTreeColumn);
         register(":root tree stats", "Compute branch statistics in the engine (CMD_TTREE_COMPUTE_STATS). Usage: :root tree stats <tree_id> <branch>", Handlers::rootTreeStats);
         register(":root tree filter", "Apply a selection in the engine (CMD_TTREE_APPLY_FILTER). Usage: :root tree filter <tree_id> <expr>", Handlers::rootTreeFilter);

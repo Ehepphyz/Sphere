@@ -31,6 +31,7 @@ public final class RootPlot extends JComponent {
 
     private RootHistogram histogram;
     private RootGraph graph;
+    private RootGraph2D scatter;
     private String message = "Select an object";
 
     private Style style = Style.BARS;
@@ -70,6 +71,7 @@ public final class RootPlot extends JComponent {
     public void showHistogram(RootHistogram h) {
         this.histogram = h;
         this.graph = null;
+        this.scatter = null;
         this.message = null;
         repaint();
     }
@@ -77,14 +79,30 @@ public final class RootPlot extends JComponent {
     public void showGraph(RootGraph g) {
         this.graph = g;
         this.histogram = null;
+        this.scatter = null;
         this.message = null;
         this.style = Style.POINTS;
         repaint();
     }
 
+    /** Points carrying a third value, drawn with that value as their colour. */
+    public void showGraph2D(RootGraph2D g) {
+        this.scatter = g;
+        this.graph = null;
+        this.histogram = null;
+        this.message = null;
+        this.style = Style.POINTS;
+        repaint();
+    }
+
+    public RootGraph2D getGraph2D() {
+        return scatter;
+    }
+
     public void showMessage(String text) {
         this.histogram = null;
         this.graph = null;
+        this.scatter = null;
         this.message = text;
         repaint();
     }
@@ -98,7 +116,7 @@ public final class RootPlot extends JComponent {
     }
 
     public boolean hasContent() {
-        return histogram != null || graph != null;
+        return histogram != null || graph != null || scatter != null;
     }
 
     public void setStyle(Style style) {
@@ -180,10 +198,14 @@ public final class RootPlot extends JComponent {
                 g.drawString(message, (getWidth() - width) / 2, getHeight() / 2);
                 return;
             }
-            if (histogram != null) {
+            if (histogram != null && histogram.dimensions >= 2) {
+                paintHistogram2D(g, histogram);
+            } else if (histogram != null) {
                 paintHistogram(g, effective());
             } else if (graph != null) {
                 paintGraph(g, graph);
+            } else if (scatter != null) {
+                paintScatter(g, scatter);
             }
         } finally {
             g.dispose();
@@ -293,6 +315,139 @@ public final class RootPlot extends JComponent {
         paintProbeLine(g, box);
     }
 
+    /** The width the colour scale takes on the right of a two dimensional plot. */
+    private static final int SCALE = 58;
+
+    /**
+     * Draws a two dimensional histogram as a map of coloured cells.
+     *
+     * Drawing it along a single axis would show a sum that nobody asked for, so
+     * the second axis gets its own direction and the contents a colour.
+     */
+    private void paintHistogram2D(Graphics2D g, RootHistogram h) {
+        final int nx = h.xAxis.bins;
+        final int ny = h.yAxis.bins;
+        if (nx <= 0 || ny <= 0) {
+            return;
+        }
+        Rectangle box = frame();
+        box.width = Math.max(10, box.width - SCALE);
+
+        double top = Double.NEGATIVE_INFINITY;
+        double bottom = Double.POSITIVE_INFINITY;
+        for (int j = 1; j <= ny; j++) {
+            for (int i = 1; i <= nx; i++) {
+                final double v = h.content2D(i, j);
+                top = Math.max(top, v);
+                bottom = Math.min(bottom, v);
+            }
+        }
+        if (!(top > bottom)) {
+            top = bottom + 1;
+        }
+
+        paintFrame(g, box, h.xAxis.min, h.xAxis.max, h.yAxis.min, h.yAxis.max, h);
+
+        for (int j = 1; j <= ny; j++) {
+            final double y0 = mapY(h.yAxis.edge(j - 1), h.yAxis.min, h.yAxis.max, box);
+            final double y1 = mapY(h.yAxis.edge(j), h.yAxis.min, h.yAxis.max, box);
+            for (int i = 1; i <= nx; i++) {
+                final double v = h.content2D(i, j);
+                if (v == 0) {
+                    continue;
+                }
+                final double x0 = mapX(h.xAxis.edge(i - 1), h.xAxis.min, h.xAxis.max, box);
+                final double x1 = mapX(h.xAxis.edge(i), h.xAxis.min, h.xAxis.max, box);
+                g.setColor(ramp((v - bottom) / (top - bottom)));
+                g.fill(new Rectangle2D.Double(Math.min(x0, x1), Math.min(y0, y1),
+                                              Math.abs(x1 - x0) + 1,
+                                              Math.abs(y1 - y0) + 1));
+            }
+        }
+
+        g.setColor(ImagingTheme.border());
+        g.drawRect(box.x, box.y, box.width, box.height);
+        paintColorScale(g, box, bottom, top);
+        paintTitle(g, h.title.isEmpty() ? h.name : h.title, box);
+    }
+
+    /** The bar on the right that says which colour means what. */
+    private void paintColorScale(Graphics2D g, Rectangle box,
+                                 double bottom, double top) {
+        final int x = (int) box.getMaxX() + 16;
+        final int width = 14;
+        for (int y = box.y; y < box.getMaxY(); y++) {
+            final double at = 1.0 - (y - box.y) / (double) box.height;
+            g.setColor(ramp(at));
+            g.drawLine(x, y, x + width, y);
+        }
+        g.setColor(ImagingTheme.border());
+        g.drawRect(x, box.y, width, box.height);
+
+        g.setFont(ImagingTheme.uiFont(Font.PLAIN, 10f));
+        g.setColor(ImagingTheme.subduedText());
+        final double[] marks = ticks(bottom, top, false);
+        final int decimals = decimalsFor(marks);
+        for (double mark : marks) {
+            final double at = (mark - bottom) / (top - bottom);
+            if (at < 0 || at > 1) {
+                continue;
+            }
+            final int y = (int) (box.getMaxY() - at * box.height);
+            g.drawLine(x + width, y, x + width + 3, y);
+            g.drawString(formatTick(mark, decimals), x + width + 6, y + 4);
+        }
+    }
+
+    /** Dark blue through green to yellow, the way a density map usually reads. */
+    private static Color ramp(double at) {
+        final double t = Math.max(0, Math.min(1, at));
+        final int r = (int) Math.round(255 * Math.max(0, Math.min(1, 1.6 * t - 0.45)));
+        final int g = (int) Math.round(255 * Math.max(0, Math.min(1, 1.25 * t)));
+        final int b = (int) Math.round(255 * Math.max(0, Math.min(1,
+                          t < 0.5 ? 0.35 + 0.9 * t : 1.6 - 2.4 * t)));
+        return new Color(r, g, b);
+    }
+
+    /** A TGraph2D: the points where they belong, the third value as colour. */
+    private void paintScatter(Graphics2D g, RootGraph2D gr) {
+        final int n = gr.size();
+        if (n == 0) {
+            return;
+        }
+        Rectangle box = frame();
+        box.width = Math.max(10, box.width - SCALE);
+
+        double xa = gr.minX();
+        double xb = gr.maxX();
+        double ya = gr.minY();
+        double yb = gr.maxY();
+        final double xPad = (xb - xa) * 0.05 + (xb == xa ? 1 : 0);
+        final double yPad = (yb - ya) * 0.05 + (yb == ya ? 1 : 0);
+        xa -= xPad;
+        xb += xPad;
+        ya -= yPad;
+        yb += yPad;
+
+        final double za = gr.minZ();
+        double zb = gr.maxZ();
+        if (zb <= za) {
+            zb = za + 1;
+        }
+
+        paintFrame(g, box, xa, xb, ya, yb, null);
+
+        for (int i = 0; i < n; i++) {
+            final double px = mapX(gr.x[i], xa, xb, box);
+            final double py = mapY(gr.y[i], ya, yb, box);
+            g.setColor(ramp((gr.z[i] - za) / (zb - za)));
+            g.fill(new java.awt.geom.Ellipse2D.Double(px - 3.5, py - 3.5, 7, 7));
+        }
+
+        paintColorScale(g, box, za, zb);
+        paintTitle(g, gr.title.isEmpty() ? gr.name : gr.title, box);
+    }
+
     private void paintGraph(Graphics2D g, RootGraph gr) {
         final Rectangle box = frame();
         final int n = gr.size();
@@ -303,6 +458,19 @@ public final class RootPlot extends JComponent {
         double xHigh = gr.maxX();
         double yLow = gr.minY();
         double yHigh = gr.maxY();
+        if (showErrors && gr.hasErrors()) {
+            // Room for the bars, otherwise the longest ones get cut off.
+            for (int i = 0; i < n; i++) {
+                yLow = Math.min(yLow, gr.y[i] - gr.errorLow(i));
+                yHigh = Math.max(yHigh, gr.y[i] + gr.errorHigh(i));
+            }
+        }
+        if (showErrors && gr.hasWidths()) {
+            for (int i = 0; i < n; i++) {
+                xLow = Math.min(xLow, gr.x[i] - gr.widthLow(i));
+                xHigh = Math.max(xHigh, gr.x[i] + gr.widthHigh(i));
+            }
+        }
         final double xPad = (xHigh - xLow) * 0.05 + (xHigh == xLow ? 1 : 0);
         final double yPad = (yHigh - yLow) * 0.08 + (yHigh == yLow ? 1 : 0);
         xLow -= xPad;
@@ -341,6 +509,14 @@ public final class RootPlot extends JComponent {
                 g.draw(new Line2D.Double(px, ya, px, yb));
                 g.draw(new Line2D.Double(px - 3, ya, px + 3, ya));
                 g.draw(new Line2D.Double(px - 3, yb, px + 3, yb));
+            }
+            if (showErrors && gr.hasWidths()) {
+                final double xa = mapX(gr.x[i] - gr.widthLow(i), xLow, xHigh, box);
+                final double xb = mapX(gr.x[i] + gr.widthHigh(i), xLow, xHigh, box);
+                g.setColor(new Color(0xA7F3D0));
+                g.draw(new Line2D.Double(xa, py, xb, py));
+                g.draw(new Line2D.Double(xa, py - 3, xa, py + 3));
+                g.draw(new Line2D.Double(xb, py - 3, xb, py + 3));
             }
             g.setColor(new Color(0x34D399));
             g.fill(new java.awt.geom.Ellipse2D.Double(px - 3, py - 3, 6, 6));
@@ -507,6 +683,15 @@ public final class RootPlot extends JComponent {
         return xLow + (px - box.x) / box.width * (xHigh - xLow);
     }
 
+    private double unmapY(double py, Rectangle box) {
+        if (logY && yLow > 0 && yHigh > 0) {
+            final double la = Math.log10(yLow);
+            final double lb = Math.log10(yHigh);
+            return Math.pow(10, lb - (py - box.y) / box.height * (lb - la));
+        }
+        return yHigh - (py - box.y) / box.height * (yHigh - yLow);
+    }
+
     private static double positiveFloor(RootHistogram h) {
         double best = Double.POSITIVE_INFINITY;
         for (int i = 1; i <= h.xAxis.bins; i++) {
@@ -610,6 +795,14 @@ public final class RootPlot extends JComponent {
             repaint();
             return;
         }
+        if (histogram != null && histogram.dimensions >= 2) {
+            box.width = Math.max(10, box.width - SCALE);
+            hovering = box.contains(px, py);
+            hoverX = unmapX(px, box);
+            hoverY = unmapY(py, box);
+            repaint();
+            return;
+        }
         hoverX = unmapX(px, box);
         RootHistogram h = effective();
         if (h != null && h.xAxis.bins > 0) {
@@ -626,6 +819,17 @@ public final class RootPlot extends JComponent {
 
     @Override
     public String getToolTipText(MouseEvent event) {
+        if (histogram != null && histogram.dimensions >= 2 && hovering) {
+            final int i = binOf(histogram.xAxis, hoverX);
+            final int j = binOf(histogram.yAxis, hoverY);
+            if (i > 0 && j > 0) {
+                return String.format(Locale.ROOT,
+                    "<html>cell %d, %d<br>x %s, y %s<br><b>%s</b></html>",
+                    i, j, format(hoverX), format(hoverY),
+                    format(histogram.content2D(i, j)));
+            }
+            return null;
+        }
         RootHistogram h = effective();
         if (h != null && hoverBin >= 0) {
             final int bin = hoverBin + 1;
@@ -652,6 +856,15 @@ public final class RootPlot extends JComponent {
         return null;
     }
 
+    private static int binOf(RootAxis axis, double value) {
+        for (int bin = 1; bin <= axis.bins; bin++) {
+            if (value >= axis.edge(bin - 1) && value < axis.edge(bin)) {
+                return bin;
+            }
+        }
+        return -1;
+    }
+
     /** The plot as an image, for saving it to a file. */
     public BufferedImage snapshot(int width, int height) {
         BufferedImage image = new BufferedImage(Math.max(200, width),
@@ -673,6 +886,26 @@ public final class RootPlot extends JComponent {
     /** The drawn contents as CSV, for the export button. */
     public String toCsv() {
         StringBuilder sb = new StringBuilder();
+        if (scatter != null) {
+            sb.append("index,x,y,z\n");
+            for (int i = 0; i < scatter.size(); i++) {
+                sb.append(i).append(',').append(scatter.x[i]).append(',')
+                  .append(scatter.y[i]).append(',').append(scatter.z[i]).append('\n');
+            }
+            return sb.toString();
+        }
+        if (histogram != null && histogram.dimensions >= 2) {
+            sb.append("xbin,ybin,xlow,ylow,content\n");
+            for (int j = 1; j <= histogram.yAxis.bins; j++) {
+                for (int i = 1; i <= histogram.xAxis.bins; i++) {
+                    sb.append(i).append(',').append(j).append(',')
+                      .append(histogram.xAxis.edge(i - 1)).append(',')
+                      .append(histogram.yAxis.edge(j - 1)).append(',')
+                      .append(histogram.content2D(i, j)).append('\n');
+                }
+            }
+            return sb.toString();
+        }
         RootHistogram h = effective();
         if (h != null) {
             sb.append("bin,low,high,content,error\n");

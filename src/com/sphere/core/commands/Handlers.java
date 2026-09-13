@@ -1260,6 +1260,26 @@ public class Handlers {
         send(c, com.sphere.core.rootbackend.RootBackend.CMD_SCHEMA_DISCOVER, asInt(a, 0), null);
     }
 
+    /**
+     * Binds a tree to an id, which every other tree command then works on.
+     *
+     * Nothing else creates that binding: without it the engine answers every
+     * tree command by saying it has no tree.
+     */
+    public static void rootTreeAttach(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree attach");
+        String id = head(a);
+        String rest = tail(a);
+        if (id.isEmpty() || rest.isEmpty()) {
+            usage(":root tree attach <tree_id> <file_id|name> <tree_path>");
+            return;
+        }
+        String fileToken = head(rest);
+        String treePath = tail(rest);
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_INSPECT,
+             asInt(id, 0), fileToken + "\t" + treePath);
+    }
+
     public static void rootTreePrint(String i, CommandExecutionContext c) {
         String a = args(i, ":root tree print");
         if (a.isEmpty()) {
@@ -1347,11 +1367,13 @@ public class Handlers {
     }
 
     public static void rootLs(String i, CommandExecutionContext c) {
-        cling(c, "gDirectory->ls()");
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_KEYS, 0,
+             head(args(i, ":root file ls")));
     }
 
     public static void rootFileKeys(String i, CommandExecutionContext c) {
-        cling(c, "gDirectory->GetListOfKeys()->Print()");
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_KEYS, 0,
+             head(args(i, ":root file keys")));
     }
 
     public static void rootFileCd(String i, CommandExecutionContext c) {
@@ -1369,7 +1391,8 @@ public class Handlers {
     }
 
     public static void rootFileDir(String i, CommandExecutionContext c) {
-        cling(c, "gDirectory->ls()");
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_KEYS, 0,
+             head(args(i, ":root file dir")));
     }
 
     public static void rootFileGet(String i, CommandExecutionContext c) {

@@ -214,6 +214,7 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final short EVT_CHUNK_READY     = 114;
     public static final short CMD_FILE_SCAN       = 27;
     public static final short CMD_FILE_LIST       = 28;
+    public static final short CMD_FILE_KEYS       = 29;
 
     public static final short CMD_TTREE_INSPECT       = 20;
     public static final short CMD_TTREE_QUERY_ENTRIES = 21;
@@ -2078,10 +2079,131 @@ public final class RootBackend implements AutoCloseable, Backend {
             return null;
         }
         if (reply.carriesBlock()) {
-            return referencedText(reply);
+            final String text = referencedText(reply);
+            // The engine allocated that block for this reply and nobody else
+            // will hand it back: the text has been copied, so the room goes now.
+            if (reply.isShmRef()) {
+                releaseReferencedChunk(reply.shmOffset(), reply.shmGeneration());
+            }
+            return text;
         }
         final String text = reply.message();
         return text.isEmpty() ? describeEvent(reply) : text;
+    }
+
+    /** The reply itself, for a command that answers with numbers rather than text. */
+    public BridgeEvent sendAwaitEvent(short opcode, int jobId, byte[] payload,
+                                      long timeoutMillis) {
+        if (!isAvailable) {
+            return null;
+        }
+        return sendAndAwait(opcode, jobId, nextReqId.incrementAndGet(),
+                            payload, timeoutMillis);
+    }
+
+    // ---- what the ROOT viewer asks of the engine ---------------------------
+
+    /**
+     * Opens a file in the engine and returns the handle it answers with.
+     *
+     * The reply reads "FILE_OPENED  FILE_ID: 3  name", so the number after the
+     * label is what the tree commands need afterwards. Returns 0 on failure.
+     */
+    public int openFileAwait(String path, long timeoutMillis) {
+        final String reply = sendAwait(CMD_OPEN_FILE, 0,
+            path.getBytes(StandardCharsets.UTF_8), timeoutMillis);
+        if (reply == null) {
+            return 0;
+        }
+        final int at = reply.indexOf("FILE_ID:");
+        if (at < 0) {
+            return 0;
+        }
+        int from = at + "FILE_ID:".length();
+        while (from < reply.length() && reply.charAt(from) == ' ') {
+            from++;
+        }
+        int to = from;
+        while (to < reply.length() && Character.isDigit(reply.charAt(to))) {
+            to++;
+        }
+        try {
+            return to > from ? Integer.parseInt(reply.substring(from, to)) : 0;
+        } catch (NumberFormatException notANumber) {
+            return 0;
+        }
+    }
+
+    /**
+     * Binds a tree to `jobId` and returns what the engine says about it.
+     *
+     * Every later command on that job id works on this tree, so this is the call
+     * that has to succeed first.
+     */
+    public String treeAttachAwait(int jobId, String fileToken, String treePath,
+                                  long timeoutMillis) {
+        final String request = fileToken + "\t" + (treePath == null ? "" : treePath);
+        return sendAwait(CMD_TTREE_INSPECT, jobId,
+                         request.getBytes(StandardCharsets.UTF_8), timeoutMillis);
+    }
+
+    public String treeBranchesAwait(int jobId, long timeoutMillis) {
+        return sendAwait(CMD_TTREE_SCAN_BRANCHES, jobId, null, timeoutMillis);
+    }
+
+    public String treeEntriesAwait(int jobId, long timeoutMillis) {
+        return sendAwait(CMD_TTREE_QUERY_ENTRIES, jobId, null, timeoutMillis);
+    }
+
+    /**
+     * One branch of a bound tree, converted to doubles.
+     *
+     * The engine answers with the raw values in a shared block, typed by the
+     * leaf. Returns an empty array when the branch is not readable that way.
+     */
+    public double[] treeColumnAwait(int jobId, String branch, long timeoutMillis) {
+        BridgeEvent reply = sendAwaitEvent(CMD_TTREE_READ_COLUMN, jobId,
+            branch.getBytes(StandardCharsets.UTF_8), timeoutMillis);
+        if (reply == null || reply.isError() || !reply.carriesBlock()) {
+            return new double[0];
+        }
+        try {
+            return decodeColumn(referencedBytes(reply), reply.dtype());
+        } finally {
+            if (reply.isShmRef()) {
+                releaseReferencedChunk(reply.shmOffset(), reply.shmGeneration());
+            }
+        }
+    }
+
+    /** Widens whichever type the leaf had into the doubles a plot needs. */
+    private static double[] decodeColumn(byte[] bytes, byte dtype) {
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(bytes)
+            .order(java.nio.ByteOrder.nativeOrder());
+        final int width = switch (dtype) {
+            case DTYPE_INT8, DTYPE_UINT8 -> 1;
+            case DTYPE_INT16, DTYPE_UINT16, DTYPE_FLOAT16, DTYPE_BFLOAT16 -> 2;
+            case DTYPE_INT64, DTYPE_UINT64, DTYPE_FLOAT64 -> 8;
+            default -> 4;
+        };
+        final int count = bytes.length / width;
+        double[] out = new double[count];
+        for (int i = 0; i < count; i++) {
+            out[i] = switch (dtype) {
+                case DTYPE_FLOAT64 -> buffer.getDouble();
+                case DTYPE_FLOAT32 -> buffer.getFloat();
+                case DTYPE_INT64 -> buffer.getLong();
+                case DTYPE_UINT64 -> buffer.getLong();
+                case DTYPE_INT32 -> buffer.getInt();
+                case DTYPE_UINT32 -> Integer.toUnsignedLong(buffer.getInt());
+                case DTYPE_INT16 -> buffer.getShort();
+                case DTYPE_UINT16 -> buffer.getShort() & 0xFFFF;
+                case DTYPE_INT8 -> buffer.get();
+                case DTYPE_UINT8 -> buffer.get() & 0xFF;
+                default -> buffer.getFloat();
+            };
+        }
+        return out;
     }
 
     /**

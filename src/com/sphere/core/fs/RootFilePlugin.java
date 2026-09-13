@@ -54,12 +54,17 @@ public class RootFilePlugin implements CommandRouter.CommandPlugin {
         if (input == null) return false;
         String t = input.trim();
         if (t.startsWith("::")) return false;
-        // :root alone belongs to the ROOT backend; only a file argument is ours
+        // :root alone belongs to the ROOT backend; only a file argument is ours.
         if (!t.startsWith(":root ")) return false;
         String rest = t.substring(6).trim();
         if (rest.isEmpty()) return false;
+        // The grammar here is ":root <file.root> [options]", so the file has to
+        // be the first operand. Accepting it anywhere in the line swallowed the
+        // backend's own commands: ":root file open x.root" ended up asking for a
+        // file named "file open x.root".
         for (String token : FsSupport.tokenize(rest)) {
-            if (token.toLowerCase(Locale.ROOT).endsWith(".root")) return true;
+            if (token.startsWith("--")) continue;
+            return token.toLowerCase(Locale.ROOT).endsWith(".root");
         }
         return false;
     }

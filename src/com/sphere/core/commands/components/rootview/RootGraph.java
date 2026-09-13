@@ -12,6 +12,9 @@ public final class RootGraph {
     public String title = "";
     public String className = "";
 
+    /** False when the decode did not land where the object said it ends. */
+    public boolean consistent = true;
+
     public double[] x = new double[0];
     public double[] y = new double[0];
     public double[] exLow = new double[0];
@@ -25,6 +28,22 @@ public final class RootGraph {
 
     public boolean hasErrors() {
         return eyLow.length > 0 || eyHigh.length > 0;
+    }
+
+    /** True when the points carry a width in x, as a binned measurement does. */
+    public boolean hasWidths() {
+        return exLow.length > 0 || exHigh.length > 0;
+    }
+
+    public double widthLow(int i) {
+        return i < exLow.length ? exLow[i] : 0;
+    }
+
+    public double widthHigh(int i) {
+        if (i < exHigh.length) {
+            return exHigh[i];
+        }
+        return i < exLow.length ? exLow[i] : 0;
     }
 
     public double minX() {
@@ -94,28 +113,41 @@ public final class RootGraph {
         }
 
         final int points = b.i32();
-        g.x = b.readArrayD();
-        g.y = b.readArrayD();
-        if (points >= 0 && points < g.x.length) {
-            // fNpoints can be smaller than the arrays the file reserved.
-            g.x = java.util.Arrays.copyOf(g.x, points);
-            g.y = java.util.Arrays.copyOf(g.y, Math.min(points, g.y.length));
-        }
+        // fX and fY are sized by fNpoints, and TGraph kept them as floats until
+        // its version 3.
+        final boolean narrow = base.version > 0 && base.version <= 2;
+        g.x = b.readSizedArray(points, narrow);
+        g.y = b.readSizedArray(points, narrow);
 
         if (wrapped) {
             b.endObject(base);
-            if (className.equals("TGraphErrors")) {
-                g.exLow = b.readArrayD();
-                g.eyLow = b.readArrayD();
-                g.exHigh = g.exLow;
-                g.eyHigh = g.eyLow;
-            } else if (className.equals("TGraphAsymmErrors")) {
-                g.exLow = b.readArrayD();
-                g.exHigh = b.readArrayD();
-                g.eyLow = b.readArrayD();
-                g.eyHigh = b.readArrayD();
+            final boolean narrowErrors = outer.version > 0 && outer.version <= 2;
+            switch (className) {
+                case "TGraphErrors" -> {
+                    g.exLow = b.readSizedArray(points, narrowErrors);
+                    g.eyLow = b.readSizedArray(points, narrowErrors);
+                    g.exHigh = g.exLow;
+                    g.eyHigh = g.eyLow;
+                }
+                case "TGraphAsymmErrors", "TGraphBentErrors" -> {
+                    // The bent variant adds four more arrays after these, which
+                    // the object's byte count steps over.
+                    g.exLow = b.readSizedArray(points, narrowErrors);
+                    g.exHigh = b.readSizedArray(points, narrowErrors);
+                    g.eyLow = b.readSizedArray(points, narrowErrors);
+                    g.eyHigh = b.readSizedArray(points, narrowErrors);
+                }
+                default -> {
+                    // Another variant of the family: the points are in the base
+                    // and are drawn, whatever it keeps after them.
+                }
             }
         }
+
+        // Every object says how long it is. Landing somewhere else means the
+        // members were read in the wrong shape, which is worth saying rather
+        // than drawing an empty frame.
+        g.consistent = b.landedInside(outer) && g.x.length == Math.max(0, points);
 
         b.endObject(outer);
         return g;
