@@ -63,7 +63,7 @@ void handle_inspect(ShmLayout &shm, const Proto::PacketHeader &pkt, void *contex
   }
 
   auto *branches = tree->GetListOfBranches();
-  std::size_t branch_count = branches ? branches->GetSize() : 0;
+  std::size_t branch_count = branches ? branches->GetEntries() : 0;
 
   std::string json;
   json.reserve(256);
@@ -104,7 +104,7 @@ void handle_scan_branches(ShmLayout &shm, const Proto::PacketHeader &pkt, void *
   }
 
   auto *branches = tree->GetListOfBranches();
-  int branch_count = branches ? branches->GetSize() : 0;
+  int branch_count = branches ? branches->GetEntries() : 0;
 
   std::string json;
   json.reserve(2048);
@@ -124,7 +124,7 @@ void handle_scan_branches(ShmLayout &shm, const Proto::PacketHeader &pkt, void *
     json += "\"class\":\"" + std::string(cls ? escape_json(cls) : "") + "\",";
 
     auto *leaves = br->GetListOfLeaves();
-    int leaf_count = leaves ? leaves->GetSize() : 0;
+    int leaf_count = leaves ? leaves->GetEntries() : 0;
 
     json += "\"leaves\":[";
     for (int j = 0; j < leaf_count; ++j) {
@@ -229,7 +229,7 @@ void handle_get_entry(ShmLayout &shm, const Proto::PacketHeader &pkt, void *cont
   tree->GetEntry(index);
 
   auto *branches = tree->GetListOfBranches();
-  int branch_count = branches ? branches->GetSize() : 0;
+  int branch_count = branches ? branches->GetEntries() : 0;
 
   std::string json;
   json.reserve(2048);
@@ -246,7 +246,7 @@ void handle_get_entry(ShmLayout &shm, const Proto::PacketHeader &pkt, void *cont
     json += "\"" + escape_json(br->GetName()) + "\":";
 
     auto *leaves = br->GetListOfLeaves();
-    if (leaves && leaves->GetSize() > 0) {
+    if (leaves && leaves->GetEntries() > 0) {
       auto *leaf = static_cast<TLeaf *>(leaves->At(0));
       int len = leaf->GetLen();
 

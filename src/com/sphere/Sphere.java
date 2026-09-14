@@ -424,7 +424,10 @@ public class Sphere extends JFrame {
         
         topRightTabs.addTab("Variables", new JPanel());
         topRightTabs.addTab("Physics", new JPanel());
-        topRightTabs.addTab("Plots", new JPanel());
+        com.sphere.components.rootview.RootPlotsPanel plots =
+            com.sphere.components.rootview.RootPlotsPanel.instance();
+        topRightTabs.addTab("Plots", plots);
+        plots.setReveal(() -> topRightTabs.setSelectedComponent(plots));
 
         JTabbedPane bottomRightTabs = new JTabbedPane();
         bottomRightTabs.setUI(new SPTabbedPaneUI());

@@ -92,6 +92,24 @@ public final class RootGraph {
         return i < eyLow.length ? eyLow[i] : 0;
     }
 
+    /**
+     * One column against another, both read from a tree.
+     *
+     * The points keep the order the entries had, so a scan of the tree and a
+     * scan of the graph walk the same events.
+     */
+    public static RootGraph fromColumns(String xName, String yName,
+                                        double[] xValues, double[] yValues) {
+        RootGraph g = new RootGraph();
+        final int count = Math.min(xValues.length, yValues.length);
+        g.className = "TGraph";
+        g.name = yName + " vs " + xName;
+        g.title = g.name + "  (" + count + " points)";
+        g.x = java.util.Arrays.copyOf(xValues, count);
+        g.y = java.util.Arrays.copyOf(yValues, count);
+        return g;
+    }
+
     public static RootGraph decode(byte[] payload, String className) {
         RootGraph g = new RootGraph();
         g.className = className;

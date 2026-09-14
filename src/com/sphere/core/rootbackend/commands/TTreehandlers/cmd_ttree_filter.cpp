@@ -38,7 +38,7 @@ void handle_compute_stats(ShmLayout &shm, const Proto::PacketHeader &pkt, void *
     br = tree->GetBranch(target_branch_name.c_str());
   } else {
     auto *branches = tree->GetListOfBranches();
-    if (branches && branches->GetSize() > 0) {
+    if (branches && branches->GetEntries() > 0) {
       br = static_cast<TBranch *>(branches->At(0));
     }
   }
@@ -57,7 +57,7 @@ void handle_compute_stats(ShmLayout &shm, const Proto::PacketHeader &pkt, void *
   }
 
   auto *leaves = br->GetListOfLeaves();
-  if (!leaves || leaves->GetSize() == 0) {
+  if (!leaves || leaves->GetEntries() == 0) {
     send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_BRANCH);
     return;

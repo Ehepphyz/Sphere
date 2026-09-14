@@ -33,7 +33,11 @@ public class PresetMigrationPanel extends JPanel {
      * @param manager Underlying Workspace tracking coordinator instance handle.
      * @param projectDirectory Path reference mapping to the active working directory space on disk.
      */
-    public PresetMigrationPanel(WorkspaceManager manager, File projectDirectory) {
+    private final PresetLogPanel console;
+
+    public PresetMigrationPanel(WorkspaceManager manager, File projectDirectory,
+                                PresetLogPanel console) {
+        this.console = Objects.requireNonNull(console, "Console cannot be null.");
         this.workspaceManager = Objects.requireNonNull(manager, "Workspace manager instance pointer cannot be null.");
         Objects.requireNonNull(projectDirectory, "Project layout directory marker reference cannot be null.");
         this.targetPresetFilePath = projectDirectory.toPath().resolve(".presets").normalize();
@@ -81,7 +85,7 @@ public class PresetMigrationPanel extends JPanel {
                 }
 
                 String rawJsonContent = Files.readString(targetPresetFilePath, StandardCharsets.UTF_8);
-                Object parsedJsonRoot = MinimalJson.parse(rawJsonContent);
+                Object parsedJsonRoot = MinimalJson.parseStrict(rawJsonContent);
 
                 if (!(parsedJsonRoot instanceof Map<?, ?>)) {
                     throw new IllegalArgumentException("Target configuration parsing failure: JSON structural layout does not map to an object root container.");
@@ -93,10 +97,11 @@ public class PresetMigrationPanel extends JPanel {
                 boolean structuralChangesDetected = false;
 
                 // Sync expected analytical experiments data matrices
-                structuralChangesDetected |= workspaceManager.ensurePresetEntry(workspaceSettingsRootMap, "ATLAS", List.of("24"));
-                structuralChangesDetected |= workspaceManager.ensurePresetEntry(workspaceSettingsRootMap, "CMS", List.of("13", "23"));
-                structuralChangesDetected |= workspaceManager.ensurePresetEntry(workspaceSettingsRootMap, "LHCb", List.of("v"));
-                structuralChangesDetected |= workspaceManager.ensurePresetEntry(workspaceSettingsRootMap, "Belle II", List.of("b2"));
+                for (Map.Entry<String, List<String>> rule
+                        : WorkspaceManager.DEFAULT_PREFIXES.entrySet()) {
+                    structuralChangesDetected |= workspaceManager.ensurePresetEntry(
+                        workspaceSettingsRootMap, rule.getKey(), rule.getValue());
+                }
 
                 if (structuralChangesDetected) {
                     String updatedJsonOutput = MinimalJson.toJson(workspaceSettingsRootMap);
@@ -114,6 +119,7 @@ public class PresetMigrationPanel extends JPanel {
                     String operationExecutionSummary = get();
                     terminalLogOutputArea.append(operationExecutionSummary + "\n");
                     AppLogger.info("Preset migration cycle finalized: " + operationExecutionSummary);
+                    console.log("info", operationExecutionSummary);
                 } catch (Exception executionThreadFault) {
                     Throwable structuralRootCause = executionThreadFault.getCause() != null 
                             ? executionThreadFault.getCause() : executionThreadFault;
@@ -121,6 +127,7 @@ public class PresetMigrationPanel extends JPanel {
                     String structuralErrorMessage = "Migration structural processing failure: " + structuralRootCause.getMessage();
                     terminalLogOutputArea.append(structuralErrorMessage + "\n");
                     AppLogger.error(structuralErrorMessage);
+                    console.log("error", "Left untouched: " + structuralRootCause.getMessage());
                 } finally {
                     btnApplyMigration.setEnabled(true);
                 }

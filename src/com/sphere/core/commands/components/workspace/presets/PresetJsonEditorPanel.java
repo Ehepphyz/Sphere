@@ -26,7 +26,13 @@ public class PresetJsonEditorPanel extends JPanel {
     private final Path targetsPresetFilePath;
     private final JButton btnSaveConfiguration;
 
-    public PresetJsonEditorPanel(WorkspaceManager manager, File projectDirectory) {
+    private final PresetLogPanel console;
+    private final File projectFolder;
+
+    public PresetJsonEditorPanel(WorkspaceManager manager, File projectDirectory,
+                                 PresetLogPanel console) {
+        this.console = Objects.requireNonNull(console, "Console cannot be null.");
+        this.projectFolder = projectDirectory;
         this.workspaceManager = Objects.requireNonNull(manager, "Workspace management tracking entity cannot be null.");
         Objects.requireNonNull(projectDirectory, "Active workspace home location path parameter cannot be null.");
         this.targetsPresetFilePath = projectDirectory.toPath().resolve(".presets").normalize();
@@ -95,13 +101,15 @@ public class PresetJsonEditorPanel extends JPanel {
         final String draftContentTextSnapshot = textEditorArea.getText();
 
         try {
-            MinimalJson.parse(draftContentTextSnapshot);
+            MinimalJson.parseStrict(draftContentTextSnapshot);
         } catch (Exception structuralSyntaxException) {
             // FIX: Fallback to AppLogger.info
             AppLogger.info("Local preset configuration commit aborted: Malformed JSON document framework detected.");
+            console.log("error", "Not saved, the document is malformed: "
+                + structuralSyntaxException.getMessage());
             JOptionPane.showMessageDialog(this,
-                    "Failed parsing properties framework: Invalid or unclosed JSON syntax boundaries.\n" +
-                    "Please verify syntax tokens match structural validation properties.",
+                    "The preset file was not saved: " + structuralSyntaxException.getMessage()
+                    + "\nFix the syntax and save again.",
                     "JSON Compilation Exception", JOptionPane.ERROR_MESSAGE);
             return;
         }
@@ -127,13 +135,22 @@ public class PresetJsonEditorPanel extends JPanel {
                 try {
                     get();
                     AppLogger.success("Workspace preset settings properties cleanly synchronized onto disk storage elements.");
+                    // The rules the rest of the window reads come from the manager,
+                    // so a save that does not reload them changes nothing on screen.
+                    workspaceManager.loadPresetRules(projectFolder);
+                    console.log("info", "Saved, and " + workspaceManager.getPresetRules().size()
+                        + " rule(s) reloaded from the file.");
                     JOptionPane.showMessageDialog(PresetJsonEditorPanel.this,
                             "Preset parameters saved successfully.",
                             "Synchronization Complete", JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception processingFaultException) {
-                    AppLogger.error("Failed executing storage data write: " + processingFaultException.getMessage());
+                    // A cancelled worker carries no cause of its own.
+                    Throwable reason = processingFaultException.getCause() != null
+                        ? processingFaultException.getCause() : processingFaultException;
+                    AppLogger.error("Failed executing storage data write: " + reason.getMessage());
+                    console.log("error", "Not written: " + reason.getMessage());
                     JOptionPane.showMessageDialog(PresetJsonEditorPanel.this,
-                            "Failed to write modifications downstream:\n" + processingFaultException.getCause().getMessage(),
+                            "Failed to write modifications downstream:\n" + reason.getMessage(),
                             "I/O Exception Intercept", JOptionPane.ERROR_MESSAGE);
                 } finally {
                     btnSaveConfiguration.setEnabled(true);

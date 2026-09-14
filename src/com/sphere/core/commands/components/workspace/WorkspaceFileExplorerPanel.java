@@ -519,26 +519,29 @@ public class WorkspaceFileExplorerPanel extends JPanel {
     /* ---------------------------------------------------------------------
     * JSON parser
     */
+    /**
+     * The two path lists the settings file declares.
+     *
+     * The file carries the whole project manifest now, not just these two
+     * arrays, and matching text for them ended at the first closing bracket: a
+     * folder named "bin[old]" took the rest of the list down with it. Reading it
+     * as JSON is what the rest of this package already does.
+     */
     private List<String> extractPathsFromJson(String json) {
         List<String> paths = new ArrayList<>();
-        var dirMatcher = Pattern.compile("\"directories\"\\s*:\\s*\\[([^]]*)\\]").matcher(json);
-        if (dirMatcher.find()) {
-            String section = dirMatcher.group(1);
-            var pathMatcher = Pattern.compile("\"([^\"]+)\"").matcher(section);
-            while (pathMatcher.find()) {
-                paths.add(pathMatcher.group(1).replace("\\\\", "/"));
+        Map<String, Object> content = MinimalJson.parse(json);
+
+        for (String key : new String[] {"directories", "files"}) {
+            if (!(content.get(key) instanceof List<?> declared)) {
+                continue;
+            }
+            for (Object entry : declared) {
+                final String path = String.valueOf(entry).replace('\\', '/').trim();
+                if (!path.isEmpty()) {
+                    paths.add(path);
+                }
             }
         }
-
-        var fileMatcher = Pattern.compile("\"files\"\\s*:\\s*\\[([^]]*)\\]").matcher(json);
-        if (fileMatcher.find()) {
-            String section = fileMatcher.group(1);
-            var pathMatcher = Pattern.compile("\"([^\"]+)\"").matcher(section);
-            while (pathMatcher.find()) {
-                paths.add(pathMatcher.group(1).replace("\\\\", "/"));
-            }
-        }
-
         return paths;
     }
 
@@ -642,27 +645,24 @@ public class WorkspaceFileExplorerPanel extends JPanel {
     */
     private void saveProjectSettings(List<String> directories, List<String> files) {
         try {
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\n");
-            sb.append("  \"projectName\": \"").append(projectDirectory.getFileName()).append("\",\n");
-            sb.append("  \"projectRoot\": \"").append(projectDirectory.toAbsolutePath().toString().replace("\\", "\\\\")).append("\",\n");
-            sb.append("  \"directories\": [\n");
-            for (int i = 0; i < directories.size(); i++) {
-                sb.append("    \"").append(directories.get(i)).append("\"");
-                if (i < directories.size() - 1) sb.append(",");
-                sb.append("\n");
+            // The tree owns the two lists and nothing else. Whatever the settings
+            // window wrote here -- experiment, tags, notes -- is read back and put
+            // back, otherwise a single new file would wipe it.
+            java.util.Map<String, Object> content = new java.util.LinkedHashMap<>();
+            if (settingsFile.exists()) {
+                java.util.Map<String, Object> existing =
+                    MinimalJson.parse(Files.readString(settingsFile.toPath(), StandardCharsets.UTF_8));
+                if (existing != null) {
+                    content.putAll(existing);
+                }
             }
-            sb.append("  ],\n");
-            sb.append("  \"files\": [\n");
-            for (int i = 0; i < files.size(); i++) {
-                sb.append("    \"").append(files.get(i)).append("\"");
-                if (i < files.size() - 1) sb.append(",");
-                sb.append("\n");
-            }
-            sb.append("  ]\n");
-            sb.append("}\n");
+            content.put("projectName", String.valueOf(projectDirectory.getFileName()));
+            content.put("projectRoot", projectDirectory.toAbsolutePath().toString());
+            content.put("directories", new ArrayList<>(directories));
+            content.put("files", new ArrayList<>(files));
 
-            Files.writeString(settingsFile.toPath(), sb.toString(), StandardCharsets.UTF_8);
+            Files.writeString(settingsFile.toPath(), MinimalJson.toJson(content),
+                              StandardCharsets.UTF_8);
         } catch (Exception e) {
             AppLogger.error("Failed to save project settings: " + e.getMessage());
         }

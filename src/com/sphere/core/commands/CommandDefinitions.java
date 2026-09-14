@@ -121,6 +121,12 @@ public class CommandDefinitions {
         register(":root schema discover", "Describe a TTree schema (CMD_SCHEMA_DISCOVER). Usage: :root schema discover <tree_id>", Handlers::rootSchemaDiscover);
         register(":root tree attach", "Bind a tree to an id, which the other tree commands then use. Usage: :root tree attach <tree_id> <file_id|name> <tree_path>", Handlers::rootTreeAttach);
         register(":root tree column", "Read one branch as a column (CMD_TTREE_READ_COLUMN). Usage: :root tree column <tree_id> <branch>", Handlers::rootTreeColumn);
+        register(":root tree plot", "Draw one branch against another in the Plots tab. Usage: :root tree plot <tree_id> <x_branch> <y_branch>", Handlers::rootTreePlot);
+        register(":plots add", "Show a picture in the Plots tab. Usage: :plots add <file.png|jpg|svg>", Handlers::plotsAdd);
+        register(":plots watch", "Watch a folder for new pictures, or list the folders watched. Usage: :plots watch [folder]", Handlers::plotsWatch);
+        register(":plots unwatch", "Stop watching a folder. Usage: :plots unwatch <folder>", Handlers::plotsUnwatch);
+        register(":plots folder", "Show or move the folder the Plots tab writes pictures into. Usage: :plots folder [folder]", Handlers::plotsFolder);
+        register(":plots clear", "Empty the Plots tab", Handlers::plotsClear);
         register(":root tree stats", "Compute branch statistics in the engine (CMD_TTREE_COMPUTE_STATS). Usage: :root tree stats <tree_id> <branch>", Handlers::rootTreeStats);
         register(":root tree filter", "Apply a selection in the engine (CMD_TTREE_APPLY_FILTER). Usage: :root tree filter <tree_id> <expr>", Handlers::rootTreeFilter);
         register(":root tree open", "Entry count for a named TTree. Usage: :root tree open <name>", Handlers::rootGetTree);

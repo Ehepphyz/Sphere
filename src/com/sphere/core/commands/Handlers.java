@@ -107,6 +107,7 @@ public class Handlers {
         }
         String previous = c.ctx.getActiveProject();
         c.ctx.setActiveProject(null);
+        com.sphere.components.rootview.RootPlotsPanel.instance().setOutputFolder(null);
         AppLogger.raw("Closed " + previous);
     }
 
@@ -138,6 +139,57 @@ public class Handlers {
                                           "CMakeLists.txt", "README.md"}) {
             AppLogger.raw(String.format("  %-10s %s", marker,
                 java.nio.file.Files.isRegularFile(project.resolve(marker)) ? "yes" : "no"));
+        }
+        describeWorkflow(project.resolve(".workflow"));
+    }
+
+    /**
+     * Reads what the project says it is made of.
+     *
+     * The file is written at creation from the modules the user ticked; saying
+     * only that it exists left it a file nobody ever opened.
+     */
+    private static void describeWorkflow(java.nio.file.Path workflow) {
+        if (!java.nio.file.Files.isRegularFile(workflow)) {
+            return;
+        }
+        java.util.Map<String, Object> content;
+        try {
+            content = com.sphere.components.workspace.MinimalJson.parse(
+                java.nio.file.Files.readString(workflow));
+        } catch (java.io.IOException unreadable) {
+            AppLogger.error("Could not read " + workflow + ": " + unreadable.getMessage());
+            return;
+        }
+
+        java.util.List<String> on = new java.util.ArrayList<>();
+        if (content.get("modules") instanceof java.util.Map<?, ?> modules) {
+            for (java.util.Map.Entry<?, ?> module : modules.entrySet()) {
+                if (Boolean.TRUE.equals(module.getValue())) {
+                    on.add(String.valueOf(module.getKey()));
+                }
+            }
+        }
+        AppLogger.raw(String.format("  %-10s %s", "modules",
+            on.isEmpty() ? "none" : String.join(", ", on)));
+
+        if (content.get("entries") instanceof java.util.Map<?, ?> entries) {
+            for (java.util.Map.Entry<?, ?> entry : entries.entrySet()) {
+                if (entry.getValue() instanceof java.util.Map<?, ?> where) {
+                    AppLogger.raw(String.format("  %-10s %s", entry.getKey(),
+                        String.valueOf(where.get("file"))));
+                }
+            }
+        }
+
+        if (content.get("pipelines") instanceof java.util.Map<?, ?> pipelines) {
+            for (java.util.Map.Entry<?, ?> pipeline : pipelines.entrySet()) {
+                java.util.List<?> steps = pipeline.getValue() instanceof java.util.List<?> l
+                    ? l : java.util.List.of();
+                AppLogger.raw(String.format("  %-10s %s", pipeline.getKey(),
+                    steps.isEmpty() ? "no step" : String.join(" -> ",
+                        steps.stream().map(String::valueOf).toList())));
+            }
         }
     }
 
@@ -758,6 +810,11 @@ public class Handlers {
             com.sphere.core.rootbackend.RootUserPipeline.loadInto(engine, name);
         }
 
+        // Plots drawn from now on belong to this project rather than to
+        // whichever folder Sphere happened to start in.
+        com.sphere.components.rootview.RootPlotsPanel.instance()
+            .setOutputFolder(project.toAbsolutePath().resolve("plots"));
+
         AppLogger.raw("Active project: " + name + "  (" + project.toAbsolutePath() + ")");
     }
 
@@ -1326,14 +1383,208 @@ public class Handlers {
              asInt(head(a), 0), tail(a));
     }
 
+    /**
+     * A column comes back as typed numbers, so it is read as numbers.
+     * Printing the block as text would show the raw bytes.
+     */
     public static void rootTreeColumn(String i, CommandExecutionContext c) {
         String a = args(i, ":root tree column");
         if (a.isEmpty() || tail(a).isEmpty()) {
             usage(":root tree column <tree_id> <branch>");
             return;
         }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_READ_COLUMN,
-             asInt(head(a), 0), tail(a));
+        com.sphere.core.rootbackend.RootBackend b = backend(c);
+        if (b == null) {
+            return;
+        }
+        String branch = tail(a);
+        double[] values = b.treeColumnAwait(asInt(head(a), 0), branch, TIMEOUT_MS);
+        if (values.length == 0) {
+            AppLogger.error(whyNoColumn(b, asInt(head(a), 0), branch));
+            return;
+        }
+        com.sphere.components.rootview.RootPlotsPanel.instance()
+            .showColumn(branch, values);
+        AppLogger.info(summarize(branch, values));
+    }
+
+    /** Draws one branch against another in the Plots tab. */
+    public static void rootTreePlot(String i, CommandExecutionContext c) {
+        String a = args(i, ":root tree plot");
+        String id = head(a);
+        String rest = tail(a);
+        if (id.isEmpty() || rest.isEmpty() || tail(rest).isEmpty()) {
+            usage(":root tree plot <tree_id> <x_branch> <y_branch>");
+            return;
+        }
+        com.sphere.core.rootbackend.RootBackend b = backend(c);
+        if (b == null) {
+            return;
+        }
+        final int jobId = asInt(id, 0);
+        final String xName = head(rest);
+        final String yName = head(tail(rest));
+        double[] xValues = b.treeColumnAwait(jobId, xName, TIMEOUT_MS);
+        double[] yValues = b.treeColumnAwait(jobId, yName, TIMEOUT_MS);
+        if (xValues.length == 0 || yValues.length == 0) {
+            AppLogger.error(whyNoColumn(b, jobId,
+                xValues.length == 0 ? xName : yName));
+            return;
+        }
+        com.sphere.components.rootview.RootPlotsPanel.instance()
+            .showCurve(xName, yName, xValues, yValues);
+        AppLogger.info(String.format(java.util.Locale.ROOT,
+            "%s vs %s drawn in the Plots tab, %d points",
+            yName, xName, Math.min(xValues.length, yValues.length)));
+    }
+
+    // ---- the Plots tab ------------------------------------------------------
+
+    /** Shows a picture in the Plots tab, whatever wrote it. */
+    public static void plotsAdd(String i, CommandExecutionContext c) {
+        String a = args(i, ":plots add");
+        if (a.isEmpty()) {
+            usage(":plots add <file.png|jpg|svg>");
+            return;
+        }
+        java.io.File image = resolve(a);
+        if (!com.sphere.components.imaging.ImageFileIO.isImage(image)) {
+            AppLogger.error(image + " is not a picture Sphere reads. "
+                + "It reads png, jpg, jpeg, gif, bmp and svg.");
+            return;
+        }
+        com.sphere.components.rootview.RootPlotsPanel.instance().showImage(image);
+        AppLogger.info(image.getName() + " shown in the Plots tab");
+    }
+
+    /** Adds a folder to the ones watched for new pictures. */
+    public static void plotsWatch(String i, CommandExecutionContext c) {
+        String a = args(i, ":plots watch");
+        com.sphere.components.rootview.RootPlotsPanel panel =
+            com.sphere.components.rootview.RootPlotsPanel.instance();
+        if (a.isEmpty()) {
+            StringBuilder text = new StringBuilder("Watching for pictures in:");
+            for (java.nio.file.Path folder : panel.watched()) {
+                text.append("\n  ").append(folder);
+            }
+            AppLogger.info(text.toString());
+            return;
+        }
+        java.io.File folder = resolve(a);
+        if (!folder.isDirectory()) {
+            AppLogger.error("Not a folder: " + folder);
+            return;
+        }
+        panel.watch(folder.toPath());
+        AppLogger.info("Watching " + folder + " for new pictures");
+    }
+
+    public static void plotsUnwatch(String i, CommandExecutionContext c) {
+        String a = args(i, ":plots unwatch");
+        if (a.isEmpty()) {
+            usage(":plots unwatch <folder>");
+            return;
+        }
+        final boolean dropped = com.sphere.components.rootview.RootPlotsPanel
+            .instance().unwatch(resolve(a).toPath());
+        if (dropped) {
+            AppLogger.info("No longer watching " + resolve(a));
+        } else {
+            AppLogger.error("That folder was not being watched. "
+                + "Try :plots watch to see which are.");
+        }
+    }
+
+    /** Shows or moves the folder the Plots tab writes its pictures into. */
+    public static void plotsFolder(String i, CommandExecutionContext c) {
+        String a = args(i, ":plots folder");
+        com.sphere.components.rootview.RootPlotsPanel panel =
+            com.sphere.components.rootview.RootPlotsPanel.instance();
+        if (!a.isEmpty()) {
+            java.io.File folder = resolve(a);
+            panel.setOutputFolder(folder.toPath());
+        }
+        try {
+            AppLogger.info("Plots are written to " + panel.outputFolder());
+        } catch (java.io.IOException unwritable) {
+            AppLogger.error("That folder cannot be used: " + unwritable.getMessage());
+        }
+    }
+
+    public static void plotsClear(String i, CommandExecutionContext c) {
+        com.sphere.components.rootview.RootPlotsPanel.instance().clear();
+        AppLogger.info("Plots tab emptied");
+    }
+
+    /** A path as typed, taken from the console's own folder when relative. */
+    private static java.io.File resolve(String path) {
+        java.io.File given = new java.io.File(path);
+        return given.isAbsolute() ? given
+            : com.sphere.core.fs.WorkingDirectory.get().resolve(path).toFile();
+    }
+
+    /**
+     * Says why a column came back empty.
+     *
+     * A bare refusal leaves nothing to act on, and the three reasons call for
+     * three different moves: attach a tree, fix the name, or pick another
+     * branch.
+     */
+    private static String whyNoColumn(com.sphere.core.rootbackend.RootBackend b,
+                                      int jobId, String branch) {
+        return whyNoColumn(branchesOf(b, jobId), jobId, branch);
+    }
+
+    static String whyNoColumn(java.util.List<String> names, int jobId,
+                              String branch) {
+        if (names.isEmpty()) {
+            return "No tree is bound to id " + jobId
+                 + ". Bind one with :root tree attach " + jobId
+                 + " <file_id> <tree_name>";
+        }
+        if (!names.contains(branch)) {
+            return "No branch named \"" + branch + "\" in tree " + jobId
+                 + ". It holds: " + String.join(", ", names);
+        }
+        return branch + " holds objects, not numbers, so it cannot be drawn.";
+    }
+
+    /** The branch names of a bound tree, empty when none is bound. */
+    private static java.util.List<String> branchesOf(
+            com.sphere.core.rootbackend.RootBackend b, int jobId) {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        String answer = b.treeBranchesAwait(jobId, TIMEOUT_MS);
+        if (answer == null || !answer.startsWith("{")) {
+            return names;
+        }
+        for (Object branch : com.sphere.components.rootview.Json.list(
+                 com.sphere.components.rootview.Json.parse(answer), "branches")) {
+            names.add(com.sphere.components.rootview.Json.text(branch, "name", "?"));
+        }
+        return names;
+    }
+
+    /** How many values came back, what they span, and the first of them. */
+    private static String summarize(String branch, double[] values) {
+        double min = values[0];
+        double max = values[0];
+        double sum = 0;
+        for (double v : values) {
+            min = Math.min(min, v);
+            max = Math.max(max, v);
+            sum += v;
+        }
+        StringBuilder first = new StringBuilder();
+        for (int k = 0; k < Math.min(8, values.length); k++) {
+            first.append(k > 0 ? "  " : "")
+                 .append(String.format(java.util.Locale.ROOT, "%.6g", values[k]));
+        }
+        if (values.length > 8) {
+            first.append("  ...");
+        }
+        return String.format(java.util.Locale.ROOT,
+            "%s  %d values   min %.6g   max %.6g   mean %.6g%n%s",
+            branch, values.length, min, max, sum / values.length, first);
     }
 
     public static void rootTreeStats(String i, CommandExecutionContext c) {

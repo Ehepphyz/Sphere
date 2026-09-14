@@ -219,6 +219,11 @@ public class SectionTagsPanel extends JPanel {
         }
     }
 
+    /** Whether the project already carries tags of its own. */
+    public boolean hasTags() {
+        return !currentTags.isEmpty();
+    }
+
     public void clear() {
         currentTags.clear();
         refreshTags();

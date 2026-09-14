@@ -47,23 +47,26 @@ public class PresetDetailsWindow extends JDialog {
         // 1. Core Center Layout - Managed Dashboard Tab Context Grid
         JTabbedPane multiAssetTabbedContainerPane = new JTabbedPane(JTabbedPane.TOP, JTabbedPane.SCROLL_TAB_LAYOUT);
 
+        // One console for the whole window: each panel reports into it, so what
+        // the tabs did to the file is readable in one place.
+        PresetLogPanel console = new PresetLogPanel();
+
         multiAssetTabbedContainerPane.addTab("Preset JSON Editor",
-                new PresetJsonEditorPanel(workspaceManager, projectDirectory));
+                new PresetJsonEditorPanel(workspaceManager, projectDirectory, console));
 
         multiAssetTabbedContainerPane.addTab("System Diagnostics",
-                new PresetDebugPanel(workspaceManager, projectDirectory, projectManifest));
+                new PresetDebugPanel(workspaceManager, projectDirectory, projectManifest, console));
 
         multiAssetTabbedContainerPane.addTab("Schema Migrations",
-                new PresetMigrationPanel(workspaceManager, projectDirectory));
+                new PresetMigrationPanel(workspaceManager, projectDirectory, console));
 
-        multiAssetTabbedContainerPane.addTab("Execution Telemetry Logs",
-                new PresetLogPanel());
+        multiAssetTabbedContainerPane.addTab("Execution Telemetry Logs", console);
 
         multiAssetTabbedContainerPane.addTab("Syntax Formatter",
-                new PresetFormatterPanel(workspaceManager, projectDirectory));
+                new PresetFormatterPanel(workspaceManager, projectDirectory, console));
 
         multiAssetTabbedContainerPane.addTab("Python Automation Updater",
-                new PresetPythonUpdaterPanel(workspaceManager, projectDirectory));
+                new PresetPythonUpdaterPanel(workspaceManager, projectDirectory, console));
 
         add(multiAssetTabbedContainerPane, BorderLayout.CENTER);
 

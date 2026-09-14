@@ -20,9 +20,11 @@ import javax.swing.JTree;
 import javax.swing.SwingUtilities;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.event.TreeSelectionEvent;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.TreePath;
+import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -79,6 +81,9 @@ public final class RootViewerPanel extends ViewSurface {
     /** The handle the engine gave for this file, 0 when it was never asked. */
     private int engineFileId;
     private int nextJobId = 1;
+
+    /** The branches picked, in the order they were clicked. */
+    private final List<RootNode> picked = new ArrayList<>();
 
     /** Names and titles the user has changed, and the objects dropped. */
     private final Map<RootNode, String[]> renamed = new HashMap<>();
@@ -233,7 +238,9 @@ public final class RootViewerPanel extends ViewSurface {
         tree.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
         tree.setCellRenderer(new NodeRenderer());
         tree.setModel(new RootTreeModel(new RootNode("", "", "", null)));
-        tree.addTreeSelectionListener(e -> selected());
+        tree.getSelectionModel().setSelectionMode(
+            TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION);
+        tree.addTreeSelectionListener(this::selectionChanged);
         tree.setComponentPopupMenu(nodeMenu());
 
         JScrollPane scroll = new JScrollPane(tree);
@@ -282,6 +289,7 @@ public final class RootViewerPanel extends ViewSurface {
             root = file.tree();
             renamed.clear();
             dropped.clear();
+            picked.clear();
             engineFileId = 0;
             tree.setModel(new RootTreeModel(root));
             expandTop();
@@ -398,7 +406,30 @@ public final class RootViewerPanel extends ViewSurface {
 
     // ---- showing an object -------------------------------------------------
 
+    /**
+     * Keeps track of what is picked, in click order.
+     *
+     * The tree hands its selection back in row order, which loses which of
+     * two branches was chosen first, and that is what decides the x axis.
+     */
+    private void selectionChanged(TreeSelectionEvent event) {
+        for (TreePath changed : event.getPaths()) {
+            if (!(changed.getLastPathComponent() instanceof RootNode node)) {
+                continue;
+            }
+            if (!event.isAddedPath(changed)) {
+                picked.remove(node);
+            } else if (!picked.contains(node)) {
+                picked.add(node);
+            }
+        }
+        selected();
+    }
+
     private void selected() {
+        if (drawPair()) {
+            return;
+        }
         TreePath path = tree.getSelectionPath();
         if (path == null || file == null) {
             return;
@@ -439,6 +470,7 @@ public final class RootViewerPanel extends ViewSurface {
                 plot.showHistogram(h);
                 inspector.showHistogram(h);
                 plot.setStyle(currentStyle());
+                RootPlotsPanel.instance().showHistogram(h, node.name);
                 if (h.dimensions > 1) {
                     // A three axis histogram is shown one slice at a time, and
                     // saying so beats letting it pass for the whole thing.
@@ -461,6 +493,7 @@ public final class RootViewerPanel extends ViewSurface {
                 plot.showGraph2D(g);
                 inspector.showGraph2D(g);
                 points.setSelected(true);
+                RootPlotsPanel.instance().showGraph2D(g, node.name);
             } else if (node.isGraph()) {
                 RootGraph g = RootGraph.decode(payload, node.className);
                 if (g.size() == 0 || !g.consistent) {
@@ -473,6 +506,7 @@ public final class RootViewerPanel extends ViewSurface {
                 plot.showGraph(g);
                 inspector.showGraph(g);
                 points.setSelected(true);
+                RootPlotsPanel.instance().showGraph(g, node.name);
             } else {
                 final String message =
                     node.className + " is not drawn by this viewer.";
@@ -620,6 +654,80 @@ public final class RootViewerPanel extends ViewSurface {
         setStatus(message);
     }
 
+    /**
+     * Two branches picked together are drawn one against the other.
+     *
+     * The first clicked carries x, the second y, which is the order a physicist
+     * says it in: eta against pt.
+     */
+    private boolean drawPair() {
+        if (picked.size() != 2) {
+            return false;
+        }
+        RootNode first = picked.get(0);
+        RootNode second = picked.get(1);
+        if (!first.branch || !second.branch
+            || first.jobId == 0 || first.jobId != second.jobId) {
+            return false;
+        }
+        drawBranchPair(first, second);
+        return true;
+    }
+
+    /** Reads both branches through the engine and draws the second against the first. */
+    private void drawBranchPair(RootNode xNode, RootNode yNode) {
+        com.sphere.core.rootbackend.RootBackend engine = backend();
+        if (engine == null) {
+            final String message = "the backend is no longer there.";
+            plot.showMessage(message);
+            setStatus(message);
+            return;
+        }
+        final int jobId = xNode.jobId;
+        final String xName = xNode.name;
+        final String yName = yNode.name;
+        plot.showMessage("Reading " + xName + " and " + yName + "...");
+        setStatus("reading " + xName + " and " + yName);
+
+        new javax.swing.SwingWorker<double[][], Void>() {
+            @Override
+            protected double[][] doInBackground() {
+                return new double[][] {
+                    engine.treeColumnAwait(jobId, xName, 60_000L),
+                    engine.treeColumnAwait(jobId, yName, 60_000L)
+                };
+            }
+
+            @Override
+            protected void done() {
+                double[][] columns;
+                try {
+                    columns = get();
+                } catch (Exception failed) {
+                    columns = new double[][] {new double[0], new double[0]};
+                }
+                if (columns[0].length == 0 || columns[1].length == 0) {
+                    final String message = yName + " against " + xName
+                        + ": the backend returned no values. A branch of objects "
+                        + "cannot be drawn this way.";
+                    plot.showMessage(message);
+                    inspector.showMessage(message);
+                    setStatus(message);
+                    return;
+                }
+                RootGraph g = RootGraph.fromColumns(xName, yName,
+                                                    columns[0], columns[1]);
+                plot.showGraph(g);
+                points.setSelected(true);
+                inspector.showGraph(g);
+                RootPlotsPanel.instance().showGraph(g, g.name);
+                setStatus(String.format(Locale.ROOT,
+                    "%s  --  %,d points read through the backend",
+                    g.name, g.size()));
+            }
+        }.execute();
+    }
+
     /** Reads one branch through the engine and bins it into a histogram. */
     private void drawBranch(RootNode node) {
         com.sphere.core.rootbackend.RootBackend engine = backend();
@@ -662,6 +770,7 @@ public final class RootViewerPanel extends ViewSurface {
                 plot.showHistogram(h);
                 plot.setStyle(currentStyle());
                 inspector.showHistogram(h);
+                RootPlotsPanel.instance().showHistogram(h, branch);
                 setStatus(String.format(Locale.ROOT,
                     "%s  --  %,d values read through the backend",
                     branch, values.length));

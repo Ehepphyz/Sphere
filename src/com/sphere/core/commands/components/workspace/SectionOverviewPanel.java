@@ -104,13 +104,11 @@ public class SectionOverviewPanel extends JPanel {
             cmbProjectType.setSelectedItem(manifest.projectType);
         }
 
-        cmbExperiment = new JComboBox<>(new String[]{
-                "ATLAS",
-                "CMS",
-                "LHCb",
-                "Belle II",
-                "Custom"
-        });
+        // The same list the creation window offers, drawn from the preset rules.
+        java.util.List<String> experiments = new java.util.ArrayList<>(
+            com.sphere.components.WorkspaceManager.DEFAULT_PREFIXES.keySet());
+        experiments.add("Custom");
+        cmbExperiment = new JComboBox<>(experiments.toArray(new String[0]));
         cmbExperiment.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
         cmbExperiment.putClientProperty("ComboBox.focusCellHighlightBorder", BorderFactory.createEmptyBorder());
         

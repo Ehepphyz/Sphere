@@ -35,11 +35,6 @@ public class ProjectDashboardPanel extends JPanel {
     private final ProjectManifest manifestContext;
     private final WorkspaceManager workspaceManager;
 
-    private final String AtlasVersion = "24";
-    private final String CmsVersion = "13";
-    private final String LhcbVersion = "v";
-    private final String BelleIIVersion = "b2";
-
     public interface DashboardListener {
         void onApplyChanges();
         void onCancel();
@@ -267,11 +262,11 @@ public class ProjectDashboardPanel extends JPanel {
             }
         }
 
-        switch (experiment) {
-            case "ATLAS" -> { if (!version.startsWith(AtlasVersion)) presetIssues.put("preset", "ATLAS releases typically follow " + AtlasVersion + ".x.x version schemas."); }
-            case "CMS" -> { if (!version.startsWith(CmsVersion)) presetIssues.put("preset", "CMS environments typically follow " + CmsVersion + ".x.x versions."); }
-            case "LHCb" -> { if (!version.startsWith(LhcbVersion)) presetIssues.put("preset", "LHCb versions require a '" + LhcbVersion + "' prefix."); }
-            case "Belle II" -> { if (!version.startsWith(BelleIIVersion)) presetIssues.put("preset", "Belle II environments typically use '" + BelleIIVersion + "-' prefixes."); }
+        // No rule came from the file, so fall back to what the framework is known by.
+        java.util.List<String> known = WorkspaceManager.DEFAULT_PREFIXES.get(experiment);
+        if (known != null && known.stream().noneMatch(version::startsWith)) {
+            presetIssues.put("preset", experiment + " versions normally start with "
+                + String.join(" or ", known) + ".");
         }
         return presetIssues;
     }
@@ -297,6 +292,13 @@ public class ProjectDashboardPanel extends JPanel {
         validateAllFormMetrics();
     }
 
+    /**
+     * Fills the blanks for a project type, and only the blanks.
+     *
+     * This ran on every open and wrote its canned text over whatever the
+     * project already said, so opening the window and pressing Apply replaced
+     * the user's own description and tags.
+     */
     private void applyIntelligentFormScaffolding(String projectType) {
         switch (projectType) {
             case "Custom" -> {
@@ -308,40 +310,52 @@ public class ProjectDashboardPanel extends JPanel {
                     temporaryScaffold.setCustomDefaultStructure("src/, data/raw/, scripts/");
                     customTypeSection.apply(temporaryScaffold);
                 }
-                tagsSection.setTags(java.util.Arrays.asList("custom", "user-defined"));
-                descriptionSection.setText("Custom user-defined profile template configuration environment.");
+                suggestTags(java.util.Arrays.asList("custom", "user-defined"));
+                suggestDescription("Custom user-defined profile template configuration environment.");
             }
             case "Analysis" -> {
-                tagsSection.setTags(java.util.Arrays.asList("analysis", "root", "ntuples"));
-                descriptionSection.setText("Physics analysis project using the ROOT framework.");
+                suggestTags(java.util.Arrays.asList("analysis", "root", "ntuples"));
+                suggestDescription("Physics analysis project using the ROOT framework.");
             }
             case "Detector Simulation" -> {
-                tagsSection.setTags(java.util.Arrays.asList("simulation", "geant4", "detector"));
-                descriptionSection.setText("Detector simulation pipeline using Geant4 infrastructure.");
+                suggestTags(java.util.Arrays.asList("simulation", "geant4", "detector"));
+                suggestDescription("Detector simulation pipeline using Geant4 infrastructure.");
             }
             case "Event Generation" -> {
-                tagsSection.setTags(java.util.Arrays.asList("mg5", "lhe", "generator"));
-                descriptionSection.setText("High-energy physics event generation workflows driven by MadGraph5.");
+                suggestTags(java.util.Arrays.asList("mg5", "lhe", "generator"));
+                suggestDescription("High-energy physics event generation workflows driven by MadGraph5.");
             }
             case "Reconstruction" -> {
-                tagsSection.setTags(java.util.Arrays.asList("tracking", "calorimetry", "reco"));
-                descriptionSection.setText("Event data reconstruction pipelines and tracking metrics.");
+                suggestTags(java.util.Arrays.asList("tracking", "calorimetry", "reco"));
+                suggestDescription("Event data reconstruction pipelines and tracking metrics.");
             }
             case "ML/AI Pipeline" -> {
-                tagsSection.setTags(java.util.Arrays.asList("ml", "ai", "training", "dataset"));
-                descriptionSection.setText("Machine Learning model training, dataset conditioning, and inference layers.");
+                suggestTags(java.util.Arrays.asList("ml", "ai", "training", "dataset"));
+                suggestDescription("Machine Learning model training, dataset conditioning, and inference layers.");
             }
             case "Visualization" -> {
-                tagsSection.setTags(java.util.Arrays.asList("visualization", "plots", "graphics"));
-                descriptionSection.setText("Data visualization frameworks, plotting tools, and graphic reporting.");
+                suggestTags(java.util.Arrays.asList("visualization", "plots", "graphics"));
+                suggestDescription("Data visualization frameworks, plotting tools, and graphic reporting.");
             }
             case "Documentation" -> {
-                tagsSection.setTags(java.util.Arrays.asList("docs", "markdown", "guide"));
-                descriptionSection.setText("Project documentation containing technical descriptions and workflow guides.");
+                suggestTags(java.util.Arrays.asList("docs", "markdown", "guide"));
+                suggestDescription("Project documentation containing technical descriptions and workflow guides.");
             }
         }
         revalidate();
         repaint();
+    }
+
+    private void suggestTags(java.util.List<String> tags) {
+        if (!tagsSection.hasTags()) {
+            tagsSection.setTags(tags);
+        }
+    }
+
+    private void suggestDescription(String text) {
+        if (descriptionSection.getDescriptionInput().isEmpty()) {
+            descriptionSection.setText(text);
+        }
     }
 
     public void assignDefaultWindowAction() {

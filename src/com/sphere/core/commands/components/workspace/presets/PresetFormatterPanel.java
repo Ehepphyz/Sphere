@@ -32,7 +32,11 @@ public class PresetFormatterPanel extends JPanel {
      * @param manager          Underlying core Workspace orchestration coordinator instance handle.
      * @param projectDirectory Path reference mapping to the active working directory space on disk.
      */
-    public PresetFormatterPanel(WorkspaceManager manager, File projectDirectory) {
+    private final PresetLogPanel console;
+
+    public PresetFormatterPanel(WorkspaceManager manager, File projectDirectory,
+                                PresetLogPanel console) {
+        this.console = Objects.requireNonNull(console, "Console cannot be null.");
         this.workspaceManager = Objects.requireNonNull(manager, "Workspace manager coordinator handle cannot be null.");
         Objects.requireNonNull(projectDirectory, "Active workspace project layout folder reference cannot be null.");
         this.targetPresetFilePath = projectDirectory.toPath().resolve(".presets").normalize();
@@ -116,7 +120,7 @@ public class PresetFormatterPanel extends JPanel {
                 }
 
                 String unformattedRawJson = Files.readString(targetPresetFilePath, StandardCharsets.UTF_8);
-                Object parsedJsonRootElement = MinimalJson.parse(unformattedRawJson);
+                Object parsedJsonRootElement = MinimalJson.parseStrict(unformattedRawJson);
 
                 if (!(parsedJsonRootElement instanceof Map<?, ?>)) {
                     throw new IllegalArgumentException("Target configuration parsing failure: JSON structural layout does not map to an object root container.");
@@ -142,6 +146,7 @@ public class PresetFormatterPanel extends JPanel {
                     previewTextArea.setText(beautifullyFormattedJson);
                     previewTextArea.setCaretPosition(0);
                     AppLogger.success("Workspace environment configuration properties file successfully beatified and synchronized.");
+                    console.log("info", "Formatted and written back.");
                 } catch (Exception computationFaultException) {
                     Throwable realRootCause = computationFaultException.getCause() != null 
                             ? computationFaultException.getCause() : computationFaultException;
@@ -149,6 +154,7 @@ public class PresetFormatterPanel extends JPanel {
                     String structuralErrorMessage = "Formatting processing failure: " + realRootCause.getMessage();
                     previewTextArea.setText("// Configuration Compilation Exception:\n" + structuralErrorMessage);
                     AppLogger.error(structuralErrorMessage);
+                    console.log("error", "Left untouched: " + realRootCause.getMessage());
                 } finally {
                     btnFormatAndSave.setEnabled(true);
                 }

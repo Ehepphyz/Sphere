@@ -30,6 +30,7 @@ public class ProjectSettingsFrame extends JDialog implements WorkspaceListener {
     
     private WorkspaceFileExplorerPanel fileExplorerPanel;
     private ProjectDashboardPanel dashboardPanel;
+    private final java.util.List<ModuleSettingsPanel> modulePanels = new java.util.ArrayList<>();
     private final Timer fileSystemPollerTimer;
 
     private final AtomicBoolean isCleanedUp = new AtomicBoolean(false);
@@ -131,8 +132,22 @@ public class ProjectSettingsFrame extends JDialog implements WorkspaceListener {
         );
 
         workspaceTabs.addTab("Dashboard", dashboardPanel);
-        workspaceTabs.addTab("Madgraph Suite", createPlaceholderTab("Madgraph Simulation & Kinematic Integration Controls"));
-        workspaceTabs.addTab("ROOT Framework", createPlaceholderTab("ROOT Subprocess Environment Bindings"));
+        workspaceTabs.addTab("ROOT Framework", moduleTab("root",
+                "ROOT Subprocess Environment Bindings",
+                "analysis/root", "analysis/root/macro.C",
+                ModuleSettingsPanel.rootMacro()));
+        workspaceTabs.addTab("Geant4 Rules", moduleTab("geant4",
+                "Geant4 Volumetric Detector Geometry and Physics List Builders",
+                "sim/geant4", "sim/geant4/run.mac",
+                ModuleSettingsPanel.geant4Macro()));
+        workspaceTabs.addTab("Madgraph Suite", moduleTab("madgraph",
+                "Madgraph Simulation & Kinematic Integration Controls",
+                "sim/madgraph", "sim/madgraph/proc_card.dat",
+                ModuleSettingsPanel.madGraphCard()));
+        workspaceTabs.addTab("Herwig Process", moduleTab("herwig",
+                "Herwig Cluster Hadronization and Parton Shower matrix templates",
+                "sim/herwig", "sim/herwig/setup.in",
+                ModuleSettingsPanel.herwigInput()));
 
         JSplitPane mainSplitPane = new JSplitPane(
                 JSplitPane.HORIZONTAL_SPLIT,
@@ -146,6 +161,15 @@ public class ProjectSettingsFrame extends JDialog implements WorkspaceListener {
         add(mainSplitPane, BorderLayout.CENTER);
     }
 
+    /** One tab per framework, kept so Apply can collect them all. */
+    private ModuleSettingsPanel moduleTab(String module, String caption, String folder,
+                                          String file, String content) {
+        ModuleSettingsPanel panel = new ModuleSettingsPanel(module, caption,
+                projectDirectory, folder, file, content);
+        modulePanels.add(panel);
+        return panel;
+    }
+
     /**
      * Commits active panel inputs, serializes updates to the manifest disk file, 
      * and re-arms runtime rule managers.
@@ -154,6 +178,16 @@ public class ProjectSettingsFrame extends JDialog implements WorkspaceListener {
         try {
             dashboardPanel.apply(manifestContext);
             ProjectManifestIO.save(manifestContext, manifestFilePath);
+
+            // The framework tabs own .workflow, and each writes its own starter
+            // file only when its text was changed.
+            java.util.Map<String, Object> workflow =
+                    WorkflowIO.load(projectDirectory.toPath());
+            for (ModuleSettingsPanel panel : modulePanels) {
+                panel.apply(workflow);
+                panel.writeFiles();
+            }
+            WorkflowIO.save(projectDirectory.toPath(), workflow);
 
             if (workspaceManager != null) {
                 workspaceManager.loadOrCreatePresetFile(projectDirectory);

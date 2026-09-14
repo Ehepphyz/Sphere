@@ -148,7 +148,7 @@ void handle_read_column(ShmLayout &shm, const Proto::PacketHeader &pkt, void *co
   }
 
   auto *leaves = br->GetListOfLeaves();
-  if (!leaves || leaves->GetSize() == 0) {
+  if (!leaves || leaves->GetEntries() == 0) {
     send_response(shm, pkt, Proto::PacketType::EVT_ERROR, 0, 0,
                   ResponseStatus::ERROR_NO_BRANCH);
     return;

@@ -35,9 +35,13 @@ public class PresetDebugPanel extends JPanel {
 
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
 
+    private final PresetLogPanel console;
+
     public PresetDebugPanel(WorkspaceManager manager,
                             File projectDirectory,
-                            ProjectManifest manifest) {
+                            ProjectManifest manifest,
+                            PresetLogPanel console) {
+        this.console = Objects.requireNonNull(console, "Console cannot be null.");
         this.workspaceManager = Objects.requireNonNull(manager, "Workspace manager tracking instance handle cannot be null.");
         this.projectManifest = Objects.requireNonNull(manifest, "Project manifest metadata configuration cannot be null.");
 
@@ -156,6 +160,7 @@ public class PresetDebugPanel extends JPanel {
 
         // Target Boundary: Catch empty environment rule structures early
         if (metricsRulesMap == null || metricsRulesMap.isEmpty()) {
+            console.log("warn", "No rule is loaded. Save the preset file, or run a migration.");
             updateStatusContainerContext("System Exception: No active pipeline rule limits populated.", 
                     "warning.png", palette.getAmberBackground(), palette.getAmberForeground());
             lblExperimentValue.setText("UNDEFINED");
@@ -167,6 +172,8 @@ public class PresetDebugPanel extends JPanel {
         for (Map.Entry<String, WorkspaceManager.PresetRule> entry : metricsRulesMap.entrySet()) {
             rulesTableModel.addRow(new Object[]{entry.getKey(), entry.getValue().allowedPrefixes.toString()});
         }
+        console.log("info", metricsRulesMap.size() + " rule(s) read: "
+            + String.join(", ", metricsRulesMap.keySet()));
 
         final String activeExperimentTag = projectManifest.experiment != null ? projectManifest.experiment.trim() : "";
         final String activeVersionString = projectManifest.presetVersion != null ? projectManifest.presetVersion.trim() : "";

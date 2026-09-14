@@ -384,10 +384,9 @@ public class WorkspaceManager {
             Map<String, Object> root = (Map<String, Object>) parsed;
 
             boolean isModified = false;
-            isModified |= ensurePresetEntry(root, "ATLAS", List.of("24"));
-            isModified |= ensurePresetEntry(root, "CMS", List.of("13", "23"));
-            isModified |= ensurePresetEntry(root, "LHCb", List.of("v"));
-            isModified |= ensurePresetEntry(root, "Belle II", List.of("b2"));
+            for (Map.Entry<String, List<String>> rule : DEFAULT_PREFIXES.entrySet()) {
+                isModified |= ensurePresetEntry(root, rule.getKey(), rule.getValue());
+            }
 
             if (isModified) {
                 try (FileWriter w = new FileWriter(f, java.nio.charset.StandardCharsets.UTF_8)) {
@@ -431,14 +430,34 @@ public class WorkspaceManager {
         return false;
     }
 
+    /**
+     * The version prefixes each framework is known by.
+     *
+     * This list used to be written out in four places across three files, so
+     * adding a toolkit meant finding them all. It is written once here and read
+     * everywhere else.
+     */
+    public static final Map<String, List<String>> DEFAULT_PREFIXES = defaultPrefixes();
+
+    private static Map<String, List<String>> defaultPrefixes() {
+        Map<String, List<String>> defaults = new LinkedHashMap<>();
+        defaults.put("ATLAS", List.of("24"));
+        defaults.put("CMS", List.of("13", "23"));
+        defaults.put("LHCb", List.of("v"));
+        defaults.put("Belle II", List.of("b2"));
+        defaults.put("Geant4", List.of("10", "11"));
+        defaults.put("Herwig", List.of("7"));
+        return Collections.unmodifiableMap(defaults);
+    }
+
     private String getDefaultPresetJson() {
-        return """
-               {
-                 "ATLAS": {"allowedPrefixes": ["24"]},
-                 "CMS": {"allowedPrefixes": ["13", "23"]},
-                 "LHCb": {"allowedPrefixes": ["v"]},
-                 "Belle II": {"allowedPrefixes": ["b2"]}
-               }""";
+        Map<String, Object> root = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> rule : DEFAULT_PREFIXES.entrySet()) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("allowedPrefixes", new ArrayList<>(rule.getValue()));
+            root.put(rule.getKey(), entry);
+        }
+        return MinimalJson.toJson(root);
     }
 
     public Map<String, PresetRule> getPresetRules() {

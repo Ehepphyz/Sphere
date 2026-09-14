@@ -21,8 +21,29 @@ public final class MinimalJson {
         if (jsonText == null || jsonText.isBlank()) {
             return new LinkedHashMap<>();
         }
-        Parser parsedTokenInstance = new Parser(jsonText);
+        Parser parsedTokenInstance = new Parser(jsonText, false);
         return parsedTokenInstance.parseObject();
+    }
+
+    /**
+     * The same read, but a malformed document is refused instead of salvaged.
+     *
+     * parse() recovers from anything and hands back whatever it managed to
+     * read, which is what a viewer wants and exactly what a validator must not
+     * do: checking a document with it always passed.
+     *
+     * @param jsonText the document to read.
+     * @return the object it describes.
+     * @throws IllegalArgumentException when the text is not one whole JSON object.
+     */
+    public static Map<String, Object> parseStrict(String jsonText) {
+        if (jsonText == null || jsonText.isBlank()) {
+            throw new IllegalArgumentException("The document is empty.");
+        }
+        Parser strictParser = new Parser(jsonText, true);
+        Map<String, Object> parsed = strictParser.parseObject();
+        strictParser.expectNothingAfter();
+        return parsed;
     }
 
     /**
@@ -118,11 +139,27 @@ public final class MinimalJson {
     private static final class Parser {
         private final String inputSourceBuffer;
         private final int bufferLengthLimit;
+        private final boolean strict;
         private int internalBufferPointer = 0;
 
-        Parser(String diagnosticText) {
+        Parser(String diagnosticText, boolean strict) {
             this.inputSourceBuffer = Objects.requireNonNull(diagnosticText, "Payload source cannot be null.").trim();
             this.bufferLengthLimit = this.inputSourceBuffer.length();
+            this.strict = strict;
+        }
+
+        /** Refuses the document, naming where it went wrong. */
+        private void fail(String what) {
+            throw new IllegalArgumentException(
+                what + " at character " + internalBufferPointer + ".");
+        }
+
+        /** A document is one object: anything after it is a mistake. */
+        void expectNothingAfter() {
+            skipSystemWhitespace();
+            if (internalBufferPointer < bufferLengthLimit) {
+                fail("Unexpected text after the closing brace");
+            }
         }
 
         private char peekCharacter() {
@@ -141,7 +178,12 @@ public final class MinimalJson {
 
         Map<String, Object> parseObject() {
             skipSystemWhitespace();
-            if (extractNextCharacter() != '{') return new LinkedHashMap<>();
+            if (extractNextCharacter() != '{') {
+                if (strict) {
+                    fail("Expected an object opening with {");
+                }
+                return new LinkedHashMap<>();
+            }
 
             Map<String, Object> compiledMapInstance = new LinkedHashMap<>();
 
@@ -149,14 +191,23 @@ public final class MinimalJson {
                 skipSystemWhitespace();
                 char activeLookahead = peekCharacter();
                 if (activeLookahead == '}' || activeLookahead == '\0') {
+                    if (strict && activeLookahead == '\0') {
+                        fail("The object is never closed");
+                    }
                     extractNextCharacter(); // step beyond closures
                     break;
+                }
+                if (strict && activeLookahead != '"') {
+                    fail("Expected a quoted key");
                 }
 
                 String dictionaryKeyString = parseString();
                 skipSystemWhitespace();
 
                 if (extractNextCharacter() != ':') {
+                    if (strict) {
+                        fail("Expected a colon after the key");
+                    }
                     break; // Terminate early on structural syntax failure
                 }
 
@@ -167,7 +218,12 @@ public final class MinimalJson {
                 skipSystemWhitespace();
                 char trailingDelimiterToken = extractNextCharacter();
                 if (trailingDelimiterToken == '}') break;
-                if (trailingDelimiterToken != ',') break; // Malformed separator recovery break point
+                if (trailingDelimiterToken != ',') {
+                    if (strict) {
+                        fail("Expected a comma or a closing brace");
+                    }
+                    break; // Malformed separator recovery break point
+                }
             }
 
             return compiledMapInstance;
@@ -183,6 +239,9 @@ public final class MinimalJson {
                 skipSystemWhitespace();
                 char lookaheadCharacter = peekCharacter();
                 if (lookaheadCharacter == ']' || lookaheadCharacter == '\0') {
+                    if (strict && lookaheadCharacter == '\0') {
+                        fail("The array is never closed");
+                    }
                     extractNextCharacter(); // drop terminating array token
                     break;
                 }
@@ -192,7 +251,12 @@ public final class MinimalJson {
 
                 char sequenceSeparator = extractNextCharacter();
                 if (sequenceSeparator == ']') break;
-                if (sequenceSeparator != ',') break;
+                if (sequenceSeparator != ',') {
+                    if (strict) {
+                        fail("Expected a comma or a closing bracket");
+                    }
+                    break;
+                }
             }
 
             return collectedSequenceList;
@@ -227,12 +291,15 @@ public final class MinimalJson {
                         default -> stringValueAccumulator.append(escapedActionCharacter);
                     }
                 } else if (processingToken == '"') {
-                    break;
+                    return stringValueAccumulator.toString();
                 } else {
                     stringValueAccumulator.append(processingToken);
                 }
             }
 
+            if (strict) {
+                fail("The text is never closed by a quote");
+            }
             return stringValueAccumulator.toString();
         }
 
@@ -260,6 +327,9 @@ public final class MinimalJson {
                 }
                 return Long.parseLong(strippedLiteralText);
             } catch (NumberFormatException ignoredFallbackEx) {
+                if (strict) {
+                    fail("\"" + strippedLiteralText + "\" is not a value");
+                }
                 return strippedLiteralText; // Fall back to safe text formatting if numeric casting fails
             }
         }

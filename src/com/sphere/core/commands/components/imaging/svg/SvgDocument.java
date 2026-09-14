@@ -92,13 +92,18 @@ public final class SvgDocument {
 
     public static SvgDocument parse(String source) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        // An SVG is untrusted input: no external entities, no doctype.
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        // An SVG is untrusted input, so nothing outside the file is ever
+        // fetched. The doctype line itself is allowed: matplotlib, Inkscape and
+        // ROOT all write one, and refusing it turned their files away.
+        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd",
+                           false);
         factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
         factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
         factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
         factory.setNamespaceAware(false);
+        factory.setXIncludeAware(false);
         factory.setExpandEntityReferences(false);
 
         DocumentBuilder builder = factory.newDocumentBuilder();

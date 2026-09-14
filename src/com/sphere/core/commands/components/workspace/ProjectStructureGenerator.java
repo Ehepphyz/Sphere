@@ -32,12 +32,18 @@ public final class ProjectStructureGenerator {
         mkdir(rootPath);
 
         switch (manifest.experiment) {
+            // Generic adds nothing of its own: the caller's base layout is the project.
+            case "Generic" -> { }
             case "ATLAS" -> generateATLAS(rootPath);
             case "CMS" -> generateCMS(rootPath);
             case "LHCb" -> generateLHCb(rootPath);
             case "Belle II" -> generateBelleII(rootPath);
+            case "Geant4" -> generateGeant4(rootPath);
+            case "Herwig" -> generateHerwig(rootPath);
             case "Custom" -> generateCustom(rootPath, manifest);
-            default -> throw new IllegalArgumentException("Unknown research experiment configuration template target: " + manifest.experiment);
+            // A framework with no layout of its own leaves the caller's base
+            // alone rather than refusing the whole creation.
+            default -> { }
         }
     }
 
@@ -125,6 +131,48 @@ public final class ProjectStructureGenerator {
 
         mkfile(root.resolve("basf2/basf2_config.py"), """
                 # Belle II analysis software framework basf2 configuration path setup
+                """);
+    }
+
+    // --- Geant4 Blueprint Setup ---
+    private static void generateGeant4(Path root) throws IOException {
+        mkdir(root.resolve("src"));
+        mkdir(root.resolve("include"));
+        mkdir(root.resolve("macros"));
+        mkdir(root.resolve("output"));
+        mkdir(root.resolve("plots"));
+
+        mkfile(root.resolve("README.md"), """
+                # Geant4 Detector Simulation Workspace
+                
+                Generated automatically by Sphere.
+                """);
+
+        mkfile(root.resolve("macros/run.mac"), """
+                /run/initialize
+                /gun/particle mu-
+                /gun/energy 10 GeV
+                /run/beamOn 1000
+                """);
+    }
+
+    // --- Herwig Blueprint Setup ---
+    private static void generateHerwig(Path root) throws IOException {
+        mkdir(root.resolve("input"));
+        mkdir(root.resolve("output"));
+        mkdir(root.resolve("analysis"));
+        mkdir(root.resolve("plots"));
+
+        mkfile(root.resolve("README.md"), """
+                # Herwig Event Generation Workspace
+                
+                Generated automatically by Sphere.
+                """);
+
+        mkfile(root.resolve("input/lhc.in"), """
+                read snippets/PPCollider.in
+                set EventGenerator:NumberOfEvents 1000
+                saverun lhc EventGenerator
                 """);
     }
 

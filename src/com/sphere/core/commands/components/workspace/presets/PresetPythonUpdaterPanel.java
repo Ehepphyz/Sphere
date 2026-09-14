@@ -23,14 +23,17 @@ public class PresetPythonUpdaterPanel extends JPanel {
     private final Path targetProjectDirectoryPath;
     private final JTextArea scriptEditorArea;
     private final JButton btnExportScript;
+    private final PresetLogPanel console;
 
     /**
      * Initializes the automation scripting editor layout.
      * @param workspaceManager   Workspace orchestration context handle.
      * @param projectDirectory Path reference mapping to the active working directory space on disk.
      */
-    public PresetPythonUpdaterPanel(WorkspaceManager workspaceManager, File projectDirectory) {
+    public PresetPythonUpdaterPanel(WorkspaceManager workspaceManager, File projectDirectory,
+                                    PresetLogPanel console) {
         Objects.requireNonNull(projectDirectory, "Target workflow project folder reference cannot be null.");
+        this.console = Objects.requireNonNull(console, "Console cannot be null.");
         this.targetProjectDirectoryPath = projectDirectory.toPath().normalize();
 
         setLayout(new BorderLayout());
@@ -80,11 +83,7 @@ public class PresetPythonUpdaterPanel extends JPanel {
                             preset_matrix = json.load(file_stream)
                 
                         # Operational defaults: simulate live telemetry retrieval hooks
-                        latest_atlas_baseline = "24.1.0"
-                        latest_cms_baseline = "13.2.5"
-                
-                        preset_matrix["ATLAS"]["allowedPrefixes"] = ["24"]
-                        preset_matrix["CMS"]["allowedPrefixes"] = ["13", "23"]
+                %s
                 
                         with open(preset_file_path, "w", encoding="utf-8") as file_stream:
                             json.dump(preset_matrix, file_stream, indent=4)
@@ -96,10 +95,31 @@ public class PresetPythonUpdaterPanel extends JPanel {
                 
                 if __name__ == "__main__":
                     update_presets(".presets")
-                """);
+                """.formatted(presetAssignments()));
         
         // Return cursor tracking precisely back to top-left boundary elements
         scriptEditorArea.setCaretPosition(0);
+    }
+
+    /**
+     * One assignment per framework, drawn from the rules rather than typed here.
+     *
+     * The template used to name two of them, so the script it handed out was
+     * already behind the file it was meant to update.
+     */
+    private static String presetAssignments() {
+        StringBuilder lines = new StringBuilder();
+        for (java.util.Map.Entry<String, java.util.List<String>> rule
+                : WorkspaceManager.DEFAULT_PREFIXES.entrySet()) {
+            StringBuilder prefixes = new StringBuilder();
+            for (String prefix : rule.getValue()) {
+                prefixes.append(prefixes.length() == 0 ? "" : ", ").append('"').append(prefix).append('"');
+            }
+            lines.append(lines.length() == 0 ? "" : "\n")
+                 .append("        preset_matrix[\"").append(rule.getKey())
+                 .append("\"][\"allowedPrefixes\"] = [").append(prefixes).append(']');
+        }
+        return lines.toString();
     }
 
     private void executeAsynchronousScriptExportPass() {
@@ -126,14 +146,19 @@ public class PresetPythonUpdaterPanel extends JPanel {
                     get(); // Check for exceptions during thread execution
                     
                     AppLogger.success("Python preset module exported successfully: " + targetScriptOutputFilePath.toAbsolutePath());
+                    console.log("info", "Script written to " + targetScriptOutputFilePath.toAbsolutePath());
                     JOptionPane.showMessageDialog(PresetPythonUpdaterPanel.this,
                             "Automation utility python script layout cleanly provisioned:\n" + targetScriptOutputFilePath.toAbsolutePath(),
                             "Export Phase Finalized", JOptionPane.INFORMATION_MESSAGE);
 
                 } catch (Exception processFaultException) {
-                    AppLogger.error("Failed compiling template automation script: " + processFaultException.getMessage());
+                    // A cancelled worker carries no cause of its own.
+                    Throwable reason = processFaultException.getCause() != null
+                        ? processFaultException.getCause() : processFaultException;
+                    AppLogger.error("Failed compiling template automation script: " + reason.getMessage());
+                    console.log("error", "Not written: " + reason.getMessage());
                     JOptionPane.showMessageDialog(PresetPythonUpdaterPanel.this,
-                            "Failed exporting script components downstream:\n" + processFaultException.getCause().getMessage(),
+                            "Failed exporting script components downstream:\n" + reason.getMessage(),
                             "I/O Generation Failure", JOptionPane.ERROR_MESSAGE);
                 } finally {
                     btnExportScript.setEnabled(true);
