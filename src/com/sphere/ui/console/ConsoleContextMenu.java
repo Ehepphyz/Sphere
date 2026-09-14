@@ -16,8 +16,6 @@ import javax.swing.JPopupMenu;
 import javax.swing.SwingWorker;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.File;
@@ -207,9 +205,7 @@ public final class ConsoleContextMenu {
         globalSnapshot.addActionListener(e -> printSnapshot(null));
         fileSnapshot.addActionListener(e -> printSnapshot(host.activeFile()));
         copySnapshot.addActionListener(e -> {
-            String text = snapshotText();
-            Toolkit.getDefaultToolkit().getSystemClipboard()
-                   .setContents(new StringSelection(text), null);
+            com.sphere.components.ClipboardBridge.write(snapshotText());
             host.log(LogLevel.INFO, "Snapshot copied to clipboard.");
         });
         clearDiags.addActionListener(e -> {

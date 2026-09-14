@@ -8,8 +8,6 @@ import java.nio.file.*;
 import java.awt.*;
 import java.text.CharacterIterator;
 import java.text.StringCharacterIterator;
-import java.awt.datatransfer.StringSelection;
-import java.awt.datatransfer.Clipboard;
 
 import com.sphere.components.FileExplorer;
 import com.sphere.components.QuickCodeEditor;
@@ -190,9 +188,7 @@ public class ContextMenuBuilder {
     }
 
     private static void copyToClipboard(String text) {
-        StringSelection sel = new StringSelection(text);
-        Clipboard cb = Toolkit.getDefaultToolkit().getSystemClipboard();
-        cb.setContents(sel, null);
+        com.sphere.components.ClipboardBridge.write(text);
     }
 
 

@@ -353,12 +353,11 @@ public class ConsoleUI extends JPanel {
         }
 
         @Override public void copySelection() {
-            logArea.copy();
+            com.sphere.components.ClipboardBridge.copy(logArea);
         }
 
         @Override public void copyFullLog() {
-            Toolkit.getDefaultToolkit().getSystemClipboard()
-                   .setContents(new java.awt.datatransfer.StringSelection(logArea.getText()), null);
+            com.sphere.components.ClipboardBridge.write(logArea.getText());
         }
 
         @Override public void clearLogView() {

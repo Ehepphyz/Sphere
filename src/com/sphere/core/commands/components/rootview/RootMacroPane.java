@@ -76,9 +76,8 @@ public final class RootMacroPane extends ViewSurface {
 
         run.addActionListener(e -> execute());
         save.addActionListener(e -> saveAs());
-        copy.addActionListener(e -> java.awt.Toolkit.getDefaultToolkit()
-            .getSystemClipboard().setContents(
-                new java.awt.datatransfer.StringSelection(source.getText()), null));
+        copy.addActionListener(e ->
+            com.sphere.components.ClipboardBridge.write(source.getText()));
 
         refreshState();
     }

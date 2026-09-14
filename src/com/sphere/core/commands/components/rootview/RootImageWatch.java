@@ -37,6 +37,8 @@ public final class RootImageWatch {
     private final Map<String, String> reported = new LinkedHashMap<>();
     /** Stamp seen on the previous pass, to tell a finished file from a growing one. */
     private final Map<String, String> previous = new LinkedHashMap<>();
+    /** Folders whose contents have still to be recorded. */
+    private final Set<Path> pending = new LinkedHashSet<>();
 
     private Supplier<Path> following;
     private Path followed;
@@ -55,8 +57,9 @@ public final class RootImageWatch {
 
     public synchronized void add(Path directory) {
         if (directory != null && directory.toFile().isDirectory()) {
-            folders.add(directory.toAbsolutePath().normalize());
-            prime(directory.toAbsolutePath().normalize());
+            final Path folder = directory.toAbsolutePath().normalize();
+            folders.add(folder);
+            pending.add(folder);
         }
     }
 
@@ -108,11 +111,16 @@ public final class RootImageWatch {
         }
     }
 
+    /**
+     * Asks for every folder to be recorded on the next pass.
+     *
+     * Reading a folder of several thousand files takes long enough to be felt,
+     * and this is called while the window is being built, so the reading itself
+     * is left to the watch thread.
+     */
     public synchronized void primeAll() {
-        for (Path folder : folders()) {
-            prime(folder);
-        }
-        followed = following == null ? null : following.get();
+        pending.addAll(folders);
+        followed = null;
     }
 
     /**
@@ -123,6 +131,11 @@ public final class RootImageWatch {
      */
     public synchronized List<File> scan() {
         List<File> found = new ArrayList<>();
+
+        for (Path folder : pending) {
+            prime(folder);
+        }
+        pending.clear();
 
         // Moving into another folder should not pour its whole contents in.
         final Path moving = following == null ? null : following.get();

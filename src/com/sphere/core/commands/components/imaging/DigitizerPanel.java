@@ -16,7 +16,6 @@ import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
-import java.awt.datatransfer.StringSelection;
 import java.awt.geom.Point2D;
 import java.io.File;
 import java.io.PrintWriter;
@@ -233,8 +232,7 @@ public final class DigitizerPanel extends JPanel {
     }
 
     private void copy(String text) {
-        java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
-            .setContents(new StringSelection(text), null);
+        com.sphere.components.ClipboardBridge.write(text);
     }
 
     private void saveCsv() {

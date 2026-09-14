@@ -291,10 +291,7 @@ public class TerminalPanel extends JPanel {
     }
 
     private void paste() {
-        try {
-            Object content = java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
-                .getData(java.awt.datatransfer.DataFlavor.stringFlavor);
-            String text = String.valueOf(content);
+        com.sphere.components.ClipboardBridge.read(text -> {
             if (!text.contains("\n")) {
                 input.replaceSelection(text);
                 return;
@@ -305,9 +302,7 @@ public class TerminalPanel extends JPanel {
                 submit();
             }
             input.setText(lines[lines.length - 1]);
-        } catch (Exception ex) {
-            AppLogger.error("Clipboard could not be read: " + ex.getMessage());
-        }
+        });
     }
 
     // ---- history on disk ---------------------------------------------------

@@ -81,14 +81,24 @@ public class Sphere extends JFrame {
         }));
 
         attachGlobalKeyInterceptor();
+
+        // A window that stops answering says where it stopped, instead of
+        // leaving nothing to look at.
+        com.sphere.core.EdtWatchdog.start();
         setUIFont();
         initRouter();
         initWorkbench();
 
-        com.sphere.utils.SecurityManager.initialize();
-        
-        // FIXED: Using class field to prevent local shadowing variable leak
-        StartupDiagnostic.run(this.settings);
+        // Both of these take seconds: the whitelist asks pip what is installed,
+        // and the diagnostics probe the toolchain and may compile the C++ bridge.
+        // This constructor runs on the event thread, so doing either here froze
+        // the window before it could be used.
+        Thread startup = new Thread(() -> {
+            com.sphere.utils.SecurityManager.initialize();
+            StartupDiagnostic.run(this.settings);
+        }, "sphere-startup");
+        startup.setDaemon(true);
+        startup.start();
     }
 
     /**
@@ -331,6 +341,11 @@ public class Sphere extends JFrame {
         commandInputField.setSelectionColor(palette.getTerminalSelection());
         commandInputField.setSelectedTextColor(palette.getTextWhite());
         commandInputField.setCaretColor(palette.getAccent()); // Enhances caret visibility
+
+        // Cut, copy and paste of its own: the ones the look and feel installs go
+        // to the clipboard from the event thread, and freeze the window whenever
+        // another program is holding it.
+        com.sphere.components.ClipboardBridge.install(commandInputField);
 
         // FIX: Use GridBagLayout instead of FlowLayout to force absolute vertical centering.
         JPanel leftPrompt = new JPanel(new GridBagLayout());
