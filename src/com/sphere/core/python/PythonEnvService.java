@@ -202,7 +202,7 @@ public class PythonEnvService {
             }
 
         } catch (IOException e) {
-            e.printStackTrace();
+            com.sphere.core.JavaErrors.report("reading the Python path from the configuration", e);
         }
 
         return "";
@@ -243,7 +243,7 @@ public class PythonEnvService {
             Files.write(file, lines);
 
         } catch (IOException e) {
-            e.printStackTrace();
+            com.sphere.core.JavaErrors.report("saving the Python path to the configuration", e);
         }
     }
 

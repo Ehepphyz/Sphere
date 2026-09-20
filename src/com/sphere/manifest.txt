@@ -1,0 +1,2 @@
+Main-Class: com.sphere.Sphere
+SplashScreen-Image: com/sphere/icons/splash.png

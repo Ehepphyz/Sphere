@@ -65,22 +65,26 @@ public class WindowManager {
     }
 
     /**
-     * Dedicated operational channel to view or edit any system file safely inside 
+     * Dedicated operational channel to view or edit any system file safely inside
      * a single-instance QuickCodeEditor frame.
+     *
+     * Returns the frame now showing the file, or null when the file went to a
+     * viewer of its own, so a caller that has something to say about the file
+     * can reach the editor holding it.
      */
-    public static void showFileInEditor(File file) {
-        if (file == null) return;
+    public static QuickCodeEditorFrame showFileInEditor(File file) {
+        if (file == null) return null;
 
         // This path builds the frame directly rather than going through
         // openFileInternally, so an image and a .root file are turned away here
         // as well.
         if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
             com.sphere.ui.ImageEditorFrame.show(file);
-            return;
+            return null;
         }
         if (com.sphere.components.rootview.RootFile.isRootFile(file)) {
             com.sphere.ui.RootViewerFrame.show(file);
-            return;
+            return null;
         }
 
         String absolutePath = file.getAbsolutePath();
@@ -104,5 +108,6 @@ public class WindowManager {
 
         editorFrame.setVisible(true);
         editorFrame.toFront();
+        return editorFrame;
     }
 }

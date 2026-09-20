@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import com.sphere.theme.AnimProgressBar;
 import com.sphere.theme.ThemeManager;
 import com.sphere.theme.ThemePalette;
 import com.sphere.fonts.FontLoader;
@@ -53,7 +54,7 @@ public class ProjectCreatorWindow extends JFrame {
 
     private JButton btnSave;
     private JButton btnCancel;
-    private JProgressBar progressOverlayIndicator;
+    private AnimProgressBar progressOverlayIndicator;
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
 
     private static final String WORKSPACE_ROOT_DIRECTORY = "WorkSpace";
@@ -152,10 +153,11 @@ public class ProjectCreatorWindow extends JFrame {
         JPanel footerActionPanel = new JPanel(new BorderLayout());
         footerActionPanel.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
 
-        progressOverlayIndicator = new JProgressBar();
+        // Sphere's own bar rather than the one the toolkit draws, and laid out the
+        // way it is in the environment dialog: across the foot of the window.
+        progressOverlayIndicator = new AnimProgressBar();
         progressOverlayIndicator.setIndeterminate(true);
         progressOverlayIndicator.setVisible(false);
-        progressOverlayIndicator.setPreferredSize(new Dimension(140, 18));
 
         JPanel operationalButtonsWrapper = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
         btnCancel = new JButton("Cancel Operations");
@@ -168,7 +170,7 @@ public class ProjectCreatorWindow extends JFrame {
         operationalButtonsWrapper.add(btnCancel);
         operationalButtonsWrapper.add(btnSave);
 
-        footerActionPanel.add(progressOverlayIndicator, BorderLayout.WEST);
+        footerActionPanel.add(progressOverlayIndicator, BorderLayout.SOUTH);
         footerActionPanel.add(operationalButtonsWrapper, BorderLayout.EAST);
         add(footerActionPanel, BorderLayout.SOUTH);
 

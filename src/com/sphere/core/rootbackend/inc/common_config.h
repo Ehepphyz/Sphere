@@ -22,8 +22,19 @@ inline constexpr std::size_t HARDWARE_CACHE_LINE_SIZE = 128;
 inline constexpr std::size_t HARDWARE_CACHE_LINE_SIZE = 64;
 #endif
 
-// AVX-512 friendly alignment used for decompressed payload placement.
+// Every payload the engine hands out starts on this boundary, and every block
+// is padded up to it. One value for the whole project: a vector load at the
+// tail of a block stays inside it whatever the register width.
 inline constexpr std::size_t SIMD_ALIGNMENT = 128;
+
+// -----------------------------------------------------------------------------
+// Huge Pages
+// -----------------------------------------------------------------------------
+
+// Preferred first, fallback second. A mapping takes the largest page the kernel
+// has free; a machine with no reserved pool gets ordinary pages instead.
+inline constexpr std::size_t HUGE_PAGE_PREFERRED = 1024ULL * 1024ULL * 1024ULL;
+inline constexpr std::size_t HUGE_PAGE_FALLBACK = 2ULL * 1024ULL * 1024ULL;
 
 // -----------------------------------------------------------------------------
 // Capacity, Ring Exponents, Quotas & Runtime Limits
@@ -97,9 +108,10 @@ inline constexpr std::uint32_t SHM_MAGIC = 0x53504852;
 
 // Shared memory layout version.
 
-// Raised to 4 when the bulk ring partition was added: an older region no
-// longer matches and is laid out again instead of being read wrongly.
-inline constexpr std::uint32_t SHM_VERSION = 4;
+// Raised to 5 when heap payloads moved to SIMD_ALIGNMENT: the metadata block
+// that precedes them changed size, so every chunk offset moved. An older region
+// no longer matches and is laid out again instead of being read wrongly.
+inline constexpr std::uint32_t SHM_VERSION = 5;
 
 // Wire protocol version for PacketHeader
 inline constexpr std::uint32_t PROTO_VERSION = 3;

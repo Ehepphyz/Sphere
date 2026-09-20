@@ -19,6 +19,16 @@ void handle_uptime(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context
 */
 void handle_system(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
 
+// What the engine knows about itself: counters, rings, heap, resident memory.
+// The payload names the view -- text, json, engine, memory, heap, reset.
+void handle_sys_metrics(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                        void *context);
+
+// ROOT's implicit multithreading, which RDataFrame and the tree readers use.
+// The payload reads "on", "on <n>", "off" or "status".
+void handle_sys_threads(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                        void *context);
+
 // Runs the request payload through the ROOT interpreter and answers with the
 void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
 

@@ -294,7 +294,7 @@ public class MdTexEditor extends JPanel {
             isModified = false;
             return true;
         } catch (Exception ex) {
-            ex.printStackTrace();
+            com.sphere.core.JavaErrors.report("saving the document", ex);
             JOptionPane.showMessageDialog(this, "Error saving file: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
             return false;
         }

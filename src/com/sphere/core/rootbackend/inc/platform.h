@@ -110,9 +110,10 @@ public:
       : ShmRegion(user_base, size, user_base, size, name, flags) {}
 
   ShmRegion(void *user_base, std::size_t size, void *map_base,
-            std::size_t map_size, const char *name, ShmFlags flags) noexcept
+            std::size_t map_size, const char *name, ShmFlags flags,
+            std::size_t huge_page_size = 0) noexcept
       : base_(user_base), size_(size), flags_(flags), map_base_(map_base),
-        map_size_(map_size) {
+        map_size_(map_size), huge_page_size_(huge_page_size) {
     if (name != nullptr && name[0] != '\0') {
       std::size_t len = std::strlen(name);
       if (len >= kMaxNameLen) {
@@ -133,7 +134,8 @@ public:
         size_(std::exchange(other.size_, 0)),
         flags_(std::exchange(other.flags_, ShmFlags::NONE)),
         map_base_(std::exchange(other.map_base_, nullptr)),
-        map_size_(std::exchange(other.map_size_, 0)) {
+        map_size_(std::exchange(other.map_size_, 0)),
+        huge_page_size_(std::exchange(other.huge_page_size_, 0)) {
     std::memcpy(name_, other.name_, kMaxNameLen);
     other.name_[0] = '\0';
   }
@@ -146,6 +148,7 @@ public:
       flags_ = std::exchange(other.flags_, ShmFlags::NONE);
       map_base_ = std::exchange(other.map_base_, nullptr);
       map_size_ = std::exchange(other.map_size_, 0);
+      huge_page_size_ = std::exchange(other.huge_page_size_, 0);
       std::memcpy(name_, other.name_, kMaxNameLen);
       other.name_[0] = '\0';
     }
@@ -175,6 +178,11 @@ public:
   [[nodiscard]] const char *name() const noexcept { return name_; }
   [[nodiscard]] ShmFlags flags() const noexcept { return flags_; }
 
+  /// Huge page size actually obtained, in bytes. Zero means ordinary pages.
+  [[nodiscard]] std::size_t huge_page_size() const noexcept {
+    return huge_page_size_;
+  }
+
   [[nodiscard]] bool is_valid() const noexcept { return base_ != nullptr; }
   [[nodiscard]] explicit operator bool() const noexcept { return is_valid(); }
 
@@ -188,6 +196,7 @@ private:
   char name_[kMaxNameLen]{0};
   void *map_base_{nullptr};
   std::size_t map_size_{0};
+  std::size_t huge_page_size_{0};
 };
 
 /**
@@ -207,5 +216,14 @@ void shm_remove(const char *name) noexcept;
 
 /// System page size, cached after the first call.
 [[nodiscard]] std::size_t get_page_size() noexcept;
+
+/**
+ * Largest huge page the kernel can hand out right now, in bytes.
+ *
+ * Zero when no pool is reserved, which is the usual state of a desktop or a
+ * WSL2 image. A mapping that asked for huge pages then takes ordinary ones:
+ * ShmFlags::HUGE_PAGES is a preference, never a requirement.
+ */
+[[nodiscard]] std::size_t usable_huge_page_size() noexcept;
 
 } // namespace Sphere::Platform

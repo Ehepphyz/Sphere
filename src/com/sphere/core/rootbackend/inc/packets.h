@@ -42,6 +42,12 @@ enum class PacketType : std::uint16_t {
   // the Python kernel writing a tensor back -- obtain memory without carrying a
   // second copy of the allocator. Size and shape ride in the request's shm_ref.
   CMD_ALLOC_CHUNK = 16,
+  // What the engine knows about itself: counters, rings, heap, resident memory.
+  // The payload names the view -- text, json, engine, memory, heap, reset.
+  CMD_SYS_METRICS = 17,
+  // ROOT's implicit multithreading, which RDataFrame and the tree readers use.
+  // The payload reads "on", "on <n>", "off" or "status".
+  CMD_SYS_THREADS = 18,
 
   // TTree commands
   CMD_TTREE_INSPECT = 20,
@@ -56,6 +62,16 @@ enum class PacketType : std::uint16_t {
   CMD_FILE_SCAN = 27,
   CMD_FILE_LIST = 28,
   CMD_FILE_KEYS = 29,
+  // Merges files into one, the way hadd does, inside the engine.
+  CMD_FILE_MERGE = 30,
+
+  // RNTuple, the columnar format that replaces TTree
+  CMD_NTUPLE_LIST = 40,
+  CMD_NTUPLE_ATTACH = 41,
+  CMD_NTUPLE_INFO = 42,
+  CMD_NTUPLE_FIELDS = 43,
+  CMD_NTUPLE_COLUMN = 44,
+  CMD_NTUPLE_WRITE = 45,
 
   // Event types (responses / acknowledgments)
   EVT_OK = 100,
@@ -71,6 +87,12 @@ enum class PacketType : std::uint16_t {
   EVT_SYS_CONFIG = 112,
   EVT_CLING_RESULT = 113, // answers CMD_CLING_EXEC
   EVT_CHUNK_READY = 114,  // answers CMD_ALLOC_CHUNK, carries offset+generation
+  EVT_SYS_METRICS = 115,  // answers CMD_SYS_METRICS
+  EVT_SYS_THREADS = 116,  // answers CMD_SYS_THREADS
+  EVT_FILE_MERGED = 106,  // answers CMD_FILE_MERGE
+  EVT_NTUPLE_INFO = 140,  // answers CMD_NTUPLE_INFO / LIST / ATTACH
+  EVT_NTUPLE_SCHEMA = 141, // answers CMD_NTUPLE_FIELDS
+  EVT_NTUPLE_COLUMN = 142, // answers CMD_NTUPLE_COLUMN
   EVT_TTREE_INFO = 130,   // answers CMD_TTREE_INSPECT / QUERY_ENTRIES
   EVT_TTREE_SCHEMA = 131, // answers CMD_TTREE_SCAN_BRANCHES
   EVT_TTREE_ENTRY = 132,  // answers CMD_TTREE_GET_ENTRY

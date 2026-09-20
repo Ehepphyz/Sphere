@@ -87,7 +87,10 @@ public class CommandRouter {
         "PATH", "HOME", "LANG", "LC_ALL", "SHELL", "USER", "LOGNAME",
         "SystemRoot", "windir", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
         "PROGRAMFILES", "PROGRAMFILES(X86)", "COMMONPROGRAMFILES",
-        "SYSTEMDRIVE", "ALLUSERSPROFILE", "COMPUTERNAME", "PUBLIC"
+        "SYSTEMDRIVE", "ALLUSERSPROFILE", "COMPUTERNAME", "PUBLIC",
+        // Where a run writes down its variables. Stripped with the rest, the
+        // wrapper would fall back to a folder nothing is watching.
+        "SPHERE_VARS"
     );
 
     // Highly optimized object mapping to preserve token context and execution sequence
@@ -133,6 +136,7 @@ public class CommandRouter {
 
         // Initialize application settings manager and ROOT backend
         com.sphere.utils.SettingsManager settingsManager = new com.sphere.utils.SettingsManager();
+        backends.put("julia", new com.sphere.core.julia.JuliaBackend(settingsManager));
         String rootPath = settingsManager.getProperty("ROOT_DIR"); 
         
         try {
@@ -369,7 +373,17 @@ public class CommandRouter {
     }
 
     public void processInput(String input) {
-        if (input == null || input.isBlank()) return;
+        if (input == null) return;
+        if (input.isBlank()) {
+            // A blank line is how a block is closed, so inside a mode it has to
+            // reach the buffer instead of being dropped as an empty command.
+            final String openMode = currentMode.get();
+            if (com.sphere.core.exec.CodeBuffer.collects(openMode)
+                && !com.sphere.core.exec.CodeBuffer.isEmpty(openMode)) {
+                collectOrRun(openMode, "");
+            }
+            return;
+        }
 
         String command = history.expandMacros(input.trim());
         // Passing null here skipped SnippetResolver's third lookup, so a snippet
@@ -390,11 +404,23 @@ public class CommandRouter {
         if (currentMode.get() != null && !command.startsWith(":")) {
             String base = command.trim();
             if (!isInternalSystemCommand(base)) {
+                if (com.sphere.core.exec.CodeBuffer.collects(currentMode.get())) {
+                    // Enter means run. The text typed is kept rather than the trimmed
+                    // one: indentation is part of the code.
+                    collectOrRun(currentMode.get(), input.stripTrailing());
+                    return;
+                }
                 Backend backend = backends.get(currentMode.get());
                 if (backend != null) {
                     backend.execute(command);
                     return;
                 }
+                // A mode with neither a buffer nor a backend has nowhere to send
+                // the line. Falling through would hand it to the shell, which
+                // runs it as a program instead of reporting the mode.
+                AppLogger.error("No runner for mode '" + currentMode.get()
+                    + "'; the line was not run.");
+                return;
             }
         }
 
@@ -494,6 +520,119 @@ public class CommandRouter {
     }
 
     /**
+     * What Enter does inside a permanent mode.
+     *
+     * A line that stands on its own reaches the interpreter at once, so its
+     * variables appear straight away. One that opens a block is held until the
+     * block closes, because half a loop is only a syntax error.
+     */
+    private void collectOrRun(String mode, String line) {
+        final int before = com.sphere.core.exec.CodeBuffer.size(mode);
+        com.sphere.core.exec.CodeBuffer.add(mode, line);
+
+        if (!com.sphere.core.exec.LineGrammar.isComplete(mode,
+                com.sphere.core.exec.CodeBuffer.lines(mode))) {
+            markPending(true);
+            return;
+        }
+        markPending(false);
+
+        if ("fortran".equals(mode)) {
+            // Fortran has no interpreter, so the program grows instead of running.
+            // It is compiled at every step and a statement it refuses is taken back
+            // out, which is what keeps the program buildable while it is written.
+            checkFortran(before);
+            return;
+        }
+
+        final String code = com.sphere.core.exec.CodeBuffer.text(mode);
+        com.sphere.core.exec.CodeBuffer.clear(mode);
+        runModeBlock(mode, code, true);
+    }
+
+    /** Drops the block being written, leaving what already ran untouched. */
+    public void abandonPendingBlock() {
+        final String mode = currentMode.get();
+        if (com.sphere.core.exec.CodeBuffer.collects(mode)
+            && !"fortran".equals(mode)
+            && !com.sphere.core.exec.CodeBuffer.isEmpty(mode)) {
+            com.sphere.core.exec.CodeBuffer.clear(mode);
+            markPending(false);
+        }
+    }
+
+    private static void markPending(boolean pending) {
+        try {
+            com.sphere.Sphere.assignPendingMarker(pending);
+        } catch (Throwable noWindow) {
+            // The console can run without the window that shows the marker.
+        }
+    }
+
+    /** Compiles the Fortran program as it stands, undoing the last statement if it fails. */
+    private void checkFortran(int before) {
+        final String code = com.sphere.core.exec.CodeBuffer.text("fortran");
+        final com.sphere.utils.SettingsManager settings = new com.sphere.utils.SettingsManager();
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                return com.sphere.core.exec.ExecRunner.checkFortran(code, settings);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    final String refused = get();
+                    if (refused != null) {
+                        final String statement = String.join("\n",
+                            com.sphere.core.exec.CodeBuffer.lines("fortran")
+                                .subList(before,
+                                    com.sphere.core.exec.CodeBuffer.size("fortran")));
+                        com.sphere.core.exec.CodeBuffer.delete("fortran", before + 1,
+                            com.sphere.core.exec.CodeBuffer.size("fortran"));
+                        AppLogger.error(refused + "\nRefused, and taken back out: "
+                                        + statement);
+                    }
+                } catch (Exception lost) {
+                    AppLogger.error("The Fortran check did not finish: " + lost.getMessage());
+                }
+            }
+        }.execute();
+    }
+
+    /** Sends a finished block to the engine that belongs to its mode. */
+    public void runModeBlock(String mode, String code, boolean run) {
+        final com.sphere.utils.SettingsManager settings = new com.sphere.utils.SettingsManager();
+        final Path here = currentDirectory;
+        final Object rootObject = getRootBackend();
+        final RootBackend root =
+            rootObject instanceof RootBackend b ? b : null;
+        final Object cppObject = backends.get("cpp");
+        final CppBackend cpp = cppObject instanceof CppBackend b ? b : null;
+
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                switch (mode) {
+                    case "py" -> com.sphere.core.exec.ExecRunner.python(code, settings);
+                    case "julia" -> com.sphere.core.exec.ExecRunner.julia(code, settings);
+                    case "fortran" ->
+                        com.sphere.core.exec.ExecRunner.fortran(code, here, settings);
+                    case "cpp" -> {
+                        if (root == null) {
+                            com.sphere.core.exec.ExecRunner.build(code, cpp);
+                        } else {
+                            com.sphere.core.exec.ExecRunner.cling(code, root);
+                        }
+                    }
+                    default -> AppLogger.error("No runner for mode '" + mode + "'.");
+                }
+                return null;
+            }
+        }.execute();
+    }
+
+    /**
      * Compiles and runs a C++ snippet: what sat before the bracket configures the
      * compiler, what sat inside or after it reaches the produced binary.
      */
@@ -513,6 +652,13 @@ public class CommandRouter {
             @Override
             protected Void doInBackground() {
                 cppBackend.executeSource(source, compileFlags, runtimeArgs, false, null);
+                // The run is over, so anything it wrote down is final.
+                try {
+                    com.sphere.components.variables.VariablesPanel.instance().reread();
+                } catch (RuntimeException unreadable) {
+                    AppLogger.error("Could not read the variables of this run: "
+                                    + unreadable);
+                }
                 return null;
             }
         }.execute();
@@ -535,6 +681,18 @@ public class CommandRouter {
             return;
         }
 
+        // Julia keeps an interpreter of its own, so the file runs inside it and
+        // what it defines is still there afterwards.
+        if (pc.hasSnippet && isJuliaName(pc.languageOrApp)) {
+            runJuliaSnippet(pc);
+            return;
+        }
+
+        if (pc.hasSnippet && isFortranName(pc.languageOrApp)) {
+            runFortranSnippet(pc);
+            return;
+        }
+
         new SwingWorker<Void, String>() {
             @Override
             protected Void doInBackground() throws Exception {
@@ -552,26 +710,57 @@ public class CommandRouter {
                         cmd.add("node");
                     }
 
-                    // Append isolated components preserving structural runtime layouts
+                    // What sat before the bracket configures the interpreter; the
+                    // script and what sat inside reach the program. Keeping the two
+                    // apart is what lets "::py -O [@ run.py 3]" mean what it reads.
+                    final List<String> interpreterOptions = new ArrayList<>(pc.macroTokens);
+                    final List<String> program = new ArrayList<>();
                     if (pc.filepath != null) {
-                        cmd.add(pc.filepath);
+                        program.add(pc.filepath);
                     }
-                    cmd.addAll(pc.macroTokens);
-
                     if (pc.hasSnippet) {
-                        cmd.addAll(pc.snippetTokens);
+                        program.addAll(pc.snippetTokens);
                     }
+
+                    cmd.addAll(interpreterOptions);
+
+                    // A Python script runs inside Sphere's wrapper, which keeps its
+                    // namespace and writes it down once the script is over. The
+                    // script itself is untouched: same __main__, same arguments,
+                    // same exit code. The wrapper goes after the interpreter's own
+                    // options and before the script, which is where -c belongs.
+                    if ("py".equalsIgnoreCase(pc.languageOrApp)
+                        && com.sphere.components.variables.PythonProbe.isWrapping()
+                        && !program.isEmpty()
+                        && isScriptHere(program.get(0))
+                        && !interpreterOptions.contains("-c")
+                        && !interpreterOptions.contains("-m")) {
+                        cmd.add("-c");
+                        cmd.add(com.sphere.components.variables.PythonProbe.WRAPPER);
+                    }
+                    cmd.addAll(program);
                 } else if (pc.hasSnippet) {
                     // The raw line used to be handed to the shell here, prefix and
                     // brackets included, so ::jul and any other language answered
                     // "command not found" rather than saying what was missing.
-                    AppLogger.error("No runner for '" + pc.languageOrApp
-                                    + "' snippets; supported: py, cpp.");
+                    if (pc.languageOrApp == null || pc.languageOrApp.isBlank()) {
+                        // A prefix on its own leaves no language to run, and the
+                        // word after it becomes an argument instead of a name.
+                        AppLogger.error(detachedPrefixHint(pc));
+                    } else {
+                        AppLogger.error("No runner for '" + pc.languageOrApp
+                                        + "' snippets; supported: py, js, cpp, julia, fortran.");
+                    }
                     return null;
                 } else {
-                    // Fallback directly to native OS shell processing layer
-                    cmd.addAll(isWin ? List.of("cmd.exe", "/c", rawInput)
-                                     : List.of("/bin/bash", "-c", rawInput));
+                    List<String> plainPython = plainPythonRun(rawInput);
+                    if (plainPython != null) {
+                        cmd.addAll(plainPython);
+                    } else {
+                        // Fallback directly to native OS shell processing layer
+                        cmd.addAll(isWin ? List.of("cmd.exe", "/c", rawInput)
+                                         : List.of("/bin/bash", "-c", rawInput));
+                    }
                 }
 
                 if (cmd.isEmpty() || cmd.get(0).isBlank()) return null;
@@ -653,11 +842,29 @@ public class CommandRouter {
                     if (customPythonPath.length() > 0) {
                         env.put("PYTHONPATH", customPythonPath.toString());
                     }
+
+                }
+
+                // Every program launched from here is told where to leave its
+                // variables, whatever language it is: a shell line is as likely
+                // to be a Fortran binary as a Python script.
+                try {
+                    final String variables =
+                        com.sphere.components.variables.PythonProbe.folder();
+                    if (variables != null) {
+                        env.put(com.sphere.components.variables.PythonProbe
+                                    .FOLDER_VARIABLE, variables);
+                    }
+                } catch (RuntimeException unreachable) {
+                    AppLogger.error("Variables folder unreachable: " + unreachable);
                 }
 
                 pb.redirectErrorStream(true);
 
+                final long started = System.nanoTime();
                 Process process = pb.start();
+                com.sphere.core.telemetry.ProcessMemory.Watcher memory =
+                    com.sphere.core.telemetry.ProcessMemory.watch(process);
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream()))) {
                     String line;
@@ -666,15 +873,184 @@ public class CommandRouter {
                     }
                 }
 
-                process.waitFor();
+                final int status = process.waitFor();
+                memory.close();
+                // What a script cost, kept beside the compilations so that both can
+                // be read on the same page.
+                com.sphere.core.telemetry.RunLog.add(
+                    com.sphere.core.telemetry.RunRecord.run(
+                        pc.languageOrApp == null || pc.languageOrApp.isBlank()
+                            ? "shell" : pc.languageOrApp.toLowerCase(java.util.Locale.ROOT),
+                        com.sphere.core.telemetry.CommandFacts.sourceOf(cmd),
+                        com.sphere.core.telemetry.CommandFacts.toolOf(cmd),
+                        com.sphere.core.telemetry.CommandFacts.flagsOf(cmd),
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - started),
+                        status, memory.peakKilobytes(), false));
+
+                try {
+                    com.sphere.components.variables.VariablesPanel.instance().reread();
+                } catch (RuntimeException unreadable) {
+                    AppLogger.error("Could not read the variables of this run: "
+                                    + unreadable);
+                }
                 return null;
             }
 
             @Override
             protected void process(List<String> chunks) {
-                chunks.forEach(AppLogger::raw);
+                // The output of a program Sphere launched, not text Sphere wrote:
+                // stream is what carries its own errors and warnings into color.
+                chunks.forEach(AppLogger::stream);
             }
         }.execute();
+    }
+
+    /**
+     * A line that is nothing but an interpreter and a script, and its arguments.
+     *
+     * Such a line is handed to the shell, which leaves Sphere no way in. Building
+     * the command here instead lets the script run inside the wrapper that
+     * collects its variables. Anything the shell would have to interpret, a pipe,
+     * a redirection or a variable, is left to the shell untouched.
+     *
+     * Returns null when the line is anything else.
+     */
+    private static List<String> plainPythonRun(String rawInput) {
+        if (rawInput == null || !com.sphere.components.variables.PythonProbe.isWrapping()) {
+            return null;
+        }
+        for (char c : new char[] {'|', '&', ';', '<', '>', '$', '`', '*', '?', '\n'}) {
+            if (rawInput.indexOf(c) >= 0) {
+                return null;
+            }
+        }
+        List<String> tokens = Tokenizer.DEFAULT.tokenize(rawInput.trim());
+        if (tokens.size() < 2 || !isPythonInterpreter(tokens.get(0))) {
+            return null;
+        }
+        int script = -1;
+        for (int i = 1; i < tokens.size(); i++) {
+            final String token = tokens.get(i);
+            if (token.startsWith("-")) {
+                return null;        // an option changes what the interpreter does
+            }
+            if (token.toLowerCase().endsWith(".py")) {
+                script = i;
+                break;
+            }
+        }
+        if (script < 0 || !new File(tokens.get(script)).isFile()) {
+            return null;
+        }
+
+        List<String> command = new ArrayList<>();
+        command.add(tokens.get(0));
+        command.add("-c");
+        command.add(com.sphere.components.variables.PythonProbe.WRAPPER);
+        command.addAll(tokens.subList(script, tokens.size()));
+        return command;
+    }
+
+    /**
+     * What to say when ":: name" was typed instead of "::name". The prefix and
+     * the language are one token, so a space between them leaves no language to
+     * run and turns the name into an ordinary argument.
+     */
+    private static String detachedPrefixHint(ParsedCommand pc) {
+        final String prefix =
+            pc.type == ParsedCommand.RootType.COMMAND ? ":" : "::";
+        final String language = pc.macroTokens.isEmpty() ? "py" : pc.macroTokens.get(0);
+        return "No language after '" + prefix + "': write \"" + prefix + language
+             + "\" without a space, not \"" + prefix + " " + language + "\".";
+    }
+
+    /** The names ::jul and ::julia are spelled with. */
+    private static boolean isJuliaName(String language) {
+        return "jul".equalsIgnoreCase(language) || "julia".equalsIgnoreCase(language);
+    }
+
+    /** The names ::fort, ::fortran and ::f90 are spelled with. */
+    private static boolean isFortranName(String language) {
+        return "fort".equalsIgnoreCase(language) || "fortran".equalsIgnoreCase(language)
+            || "f90".equalsIgnoreCase(language) || "fot".equalsIgnoreCase(language);
+    }
+
+    /**
+     * Runs a Julia snippet in the session rather than in a process of its own.
+     *
+     * A process would take its variables with it when it ended. The session keeps
+     * them, which is the whole reason it exists.
+     */
+    private void runJuliaSnippet(ParsedCommand pc) {
+        final File script = new File(pc.snippetTokens.get(0));
+        final List<String> runtimeArgs =
+            new ArrayList<>(pc.snippetTokens.subList(1, pc.snippetTokens.size()));
+
+        if (!pc.macroTokens.isEmpty()) {
+            // The interpreter is already up and holding the session's variables;
+            // restarting it to honor an option would throw them away.
+            AppLogger.warn("The Julia session is already running, so "
+                           + String.join(" ", pc.macroTokens)
+                           + " cannot configure it. Put arguments inside the brackets.");
+        }
+
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                com.sphere.core.julia.JuliaSession session =
+                    com.sphere.core.julia.JuliaSession.instance(
+                        new com.sphere.utils.SettingsManager());
+                try {
+                    session.start();
+                } catch (IOException unavailable) {
+                    AppLogger.error(unavailable.getMessage());
+                    return null;
+                }
+                session.runFile(script, runtimeArgs);
+                return null;
+            }
+        }.execute();
+    }
+
+    /**
+     * Compiles and runs a Fortran snippet: what sat before the bracket configures
+     * the compiler, what sat inside or after it reaches the produced binary.
+     */
+    private void runFortranSnippet(ParsedCommand pc) {
+        final File source = new File(pc.snippetTokens.get(0));
+        final List<String> compileFlags = new ArrayList<>(pc.macroTokens);
+        final List<String> runtimeArgs =
+            new ArrayList<>(pc.snippetTokens.subList(1, pc.snippetTokens.size()));
+        final Path here = currentDirectory;
+
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                com.sphere.core.fortran.FortranRunner.run(source, compileFlags,
+                    runtimeArgs, here, new com.sphere.utils.SettingsManager());
+                return null;
+            }
+        }.execute();
+    }
+
+    /** A .py file that is really there, looked for where the run will happen. */
+    private boolean isScriptHere(String token) {
+        if (token == null || !token.toLowerCase().endsWith(".py")) {
+            return false;
+        }
+        File direct = new File(token);
+        return direct.isFile()
+            || new File(currentDirectory.toFile(), token).isFile();
+    }
+
+    /** python, python3, python3.12, and the same with a path or a .exe. */
+    private static boolean isPythonInterpreter(String token) {
+        String name = new File(token).getName().toLowerCase();
+        if (name.endsWith(".exe")) {
+            name = name.substring(0, name.length() - 4);
+        }
+        return name.equals("python") || name.matches("python\\d(\\.\\d+)?");
     }
 
     private boolean handleCd(String cmd) {

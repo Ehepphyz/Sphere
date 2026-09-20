@@ -38,6 +38,44 @@ public final class RootUserPipeline {
         public int total() { return loaded + alreadyLoaded + failed; }
     }
 
+    /** A library that is loaded and has said what is in it. */
+    public record Pipeline(String name, RootPipelineManifest manifest,
+                           Path library, Path source, Path layer) {
+
+        /** True when the library was loaded without saying anything about itself. */
+        public boolean isSilent() { return manifest == null; }
+
+        /** One line for a listing, whether or not the library declared itself. */
+        public String summary() {
+            if (manifest == null) {
+                return name + "  (no manifest)";
+            }
+            String text = manifest.signature();
+            if (manifest.description != null && !manifest.description.isBlank()) {
+                text = text + "  -- " + manifest.description;
+            }
+            return text;
+        }
+    }
+
+    /** What is loaded right now, by pipeline name, in the order it was loaded. */
+    private static final java.util.Map<String, Pipeline> REGISTRY =
+        java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>());
+
+    /** Told about every pipeline that becomes loaded, whoever loaded it. */
+    private static volatile java.util.function.Consumer<Pipeline> announce;
+
+    /**
+     * Sets what is told when a pipeline is loaded.
+     *
+     * A library is loaded from four places, one of them before any command
+     * exists. A hook lets the command layer hear about all four without this
+     * class having to know it is there.
+     */
+    public static void onLoad(java.util.function.Consumer<Pipeline> hook) {
+        announce = hook;
+    }
+
     /* ------------------------------------------------------------------ */
     /* Where the folders are                                               */
     /* ------------------------------------------------------------------ */
@@ -182,8 +220,8 @@ public final class RootUserPipeline {
                         "gSystem->Load(\"" + forCling(library) + "\")");
                 int code = parseCode(answer);
                 switch (code) {
-                    case 0 -> loaded++;
-                    case 1 -> already++;
+                    case 0 -> { loaded++; remember(backend, root, library); }
+                    case 1 -> { already++; remember(backend, root, library); }
                     default -> {
                         failed++;
                         problems.add(library.getFileName() + "  (" + describe(code, answer) + ")");
@@ -206,11 +244,142 @@ public final class RootUserPipeline {
     }
 
     private static String ask(RootBackend backend, String expression) {
+        if (backend == null || !backend.isAvailable()) {
+            return null;
+        }
         try {
             return backend.executeClingAwait(expression, LOAD_TIMEOUT_MS);
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* What is in a loaded library                                         */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * The pipeline name a library file carries: libmyCalc.so is myCalc.
+     *
+     * The compiler adds the lib prefix on the platforms that expect one, so it
+     * comes off again here rather than being carried around everywhere else.
+     */
+    public static String pipelineName(Path library) {
+        if (library == null) return "";
+        String file = library.getFileName().toString();
+        final int dot = file.indexOf(".so");
+        int cut = dot >= 0 ? dot : file.lastIndexOf('.');
+        if (cut > 0) {
+            file = file.substring(0, cut);
+        }
+        if (file.startsWith("lib") && file.length() > 3) {
+            file = file.substring(3);
+        }
+        return file;
+    }
+
+    /** The source a library was built from, when it is still beside it. */
+    private static Path sourceBeside(Path library) {
+        if (library == null || library.getParent() == null) return null;
+        final String name = pipelineName(library);
+        for (String extension : new String[]{".cpp", ".cxx", ".cc", ".c"}) {
+            Path candidate = library.getParent().resolve(name + extension);
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Records what a freshly loaded library is, asking it what it holds.
+     *
+     * The source beside it is read first because it costs nothing and works
+     * before the engine is asked anything. A library that arrived without its
+     * source is asked directly, through the symbol it exports under its own
+     * name. A library that answers neither is still recorded, so a listing
+     * shows everything that is loaded rather than only what declares itself.
+     */
+    private static void remember(RootBackend backend, Path layer, Path library) {
+        final String name = pipelineName(library);
+        if (name.isEmpty()) return;
+
+        Path source = sourceBeside(library);
+        RootPipelineManifest manifest = RootPipelineManifest.fromSource(source);
+        if (manifest == null) {
+            manifest = askLibrary(backend, library, name);
+        }
+        Pipeline one = new Pipeline(name, manifest, library, source, layer);
+        REGISTRY.put(name, one);
+
+        final java.util.function.Consumer<Pipeline> hook = announce;
+        if (hook != null) {
+            try {
+                hook.accept(one);
+            } catch (RuntimeException refused) {
+                AppLogger.warn("Could not publish " + name + ": " + refused.getMessage());
+            }
+        }
+    }
+
+    /**
+     * The manifest the library itself hands back, or null when it exports none.
+     *
+     * The symbol carries the pipeline's name, so the lookup cannot land on a
+     * neighbour that happens to export a manifest too.
+     */
+    private static RootPipelineManifest askLibrary(RootBackend backend, Path library, String name) {
+        final String expression =
+            "[]{ Func_t raw = gSystem->DynFindSymbol(\"" + forCling(library) + "\", \""
+          + RootPipelineManifest.exportName(name) + "\");"
+          + " if (raw == nullptr) { return std::string(); }"
+          + " const char *text = ((const char *(*)()) raw)();"
+          + " return text == nullptr ? std::string() : std::string(text); }()";
+
+        final String answer = ask(backend, expression);
+        if (answer == null) return null;
+        for (String line : answer.strip().split("\\R")) {
+            RootPipelineManifest manifest = RootPipelineManifest.decode(line.strip());
+            if (manifest != null && !manifest.name.isBlank()) {
+                return manifest;
+            }
+        }
+        return null;
+    }
+
+    /** Everything loaded right now, in load order. */
+    public static List<Pipeline> pipelines() {
+        synchronized (REGISTRY) {
+            return new ArrayList<>(REGISTRY.values());
+        }
+    }
+
+    /** One loaded pipeline by name, or null. */
+    public static Pipeline pipeline(String name) {
+        if (name == null) return null;
+        synchronized (REGISTRY) {
+            Pipeline exact = REGISTRY.get(name.trim());
+            if (exact != null) return exact;
+            for (Pipeline one : REGISTRY.values()) {
+                if (one.name().equalsIgnoreCase(name.trim())) return one;
+            }
+        }
+        return null;
+    }
+
+    /** Drops a pipeline from the registry, after its library has been unloaded. */
+    public static Pipeline forget(String name) {
+        Pipeline gone = pipeline(name);
+        if (gone != null) {
+            REGISTRY.remove(gone.name());
+        }
+        return gone;
+    }
+
+    /** Re-reads one library that has just been built or rebuilt. */
+    public static Pipeline refresh(RootBackend backend, Path layer, Path library) {
+        remember(backend, layer, library);
+        return pipeline(pipelineName(library));
     }
 
     /**

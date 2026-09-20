@@ -233,9 +233,13 @@ std::size_t shm_required_size() noexcept {
 
 ShmSession init_shm(bool create, const char *region_name,
                     std::size_t region_size, bool force_format) {
+  // Huge pages are asked for, not required: the mapping layer falls back to
+  // ordinary pages when the backing store or the kernel cannot provide them.
   Platform::ShmRegion region =
-      create ? Platform::shm_create(region_name, region_size)
-             : Platform::shm_open(region_name, region_size);
+      create ? Platform::shm_create(region_name, region_size,
+                                    Platform::ShmFlags::HUGE_PAGES)
+             : Platform::shm_open(region_name, region_size,
+                                  Platform::ShmFlags::HUGE_PAGES);
 
   void *base_ptr = region.data();
   if (base_ptr == nullptr) {
@@ -363,6 +367,13 @@ ShmSession init_shm(bool create, const char *region_name,
     bulk->tsc_sample_mask.store(255, std::memory_order_relaxed);
 
     // --- data heap: everything that is left ---
+    // Aligned to SIMD_ALIGNMENT rather than to a cache line, so that the
+    // payload boundary promised by SIMD_ALIGNMENT holds from the first chunk.
+    offset = align_up(offset, SIMD_ALIGNMENT);
+    if (offset >= region_size) {
+      fail_init(header, EngineError::REGION_TOO_SMALL,
+                "No room left for the data heap.");
+    }
     header->off_data_heap = offset;
     header->size_data_heap = region_size - offset;
     layout.data_heap = layout.base + offset;

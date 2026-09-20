@@ -101,7 +101,15 @@ public class InternalDispatcher implements CommandDispatcher {
 
         // 3. Route backend-specific shortcuts dynamically using the parsed metadata
         String lang = pc.languageOrApp;
-        if (lang != null && ctx.backends != null && ctx.backends.containsKey(lang)) {
+        if (pc.hasSnippet) {
+            // A [@ ... ] block belongs to the macro form, which alone keeps what
+            // precedes it for the interpreter and what it holds for the script.
+            AppLogger.error("A [@ ... ] block needs two colons: write \"::"
+                            + (lang == null || lang.isBlank() ? "py" : lang)
+                            + " [@ ... ]\".");
+        } else if (lang == null || lang.isBlank()) {
+            AppLogger.error("No language after ':': write \":py <code>\".");
+        } else if (ctx.backends != null && ctx.backends.containsKey(lang)) {
             executeBackend(ctx, pc);
         } else {
             AppLogger.error("Unknown internal command or language backend identifier: " + trimmedInput);
@@ -113,6 +121,11 @@ public class InternalDispatcher implements CommandDispatcher {
      */
     private void executeBackend(CommandContext ctx, ParsedCommand pc) {
         String rawArgs = String.join(" ", pc.macroTokens).trim();
+        if (rawArgs.isEmpty()) {
+            // An empty line was handed to the backend, which ran it in silence.
+            AppLogger.error("Nothing to run for '" + pc.languageOrApp + "'.");
+            return;
+        }
         String resolvedCode = TagInterpreter.resolve(rawArgs, ctx.getActiveProject());
         ctx.executeBackendSafely(pc.languageOrApp, resolvedCode);
     }

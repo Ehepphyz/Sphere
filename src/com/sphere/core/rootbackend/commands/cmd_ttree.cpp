@@ -4,6 +4,7 @@
 #include "cmd_file.h"
 #include "command_registry.h"
 #include "TTreehandlers/ttree_common.h"
+#include "isa_allocator.h"
 #include "lockfree_ring.h"
 
 #include <ROOT/RVec.hxx>
@@ -262,9 +263,9 @@ void export_zero_copy_branch_to_arrow(void *shm_buffer, TBranch *branch,
                                         column_name, "f");
 }
 
-template <typename T>
+template <typename T, typename Alloc>
 void export_vector_branch_to_arrow(void *shm_buffer,
-                                   const std::vector<T> &vec_data,
+                                   const std::vector<T, Alloc> &vec_data,
                                    const char *column_name) {
   if (!shm_buffer) {
     return;
@@ -409,11 +410,6 @@ void register_tree_handle(std::uint32_t job_id, TTree *tree) {
 
   auto ctx = std::make_shared<TreeContext>();
   ctx->tree = tree;
-
-  // Level 3 Optimization: Basket Layout & CPU Cache Line Alignment
-  constexpr std::int64_t kMaxMemoryBuffer =
-      100 * 1024 * 1024; // 100 MB max buffer
-  tree->OptimizeBaskets(kMaxMemoryBuffer, 1.1, "d");
 
   // Level 2 Optimization: Asynchronous Double-Buffered Prefetching
   constexpr std::int64_t kCacheSizeBytes =
@@ -596,7 +592,9 @@ void export_branch_zero_copy(std::uint32_t job_id, std::string_view branch_name,
     return;
   }
 
-  std::vector<float> data_buffer;
+  // Aligned on the host CPU's vector width, so the column leaves this function
+  // ready for a SIMD pass rather than one element off a register boundary.
+  Memory::isa_vector<float> data_buffer;
   data_buffer.reserve(count);
   for (std::size_t i = 0; i < count; ++i) {
     data_buffer.push_back(array_reader[i]);
@@ -625,10 +623,10 @@ bool register_and_compile_jit_filter(std::string_view function_name,
   return true;
 }
 
-void execute_jit_filter_on_tree(std::uint32_t job_id,
-                                std::string_view function_name,
-                                std::string_view branch_name,
-                                std::vector<float> &out_filtered_results) {
+void execute_jit_filter_on_tree(
+    std::uint32_t job_id, std::string_view function_name,
+    std::string_view branch_name,
+    Memory::isa_vector<float> &out_filtered_results) {
   const std::string fn_name(function_name);
   const std::string b_name(branch_name);
 

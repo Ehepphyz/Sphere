@@ -267,7 +267,7 @@ public class RootDetectionDialog implements RootDetectionCallback {
                 SwingUtilities.invokeAndWait(dialogTask);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            com.sphere.core.JavaErrors.report("the ROOT detection dialog", e);
         }
 
         return saveAuthorized[0];
@@ -323,7 +323,7 @@ public class RootDetectionDialog implements RootDetectionCallback {
                     rootDirUpdated = true;
                 }
             } catch (IOException e) {
-                e.printStackTrace();
+                com.sphere.core.JavaErrors.report("reading settings.conf", e);
             }
         }
 
@@ -341,7 +341,7 @@ public class RootDetectionDialog implements RootDetectionCallback {
                 writer.println(outputLine);
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            com.sphere.core.JavaErrors.report("writing settings.conf", e);
             // CORRECT: Pass the actual integer constant
             JOptionPane.showMessageDialog(parentComponent, 
                 "Failed to update parameter changes inside your configuration settings:\n" + e.getMessage(), 
@@ -412,7 +412,7 @@ public class RootDetectionDialog implements RootDetectionCallback {
                 }
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            com.sphere.core.JavaErrors.report("reading ROOT_DIR from settings.conf", e);
         }
 
         if (rootDir == null || rootDir.isEmpty()) {

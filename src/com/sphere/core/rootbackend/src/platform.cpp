@@ -4,8 +4,11 @@
 
 #include "platform.h"
 
+#include "common_config.h"
+
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string_view>
@@ -24,6 +27,7 @@
 #include <linux/mempolicy.h>
 #include <sched.h>
 #include <sys/syscall.h>
+#include <sys/vfs.h>
 #endif
 #endif
 
@@ -130,7 +134,66 @@ void apply_numa_policy(void *base, std::size_t size, ShmFlags flags) noexcept {
 void apply_numa_policy(void *, std::size_t, ShmFlags) noexcept {}
 #endif
 
+#if defined(SPHERE_OS_LINUX)
+/// First number written in a sysfs file, or zero when it cannot be read.
+std::uint64_t read_sysfs_count(const char *path) noexcept {
+  const int fd = ::open(path, O_RDONLY);
+  if (fd < 0) {
+    return 0;
+  }
+  char text[32] = {0};
+  const ssize_t got = ::read(fd, text, sizeof(text) - 1);
+  ::close(fd);
+  if (got <= 0) {
+    return 0;
+  }
+  return std::strtoull(text, nullptr, 10);
+}
+
+/// Whether this descriptor names a file on hugetlbfs, the one filesystem whose
+/// mappings MAP_HUGETLB accepts.
+bool backing_is_hugetlbfs(int fd) noexcept {
+  constexpr decltype(statfs::f_type) kHugetlbfsMagic = 0x958458f6;
+  struct statfs info {};
+  if (fd < 0 || ::fstatfs(fd, &info) != 0) {
+    return false;
+  }
+  return info.f_type == kHugetlbfsMagic;
+}
+
+/// mmap encodes the huge page size as its base-2 logarithm.
+int huge_page_mmap_flag(std::size_t page_bytes) noexcept {
+  int shift = 0;
+  while ((std::size_t{1} << shift) < page_bytes && shift < 63) {
+    ++shift;
+  }
+  return shift << MAP_HUGE_SHIFT;
+}
+#endif
+
 } // namespace
+
+std::size_t usable_huge_page_size() noexcept {
+#if defined(SPHERE_OS_LINUX)
+  // Read every time rather than cached: a pool can be reserved while Sphere
+  // runs, and the next region should then benefit from it.
+  if (read_sysfs_count("/sys/kernel/mm/hugepages/hugepages-1048576kB/"
+                       "free_hugepages") > 0) {
+    return HUGE_PAGE_PREFERRED;
+  }
+  if (read_sysfs_count("/sys/kernel/mm/hugepages/hugepages-2048kB/"
+                       "free_hugepages") > 0) {
+    return HUGE_PAGE_FALLBACK;
+  }
+  return 0;
+#elif defined(SPHERE_OS_WINDOWS)
+  // Non-zero only when the account holds the "Lock pages in memory" right.
+  return static_cast<std::size_t>(::GetLargePageMinimum());
+#else
+  // macOS exposes superpages through vm_allocate only, not through mmap.
+  return 0;
+#endif
+}
 
 std::size_t get_page_size() noexcept {
 #if defined(SPHERE_OS_WINDOWS)
@@ -155,11 +218,14 @@ std::size_t get_page_size() noexcept {
 // =============================================================================
 
 ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
+  const std::size_t requested = size;
+  std::size_t huge = 0;
   DWORD protection = PAGE_READWRITE;
   if (has_flag(flags, ShmFlags::HUGE_PAGES)) {
-    const SIZE_T large = ::GetLargePageMinimum();
-    if (large != 0) {
-      size = (size + large - 1) & ~(large - 1);
+    // Non-zero only when the account holds "Lock pages in memory".
+    huge = static_cast<std::size_t>(::GetLargePageMinimum());
+    if (huge != 0) {
+      size = (size + huge - 1) & ~(huge - 1);
       protection |= SEC_LARGE_PAGES;
     }
   }
@@ -168,6 +234,16 @@ ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
       INVALID_HANDLE_VALUE, nullptr, protection,
       static_cast<DWORD>(static_cast<std::uint64_t>(size) >> 32),
       static_cast<DWORD>(size & 0xFFFFFFFFu), name);
+  if (mapping == nullptr && huge != 0) {
+    // Large pages refused, most often for want of the privilege: ordinary
+    // pages carry the region instead.
+    huge = 0;
+    size = requested;
+    mapping = ::CreateFileMappingA(
+        INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+        static_cast<DWORD>(static_cast<std::uint64_t>(size) >> 32),
+        static_cast<DWORD>(size & 0xFFFFFFFFu), name);
+  }
   if (mapping == nullptr) {
     throw std::runtime_error(os_error("CreateFileMapping"));
   }
@@ -182,7 +258,7 @@ ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
   }
 
   // Wrap immediately so that a throw from the steps below still unmaps.
-  ShmRegion region(base, size, name, flags);
+  ShmRegion region(base, size, base, size, name, flags, huge);
 
   apply_numa_policy(base, size, flags);
 
@@ -259,17 +335,6 @@ ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
   const std::size_t aligned_user_size = (size + page - 1) & ~(page - 1);
   std::size_t map_size = aligned_user_size;
 
-#if defined(MAP_HUGETLB)
-  if (use_huge) {
-#ifdef MAP_HUGE_1GB
-    constexpr std::size_t huge_page_size = 1ULL << 30;
-#else
-    constexpr std::size_t huge_page_size = 2 * 1024 * 1024;
-#endif
-    map_size = (map_size + huge_page_size - 1) & ~(huge_page_size - 1);
-  }
-#endif
-
   if (use_guard) {
     map_size = aligned_user_size + 2 * page;
   }
@@ -282,7 +347,29 @@ ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
           ((backing_is_file ? "open(create) " : "shm_open(create) ") + shm_path)
               .c_str()));
     }
-    if (::ftruncate(fd, static_cast<off_t>(map_size)) < 0) {
+  }
+
+  // A huge mapping is possible on an anonymous region, or on a backing file
+  // that lives on hugetlbfs. On any other filesystem the kernel refuses
+  // MAP_HUGETLB outright, so it is not even attempted.
+  std::size_t huge = 0;
+  std::size_t huge_map_size = map_size;
+#if defined(MAP_HUGETLB)
+  if (use_huge && !use_guard && (use_anonymous || backing_is_hugetlbfs(fd))) {
+    huge = usable_huge_page_size();
+    // A page larger than the region itself wastes more than it saves.
+    if (huge > map_size) {
+      huge = HUGE_PAGE_FALLBACK;
+    }
+    if (huge != 0) {
+      huge_map_size = (map_size + huge - 1) & ~(huge - 1);
+    }
+  }
+#endif
+
+  if (fd >= 0) {
+    const std::size_t file_size = (huge != 0) ? huge_map_size : map_size;
+    if (::ftruncate(fd, static_cast<off_t>(file_size)) < 0) {
       const std::string msg = os_error("ftruncate");
       ::close(fd);
       if (backing_is_file) {
@@ -299,18 +386,36 @@ ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
     mmap_flags |= MAP_ANONYMOUS;
   }
 
+  const int prot = is_read_only ? PROT_READ : (PROT_READ | PROT_WRITE);
+
+  void *raw_base = MAP_FAILED;
+  std::size_t obtained_huge = 0;
+
 #if defined(MAP_HUGETLB)
-  if (use_huge) {
-    mmap_flags |= MAP_HUGETLB;
-#ifdef MAP_HUGE_1GB
-    mmap_flags |= MAP_HUGE_1GB;
-#endif
+  // Largest page first, then the smaller one, then ordinary pages. A refusal
+  // here is not an error: the region simply costs more TLB misses.
+  const std::size_t candidates[2] = {huge, HUGE_PAGE_FALLBACK};
+  for (std::size_t i = 0; huge != 0 && i < 2 && raw_base == MAP_FAILED; ++i) {
+    const std::size_t candidate = candidates[i];
+    if (candidate == 0 || candidate > huge || (i > 0 && candidate == huge)) {
+      continue;
+    }
+    const std::size_t attempt = (map_size + candidate - 1) & ~(candidate - 1);
+    void *base = ::mmap(nullptr, attempt, prot,
+                        mmap_flags | MAP_HUGETLB | huge_page_mmap_flag(candidate),
+                        fd, 0);
+    if (base != MAP_FAILED) {
+      raw_base = base;
+      obtained_huge = candidate;
+      map_size = attempt;
+    }
   }
 #endif
 
-  const int prot = is_read_only ? PROT_READ : (PROT_READ | PROT_WRITE);
+  if (raw_base == MAP_FAILED) {
+    raw_base = ::mmap(nullptr, map_size, prot, mmap_flags, fd, 0);
+  }
 
-  void *raw_base = ::mmap(nullptr, map_size, prot, mmap_flags, fd, 0);
   if (!use_anonymous) {
     ::close(fd); // the mapping keeps its own reference
   }
@@ -323,6 +428,14 @@ ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
     throw std::runtime_error(msg);
   }
 
+#if defined(MADV_HUGEPAGE)
+  if (use_huge && obtained_huge == 0) {
+    // No reserved pool: ask the kernel to back the region with transparent
+    // huge pages where it can. Best effort, and silent when it cannot.
+    (void)::madvise(raw_base, map_size, MADV_HUGEPAGE);
+  }
+#endif
+
   void *user_base = raw_base;
   if (use_guard) {
     user_base = static_cast<void *>(static_cast<std::uint8_t *>(raw_base) + page);
@@ -332,7 +445,7 @@ ShmRegion shm_create(const char *name, std::size_t size, ShmFlags flags) {
   }
 
   ShmRegion region(user_base, size, raw_base, map_size,
-                   use_anonymous ? "" : shm_path.c_str(), flags);
+                   use_anonymous ? "" : shm_path.c_str(), flags, obtained_huge);
 
   apply_numa_policy(user_base, size, flags);
 
@@ -366,17 +479,6 @@ ShmRegion shm_open(const char *name, std::size_t size, ShmFlags flags) {
   const std::size_t aligned_user_size = (size + page - 1) & ~(page - 1);
   std::size_t map_size = aligned_user_size;
 
-#if defined(MAP_HUGETLB)
-  if (use_huge) {
-#ifdef MAP_HUGE_1GB
-    constexpr std::size_t huge_page_size = 1ULL << 30;
-#else
-    constexpr std::size_t huge_page_size = 2 * 1024 * 1024;
-#endif
-    map_size = (map_size + huge_page_size - 1) & ~(huge_page_size - 1);
-  }
-#endif
-
   if (use_guard) {
     map_size = aligned_user_size + 2 * page;
   }
@@ -396,13 +498,59 @@ ShmRegion shm_open(const char *name, std::size_t size, ShmFlags flags) {
         " were requested. The creator and this process disagree on SHM_SIZE.");
   }
 
+  // The same rule as on the creating side: huge pages only where the kernel
+  // takes them, and the mapping must stay inside what the file holds.
+  std::size_t huge = 0;
+#if defined(MAP_HUGETLB)
+  if (use_huge && !use_guard && backing_is_hugetlbfs(fd)) {
+    huge = usable_huge_page_size();
+    if (huge > map_size) {
+      huge = HUGE_PAGE_FALLBACK;
+    }
+  }
+#endif
+
   const int prot = is_read_only ? PROT_READ : (PROT_READ | PROT_WRITE);
-  void *raw_base = ::mmap(nullptr, map_size, prot, MAP_SHARED, fd, 0);
+
+  void *raw_base = MAP_FAILED;
+  std::size_t obtained_huge = 0;
+
+#if defined(MAP_HUGETLB)
+  const std::size_t candidates[2] = {huge, HUGE_PAGE_FALLBACK};
+  for (std::size_t i = 0; huge != 0 && i < 2 && raw_base == MAP_FAILED; ++i) {
+    const std::size_t candidate = candidates[i];
+    if (candidate == 0 || candidate > huge || (i > 0 && candidate == huge)) {
+      continue;
+    }
+    const std::size_t attempt = (map_size + candidate - 1) & ~(candidate - 1);
+    if (static_cast<std::size_t>(st.st_size) < attempt) {
+      continue;
+    }
+    void *base = ::mmap(nullptr, attempt, prot,
+                        MAP_SHARED | MAP_HUGETLB | huge_page_mmap_flag(candidate),
+                        fd, 0);
+    if (base != MAP_FAILED) {
+      raw_base = base;
+      obtained_huge = candidate;
+      map_size = attempt;
+    }
+  }
+#endif
+
+  if (raw_base == MAP_FAILED) {
+    raw_base = ::mmap(nullptr, map_size, prot, MAP_SHARED, fd, 0);
+  }
   ::close(fd);
 
   if (raw_base == MAP_FAILED) {
     throw std::runtime_error(os_error("mmap"));
   }
+
+#if defined(MADV_HUGEPAGE)
+  if (use_huge && obtained_huge == 0) {
+    (void)::madvise(raw_base, map_size, MADV_HUGEPAGE);
+  }
+#endif
 
   void *user_base = raw_base;
   if (use_guard) {
@@ -412,7 +560,8 @@ ShmRegion shm_open(const char *name, std::size_t size, ShmFlags flags) {
                page, PROT_NONE);
   }
 
-  ShmRegion region(user_base, size, raw_base, map_size, shm_path.c_str(), flags);
+  ShmRegion region(user_base, size, raw_base, map_size, shm_path.c_str(), flags,
+                   obtained_huge);
 
   apply_numa_policy(user_base, size, flags);
 

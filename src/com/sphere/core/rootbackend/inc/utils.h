@@ -7,6 +7,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <new>
+#include <utility>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #define SPHERE_ARCH_X86_64 1
@@ -103,6 +106,66 @@ struct CPUCapabilities {
  * Runtime CPU feature set
  */
 [[nodiscard]] const CPUCapabilities &cpu_capabilities() noexcept;
+
+// -----------------------------------------------------------------------------
+// Aligned allocation
+// -----------------------------------------------------------------------------
+
+/// The boundary every block starts on, and the multiple its size is padded to.
+inline constexpr std::size_t DEFAULT_SIMD_ALIGNMENT = 128;
+
+/// Whether `ptr` sits on `alignment`.
+template <typename T>
+[[nodiscard]] inline bool
+is_aligned(const T *ptr,
+           std::size_t alignment = DEFAULT_SIMD_ALIGNMENT) noexcept {
+  return alignment != 0 &&
+         (reinterpret_cast<std::uintptr_t>(ptr) % alignment) == 0;
+}
+
+/**
+ * Block aligned on `alignment`, with its size rounded up to that same value.
+ *
+ * The padding is what lets a vector load read the tail of the block: the last
+ * elements are read a whole register at a time, past the useful bytes.
+ * `alignment` must be a power of two; anything else returns nullptr.
+ */
+[[nodiscard]] void *aligned_alloc_simd(std::size_t alignment,
+                                       std::size_t size) noexcept;
+
+/// Same, on DEFAULT_SIMD_ALIGNMENT.
+[[nodiscard]] void *aligned_alloc_simd(std::size_t size) noexcept;
+
+/// Releases what aligned_alloc_simd returned. A null pointer is accepted.
+void aligned_free_simd(void *ptr) noexcept;
+
+/// Deleter for a unique_ptr holding an aligned object.
+template <typename T> struct AlignedDeleter {
+  void operator()(T *ptr) const noexcept {
+    if (ptr != nullptr) {
+      ptr->~T();
+      aligned_free_simd(ptr);
+    }
+  }
+};
+
+template <typename T> using aligned_unique_ptr = std::unique_ptr<T, AlignedDeleter<T>>;
+
+/// Builds one object in an aligned block.
+template <typename T, typename... Args>
+[[nodiscard]] aligned_unique_ptr<T>
+make_aligned_unique(std::size_t alignment, Args &&...args) {
+  void *const memory = aligned_alloc_simd(alignment, sizeof(T));
+  if (memory == nullptr) {
+    throw std::bad_alloc();
+  }
+  try {
+    return aligned_unique_ptr<T>(::new (memory) T(std::forward<Args>(args)...));
+  } catch (...) {
+    aligned_free_simd(memory);
+    throw;
+  }
+}
 
 // -----------------------------------------------------------------------------
 // SIMD memory and tensor helpers

@@ -199,7 +199,7 @@ public final class JupylabXeditor extends JFrame {
                 saveNotebook();
                 JOptionPane.showMessageDialog(this, "Saved successfully.");
             } catch (Exception ex) {
-                ex.printStackTrace();
+                com.sphere.core.JavaErrors.report("saving the notebook", ex);
                 JOptionPane.showMessageDialog(this, "Save failed: " + ex.getMessage());
             }
         });
@@ -216,7 +216,7 @@ public final class JupylabXeditor extends JFrame {
                     JOptionPane.showMessageDialog(this, "Saved as " + currentPath);
                 }
             } catch (Exception ex) {
-                ex.printStackTrace();
+                com.sphere.core.JavaErrors.report("saving the notebook under a new name", ex);
                 JOptionPane.showMessageDialog(this, "Save As failed: " + ex.getMessage());
             }
         });
@@ -506,7 +506,7 @@ public final class JupylabXeditor extends JFrame {
             saveNotebook();
             dispose(); // Replace System.exit(0);
         } catch (Exception ex) {
-            ex.printStackTrace();
+            com.sphere.core.JavaErrors.report("saving the notebook before closing", ex);
             JOptionPane.showMessageDialog(this, "Save failed: " + ex.getMessage());
         }
     }
@@ -1938,7 +1938,7 @@ public final class JupylabXeditor extends JFrame {
                 JupylabXeditor editor = new JupylabXeditor(p);
                 editor.setVisible(true);
             } catch (Exception e) {
-                e.printStackTrace();
+                com.sphere.core.JavaErrors.report("starting the notebook editor", e);
                 JOptionPane.showMessageDialog(null, "Failed to start: " + e.getMessage());
             }
         });

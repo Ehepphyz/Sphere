@@ -6,6 +6,8 @@
 
 #include "utils.h"
 
+#include "common_config.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -137,39 +139,42 @@ ALWAYS_INLINE void prefetch_memory(const void *ptr) noexcept {
 // MEMORY ALIGNMENT HELPERS
 // ============================================================================
 
-constexpr std::size_t DEFAULT_SIMD_ALIGNMENT = 64;
-
-template <typename T>
-ALWAYS_INLINE bool
-is_aligned(const T *ptr,
-           std::size_t alignment = DEFAULT_SIMD_ALIGNMENT) noexcept {
-  return (reinterpret_cast<std::uintptr_t>(ptr) % alignment) == 0;
-}
+// DEFAULT_SIMD_ALIGNMENT, is_aligned, AlignedDeleter and make_aligned_unique
+// are declared in utils.h. One value for the whole project, checked here
+// against the one the shared-memory ABI is built on.
+static_assert(DEFAULT_SIMD_ALIGNMENT == Sphere::SIMD_ALIGNMENT,
+              "utils.h and common_config.h must agree on the SIMD alignment.");
 
 void *aligned_alloc_simd(std::size_t alignment, std::size_t size) noexcept {
-  // Return nullptr for zero-sized allocations or invalid zero alignments
   if (size == 0 || alignment == 0) {
     return nullptr;
   }
 
-  // Ensure alignment meets the minimum requirement (sizeof(void*))
   constexpr std::size_t kMinAlignment = sizeof(void *);
   if (alignment < kMinAlignment) {
     alignment = kMinAlignment;
   }
 
-  // Ensure alignment is a valid power of two
   if ((alignment & (alignment - 1)) != 0) {
-    return nullptr;
+    return nullptr; // not a power of two
+  }
+
+  // The padding is what makes a vector read of the tail safe, so it applies on
+  // every platform and not only where std::aligned_alloc demands it.
+  const std::size_t remainder = size % alignment;
+  if (remainder != 0) {
+    const std::size_t padding = alignment - remainder;
+    if (size > (std::numeric_limits<std::size_t>::max)() - padding) {
+      return nullptr;
+    }
+    size += padding;
   }
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
-  // Windows / MSVC implementation
   return _aligned_malloc(size, alignment);
 
 #elif (defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200112L)) ||            \
     defined(__APPLE__) || defined(__FreeBSD__)
-  // POSIX / macOS / FreeBSD implementation
   void *ptr = nullptr;
   if (posix_memalign(&ptr, alignment, size) != 0) {
     return nullptr;
@@ -177,23 +182,16 @@ void *aligned_alloc_simd(std::size_t alignment, std::size_t size) noexcept {
   return ptr;
 
 #else
-  const std::size_t remainder = size % alignment;
-  if (remainder != 0) {
-    const std::size_t padding = alignment - remainder;
-
-    // Prevent potential integer overflow during size padding
-    if (size > (std::numeric_limits<std::size_t>::max)() - padding) {
-      return nullptr;
-    }
-    size += padding;
-  }
-
   return std::aligned_alloc(alignment, size);
 #endif
 }
 
+void *aligned_alloc_simd(std::size_t size) noexcept {
+  return aligned_alloc_simd(DEFAULT_SIMD_ALIGNMENT, size);
+}
+
 void aligned_free_simd(void *ptr) noexcept {
-  if (!ptr) {
+  if (ptr == nullptr) {
     return;
   }
 
@@ -202,34 +200,6 @@ void aligned_free_simd(void *ptr) noexcept {
 #else
   std::free(ptr);
 #endif
-}
-
-template <typename T> struct AlignedDeleter {
-  void operator()(T *ptr) const noexcept {
-    if (ptr) {
-      ptr->~T();
-      aligned_free_simd(ptr);
-    }
-  }
-};
-
-template <typename T, typename... Args>
-[[nodiscard]] std::unique_ptr<T, AlignedDeleter<T>>
-make_aligned_unique(std::size_t alignment, Args &&...args) {
-  void *const mem = aligned_alloc_simd(alignment, sizeof(T));
-  if (!mem) {
-    throw std::bad_alloc();
-  }
-
-  try {
-    // Construct the object in the allocated aligned buffer
-    T *const ptr = ::new (mem) T(std::forward<Args>(args)...);
-    return std::unique_ptr<T, AlignedDeleter<T>>(ptr);
-  } catch (...) {
-    // Safely free the raw memory buffer if construction throws an exception
-    aligned_free_simd(mem);
-    throw;
-  }
 }
 
 // ============================================================================

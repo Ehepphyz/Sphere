@@ -67,6 +67,8 @@ public final class DebugPanel extends JPanel implements DebugAdapter.Listener {
 
     private DebugAdapter adapter;
     private File sessionFile;
+    /** The name the debugged program's variables appear under in the Variables tab. */
+    private String debugSource;
 
     public DebugPanel(Host host, SettingsManager settings) {
         this.host = host;
@@ -180,12 +182,19 @@ public final class DebugPanel extends JPanel implements DebugAdapter.Listener {
         // Python driver for a .py without the user choosing.
         if (name.endsWith(".py") || name.endsWith(".pyw")) {
             adapter = new PdbAdapter(settings);
+            debugSource = "python";
         } else if (name.endsWith(".c") || name.endsWith(".cpp") || name.endsWith(".cc")
                    || name.endsWith(".cxx") || name.endsWith(".c++")) {
             adapter = new GdbAdapter(settings);
+            debugSource = "cpp";
+        } else if (GdbAdapter.isFortran(name)) {
+            // gdb reads Fortran as it reads C: the debug tables carry the names,
+            // and it is the only way to see a compiled run before it ends.
+            adapter = new GdbAdapter(settings);
+            debugSource = "fortran";
         } else {
             append("No debugger for " + file.getName()
-                   + ". C, C++ and Python are supported.\n", true);
+                   + ". C, C++, Fortran and Python are supported.\n", true);
             return;
         }
         sessionFile = file;
@@ -234,6 +243,10 @@ public final class DebugPanel extends JPanel implements DebugAdapter.Listener {
             if (state == DebugAdapter.State.TERMINATED) {
                 variableModel.setRowCount(0);
                 stackModel.setRowCount(0);
+                // The frame is gone with the process. What the run left on disk
+                // is still true, so it takes its place rather than nothing.
+                com.sphere.components.variables.VariableStore.clear(debugSource);
+                com.sphere.components.variables.VariablesPanel.instance().reread();
             }
         });
     }
@@ -241,6 +254,7 @@ public final class DebugPanel extends JPanel implements DebugAdapter.Listener {
     @Override
     public void paused(DebugAdapter.StackFrame frame, List<DebugAdapter.StackFrame> callStack,
                        Map<String, String> variables) {
+        publish(variables);
         onEdt(() -> {
             variableModel.setRowCount(0);
             for (Map.Entry<String, String> entry : variables.entrySet()) {
@@ -255,6 +269,27 @@ public final class DebugPanel extends JPanel implements DebugAdapter.Listener {
             updateButtons(DebugAdapter.State.PAUSED);
             stateLabel.setText("paused");
         });
+    }
+
+    /**
+     * Hands the paused frame's variables to the Variables tab.
+     *
+     * A program that has ended can only be read from the file it left behind,
+     * which holds what it finished with. Stopped on a breakpoint it can be asked
+     * directly, so this is where a local, and a value part way through a run,
+     * become visible at all.
+     */
+    private void publish(Map<String, String> variables) {
+        if (debugSource == null) {
+            return;
+        }
+        java.util.List<com.sphere.components.variables.VariableStore.Variable> held =
+            new java.util.ArrayList<>();
+        for (Map.Entry<String, String> entry : variables.entrySet()) {
+            held.add(new com.sphere.components.variables.VariableStore.Variable(
+                debugSource, entry.getKey(), "local", entry.getValue()));
+        }
+        com.sphere.components.variables.VariableStore.publish(debugSource, held);
     }
 
     @Override

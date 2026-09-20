@@ -156,7 +156,7 @@ public class FindReplaceDialog extends JDialog {
                 } else {
                     editor.getHighlighter().addHighlight(index, index + len, painter);
                 }
-            } catch (BadLocationException e) { e.printStackTrace(); }
+            } catch (BadLocationException e) { com.sphere.core.JavaErrors.report("highlighting a match", e); }
         }
         
         if (focusIndex != -1) {
@@ -270,7 +270,7 @@ public class FindReplaceDialog extends JDialog {
                 positionOffsetShift += (replaceLength - findLength);
             }
         } catch (BadLocationException e) {
-            e.printStackTrace();
+            com.sphere.core.JavaErrors.report("replacing the text", e);
         }
 
         performFind(true); // Re-index counts and clear remaining highlight artifacts

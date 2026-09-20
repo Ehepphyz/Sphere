@@ -55,7 +55,7 @@ public class RootCompilerManager {
                 }
             }
         } catch (IOException e) {
-            System.err.println("[Compiler] Failed to read configuration: " + e.getMessage());
+            com.sphere.utils.AppLogger.error("[Compiler] Failed to read configuration: " + e.getMessage());
         }
 
         // Resolve references like $GPP_DIR or $FCAD_BASE
@@ -90,7 +90,7 @@ public class RootCompilerManager {
     public boolean compileSharedLibrary(String sourcePath, String outputPath, List<String> extraFlags) {
         // Safe-guard validation
         if (systemSafeMode) {
-            System.err.println("[Compiler] Compilation rejected: Safe Mode is currently ENABLED.");
+            com.sphere.utils.AppLogger.error("[Compiler] Compilation rejected: Safe Mode is currently ENABLED.");
             return false;
         }
 
@@ -154,11 +154,11 @@ public class RootCompilerManager {
                 System.out.println("[Compiler] Library successfully generated: " + outputPath);
                 return true;
             } else {
-                System.err.println("[Compiler] Compilation failed with exit code: " + exitCode);
+                com.sphere.utils.AppLogger.error("[Compiler] Compilation failed with exit code: " + exitCode);
                 return false;
             }
         } catch (IOException | InterruptedException e) {
-            System.err.println("[Compiler] Execution failed: " + e.getMessage());
+            com.sphere.utils.AppLogger.error("[Compiler] Execution failed: " + e.getMessage());
             Thread.currentThread().interrupt();
             return false;
         }

@@ -2,6 +2,7 @@ package com.sphere.core.commands;
 
 import com.sphere.utils.AppLogger;
 import javax.swing.SwingUtilities;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -11,11 +12,106 @@ import java.util.Optional;
 public class Handlers {
 
     // --- Core Commands ---
+    /**
+     * ":help" lists every command by category, ":help <category>" only that one.
+     *
+     * A word that names no category is looked for inside the names and the
+     * descriptions, so ":help histogram" finds what it should even though no
+     * command starts with that word.
+     */
     public static void help(String input, CommandExecutionContext c) {
-        AppLogger.info("Available commands:");
-        CommandDefinitions.all().values().forEach(cmd ->
-            AppLogger.raw("  " + cmd.name + " — " + cmd.description)
-        );
+        final Map<String, String> commands = CommandDefinitions.allForHelp();
+        final String[] args = (c == null) ? null : c.getArgs();
+        final String wanted = (args == null || args.length == 0)
+            ? "" : String.join(" ", args).trim();
+
+        if (wanted.isEmpty() || "all".equalsIgnoreCase(wanted)) {
+            helpEverything(commands);
+        } else {
+            helpCategory(commands, wanted);
+        }
+    }
+
+    /** Every command, under the heading of its category. */
+    static void helpEverything(Map<String, String> commands) {
+        AppLogger.info("Commands by category. ':help <category>' shows one of them.");
+        java.util.Map<String, java.util.List<String>> categories = CommandDefinitions.sections();
+        for (java.util.Map.Entry<String, java.util.List<String>> entry : categories.entrySet()) {
+            AppLogger.raw("");
+            AppLogger.raw("  [" + entry.getKey() + "]");
+            for (String name : entry.getValue()) {
+                AppLogger.raw("    " + name + " - " + commands.getOrDefault(name, ""));
+            }
+        }
+    }
+
+    /** One category, one branch inside it, or whatever the word turns up. */
+    static void helpCategory(Map<String, String> commands, String wanted) {
+        final String query = wanted.replaceFirst("^:+", "").trim().toLowerCase(java.util.Locale.ROOT);
+        java.util.Map<String, java.util.List<String>> categories = CommandDefinitions.sections();
+
+        java.util.List<String> picked = categories.get(helpCategoryFor(query));
+        if (picked == null) {
+            // Not a category: the start of a command, so ":help root hist" works.
+            final String prefix = ":" + query;
+            picked = new java.util.ArrayList<>();
+            for (String name : commands.keySet()) {
+                if (name.equals(prefix) || name.startsWith(prefix + " ")) {
+                    picked.add(name);
+                }
+            }
+        }
+        if (!picked.isEmpty()) {
+            list(commands, picked, query);
+            return;
+        }
+
+        // Still nothing: look for the word in the names and in what they say.
+        java.util.List<String> found = new java.util.ArrayList<>();
+        for (Map.Entry<String, String> entry : commands.entrySet()) {
+            if (entry.getKey().toLowerCase(java.util.Locale.ROOT).contains(query)
+                || entry.getValue().toLowerCase(java.util.Locale.ROOT).contains(query)) {
+                found.add(entry.getKey());
+            }
+        }
+        if (found.isEmpty()) {
+            AppLogger.error("Nothing about '" + query + "'. ':help' lists the categories.");
+            return;
+        }
+        list(commands, found, query);
+    }
+
+    /**
+     * The category a word stands for.
+     *
+     * Categories are named after the first word of their commands, which is not
+     * always the word that comes to mind.
+     */
+    static String helpCategoryFor(String query) {
+        return switch (query) {
+            case "core", "sphere", "general" -> "system";
+            case "file", "fs" -> "files";
+            case "dir", "directory", "directories" -> "dirs";
+            case "python" -> "py";
+            case "fortran" -> "fort";
+            case "javascript" -> "js";
+            case "c++", "cxx" -> "cpp";
+            case "variables", "var" -> "vars";
+            case "plot" -> "plots";
+            case "snippets" -> "snippet";
+            case "tool" -> "tools";
+            case "logs" -> "log";
+            default -> query;
+        };
+    }
+
+    /** Prints the commands asked for, with what each one does. */
+    static void list(Map<String, String> commands,
+                             java.util.Collection<String> names, String what) {
+        AppLogger.info("[" + what + "]");
+        for (String name : names) {
+            AppLogger.raw("  " + name + " - " + commands.getOrDefault(name, ""));
+        }
     }
 
     public static void version(String input, CommandExecutionContext c) {
@@ -108,6 +204,7 @@ public class Handlers {
         String previous = c.ctx.getActiveProject();
         c.ctx.setActiveProject(null);
         com.sphere.components.rootview.RootPlotsPanel.instance().setOutputFolder(null);
+        com.sphere.components.variables.VariablesPanel.instance().setFolder(null);
         AppLogger.raw("Closed " + previous);
     }
 
@@ -149,7 +246,7 @@ public class Handlers {
      * The file is written at creation from the modules the user ticked; saying
      * only that it exists left it a file nobody ever opened.
      */
-    private static void describeWorkflow(java.nio.file.Path workflow) {
+    static void describeWorkflow(java.nio.file.Path workflow) {
         if (!java.nio.file.Files.isRegularFile(workflow)) {
             return;
         }
@@ -619,8 +716,8 @@ public class Handlers {
         reportTool("python", "PYTHON_EXEC", "python3", "--version");
     }
 
-    public static void pyVars(String input, CommandExecutionContext c) { 
-        AppLogger.info("[py] Discovered environment state variables (placeholder)"); 
+    public static void pyVars(String input, CommandExecutionContext c) {
+        askAndReport("python");
     }
 
     // --- C++ Engine ---
@@ -637,8 +734,8 @@ public class Handlers {
         switchMode(c, null, ""); 
     }
 
-    public static void cppVars(String input, CommandExecutionContext c) { 
-        AppLogger.info("[cpp] Inspecting memory structure definitions (placeholder)"); 
+    public static void cppVars(String input, CommandExecutionContext c) {
+        askAndReport("cpp");
     }
 
     public static void cppDiag(String input, CommandExecutionContext c) {
@@ -646,19 +743,6 @@ public class Handlers {
     }
 
     // --- JS Engine ---
-    public static void jsMode(String input, CommandExecutionContext c) { 
-        String clean = (input != null) ? input.trim() : "";
-        if (clean.equals(":js mode")) {
-            switchMode(c, "js", "[js]"); 
-        } else {
-            AppLogger.info("[js] Evaluating targeted runtime source code line...");
-        }
-    }
-
-    public static void jsExit(String input, CommandExecutionContext c) { 
-        switchMode(c, null, ""); 
-    }
-
     public static void jsEnv(String input, CommandExecutionContext c) {
         reportTool("js", "NODE_DIR", "node", "-p", "process.versions.v8");
     }
@@ -766,11 +850,11 @@ public class Handlers {
     }
 
     /** Projects live in WorkSpace/, one folder each. */
-    private static java.nio.file.Path workspaceRoot() {
+    static java.nio.file.Path workspaceRoot() {
         return java.nio.file.Path.of("WorkSpace");
     }
 
-    private static java.util.List<java.nio.file.Path> workspaceProjects() {
+    static java.util.List<java.nio.file.Path> workspaceProjects() {
         java.nio.file.Path root = workspaceRoot();
         if (!java.nio.file.Files.isDirectory(root)) {
             AppLogger.error("No WorkSpace folder at " + root.toAbsolutePath());
@@ -784,7 +868,7 @@ public class Handlers {
         }
     }
 
-    private static void setActiveProject(CommandExecutionContext c, String verb) {
+    static void setActiveProject(CommandExecutionContext c, String verb) {
         String[] args = c.getArgs();
         if (args.length == 0) {
             AppLogger.error("Usage: :project " + verb + " <name>");
@@ -814,12 +898,15 @@ public class Handlers {
         // whichever folder Sphere happened to start in.
         com.sphere.components.rootview.RootPlotsPanel.instance()
             .setOutputFolder(project.toAbsolutePath().resolve("plots"));
+        com.sphere.components.variables.VariablesPanel.instance()
+            .setFolder(project.toAbsolutePath().resolve(
+                com.sphere.components.variables.VariablesPanel.FOLDER_NAME));
 
         AppLogger.raw("Active project: " + name + "  (" + project.toAbsolutePath() + ")");
     }
 
     /** files, folders, bytes. */
-    private static long[] tallyTree(java.nio.file.Path root) {
+    static long[] tallyTree(java.nio.file.Path root) {
         long files = 0;
         long folders = 0;
         long bytes = 0;
@@ -842,7 +929,7 @@ public class Handlers {
         return new long[]{files, Math.max(0, folders - 1), bytes};
     }
 
-    private static String humanBytes(long bytes) {
+    static String humanBytes(long bytes) {
         if (bytes < 1024) {
             return bytes + " B";
         }
@@ -857,7 +944,7 @@ public class Handlers {
     }
 
     /** Runs a declared tool with the given arguments and prints its first answer. */
-    private static void reportTool(String label, String key, String fallback, String... args) {
+    static void reportTool(String label, String key, String fallback, String... args) {
         com.sphere.utils.SettingsManager sm = new com.sphere.utils.SettingsManager();
         if (sm.isDeclaredEmpty(key)) {
             AppLogger.raw("  " + label + ": " + key + " is empty in settings.conf, which disables it.");
@@ -891,7 +978,7 @@ public class Handlers {
         }
     }
 
-    private static void switchMode(CommandExecutionContext c, String mode, String indicator) {
+    static void switchMode(CommandExecutionContext c, String mode, String indicator) {
         if (c != null && c.ctx != null) {
             c.ctx.currentMode = mode;
             if (c.ctx.modeUpdater != null) {
@@ -977,13 +1064,12 @@ public class Handlers {
     // --- ROOT BRIDGE EXECUTION ROUTINES ---
     // =========================================================================
 
-
     // --- ROOT Framework Engine ---
     // --- ROOT bridge plumbing ---
 
-    private static final long TIMEOUT_MS = 5000L;
+    static final long TIMEOUT_MS = 5000L;
 
-    private static com.sphere.core.rootbackend.RootBackend backend(CommandExecutionContext c) {
+    static com.sphere.core.rootbackend.RootBackend backend(CommandExecutionContext c) {
         if (c == null || c.ctx == null || c.ctx.router == null) {
             AppLogger.error("Command execution context is lost or missing router driver configuration.");
             return null;
@@ -1037,11 +1123,11 @@ public class Handlers {
 
     // --- Unknown command rather than a puzzling interpreter error ---
 
-    private static final java.util.regex.Pattern UNDECLARED =
+    static final java.util.regex.Pattern UNDECLARED =
         java.util.regex.Pattern.compile("use of undeclared identifier '([^']+)'");
 
     /** The identifier cling did not know, or null when it refused for another reason. */
-    private static String undeclaredIdentifier(String answer) {
+    static String undeclaredIdentifier(String answer) {
         if (answer == null || !answer.startsWith("ERROR")) {
             return null;
         }
@@ -1049,7 +1135,7 @@ public class Handlers {
         return m.find() ? m.group(1) : null;
     }
 
-    private static void reportUnknown(String text, java.util.List<String> near,
+    static void reportUnknown(String text, java.util.List<String> near,
                                       String diagnostic) {
         AppLogger.error("Unknown command: :root " + text.trim());
         for (int i = 0; i < near.size(); i++) {
@@ -1070,7 +1156,7 @@ public class Handlers {
         }
     }
 
-    private static String firstLine(String text) {
+    static String firstLine(String text) {
         if (text == null) {
             return "";
         }
@@ -1083,7 +1169,7 @@ public class Handlers {
     }
 
     /** The suggested command, carrying over the words that were not part of its name. */
-    private static String runnable(String name, String text) {
+    static String runnable(String name, String text) {
         final String[] words = name.substring(6).toLowerCase(java.util.Locale.ROOT).split("\\s+");
         final StringBuilder out = new StringBuilder(name);
         for (String typed : text.trim().split("\\s+")) {
@@ -1107,7 +1193,7 @@ public class Handlers {
      * matched when some typed word is within two edits of it; the command matching
      * the most words wins, ties broken by how close those matches are.
      */
-    private static java.util.List<String> nearestCommands(String text) {
+    static java.util.List<String> nearestCommands(String text) {
         final String[] typed = text.toLowerCase(java.util.Locale.ROOT).trim().split("\\s+");
         final int lookAt = Math.min(typed.length, 4);
         final java.util.List<String[]> scored = new java.util.ArrayList<>();
@@ -1146,7 +1232,7 @@ public class Handlers {
         return out;
     }
 
-    private static int editDistance(String a, String b) {
+    static int editDistance(String a, String b) {
         final int n = b.length();
         int[] previous = new int[n + 1];
         int[] current = new int[n + 1];
@@ -1168,7 +1254,7 @@ public class Handlers {
     }
 
     /** Everything after the registered command name. */
-    private static String args(String input, String command) {
+    static String args(String input, String command) {
         if (input == null) {
             return "";
         }
@@ -1178,12 +1264,12 @@ public class Handlers {
             : s.replaceFirst("^:root\\s+", "").trim();
     }
 
-    private static void usage(String text) {
+    static void usage(String text) {
         AppLogger.warn("Usage: " + text);
     }
 
     /** Sends a native opcode and prints the engine's answer. */
-    private static void send(CommandExecutionContext c, short opcode, int jobId, String payload) {
+    static void send(CommandExecutionContext c, short opcode, int jobId, String payload) {
         com.sphere.core.rootbackend.RootBackend b = backend(c);
         if (b == null) {
             return;
@@ -1199,7 +1285,7 @@ public class Handlers {
     }
 
     /** Runs one C++ expression in the engine's interpreter and prints the result. */
-    private static void cling(CommandExecutionContext c, String expression) {
+    static void cling(CommandExecutionContext c, String expression) {
         String answer = clingAnswer(c, expression);
         if (answer != null) {
             AppLogger.info(answer);
@@ -1207,7 +1293,7 @@ public class Handlers {
     }
 
     /** Same, but hands the answer back instead of printing it. Null when none came. */
-    private static String clingAnswer(CommandExecutionContext c, String expression) {
+    static String clingAnswer(CommandExecutionContext c, String expression) {
         com.sphere.core.rootbackend.RootBackend b = backend(c);
         if (b == null) {
             return null;
@@ -1221,17 +1307,17 @@ public class Handlers {
     }
 
     /** First token, the rest, or "" when absent. */
-    private static String head(String s) {
+    static String head(String s) {
         int i = s.indexOf(' ');
         return i < 0 ? s : s.substring(0, i);
     }
 
-    private static String tail(String s) {
+    static String tail(String s) {
         int i = s.indexOf(' ');
         return i < 0 ? "" : s.substring(i + 1).trim();
     }
 
-    private static int asInt(String s, int fallback) {
+    static int asInt(String s, int fallback) {
         try {
             return Integer.parseInt(s.trim());
         } catch (Exception e) {
@@ -1242,201 +1328,78 @@ public class Handlers {
     /** A named ROOT object, cast to `type`. Handles are names, not numbers:
      *  the engine keeps no registry for histograms, objects, graphs or canvases. */
     /** A checked lookup: a missing or mistyped object raises instead of yielding null. */
-    private static String obj(String type, String name) {
+    /** Asks the engine for its own figures. The view names what to report. */
+    static void metrics(CommandExecutionContext c, String view) {
+        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SYS_METRICS, 0, view);
+    }
+
+    /**
+     * Binds what an expression builds to a name, so the next command finds it.
+     *
+     * A data frame, a workspace, a factory, a connection or a socket is not a
+     * named ROOT object, so the commands that used one referred to a variable
+     * the interpreter never had.
+     */
+    static String keep(String name, String type, String expression) {
+        return "SphereBridge::Keep<" + type + ">(\"" + name + "\", " + expression
+             + ", \"" + type + "\")";
+    }
+
+    /** The object a name is bound to, refused if it holds something else. */
+    static String held(String name, String type) {
+        return "SphereBridge::Held<" + type + ">(\"" + name + "\")";
+    }
+
+    /** The words of an argument list, with the commas a C++ call needs. */
+    static String csv(String rest) {
+        return (rest == null || rest.isBlank())
+            ? "" : rest.trim().replaceAll("[,\\s]+", ", ");
+    }
+
+    /** The same, with each word quoted, for a call that takes strings. */
+    static String quotedCsv(String rest) {
+        if (rest == null || rest.isBlank()) {
+            return "";
+        }
+        final String[] words = rest.trim().split("[,\\s]+");
+        final StringBuilder out = new StringBuilder();
+        for (String word : words) {
+            if (out.length() > 0) {
+                out.append(", ");
+            }
+            out.append('"').append(word).append('"');
+        }
+        return out.toString();
+    }
+
+    /** The words of a request, or an empty array when there is nothing to read. */
+    static String[] words(String a) {
+        return a.isBlank() ? new String[0] : a.trim().split("\\s+");
+    }
+
+    /** The words from `from` on, joined back with single spaces. */
+    static String join(String[] w, int from) {
+        if (w == null || from >= w.length) {
+            return "";
+        }
+        final StringBuilder out = new StringBuilder();
+        for (int i = from; i < w.length; i++) {
+            if (out.length() > 0) {
+                out.append(' ');
+            }
+            out.append(w[i]);
+        }
+        return out.toString();
+    }
+
+    // --- New ROOT coverage: one family per ROOT class, native where the
+    // --- engine can answer on its own and through the interpreter otherwise.
+
+    static String obj(String type, String name) {
         return "SphereBridge::Need<" + type + ">(\"" + name + "\", \"" + type + "\")";
     }
 
     // --- Level 1: native opcodes ---
-
-    public static void rootPing(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_PING, 0, null);
-    }
-
-    public static void rootVersion(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SYS_VERSION, 0, null);
-    }
-
-    public static void rootSysUptime(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SYS_UPTIME, 0, null);
-    }
-
-    public static void rootSysConfig(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SYS_CONFIG, 0, args(i, ":root sys config"));
-    }
-
-    public static void rootOpenFile(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file open");
-        if (a.isEmpty()) {
-            usage(":root file open <path>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_OPEN_FILE, 0, head(a));
-    }
-
-    public static void rootClose(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file close");
-        if (a.isEmpty()) {
-            usage(":root file close <id|name>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_CLOSE_FILE, 0, head(a));
-    }
-
-    public static void rootFileList(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_LIST, 0, null);
-    }
-
-    public static void rootFileScan(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file scan");
-        if (a.isEmpty()) {
-            usage(":root file scan <path> [--json]");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_SCAN, 0, a);
-    }
-
-    public static void rootCloseAll(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_CLOSE_ALL_FILES, 0, null);
-    }
-
-    public static void rootFileWrite(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file write");
-        if (a.isEmpty()) {
-            usage(":root file write <id|name>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SAVE_FILE, 0, head(a));
-    }
-
-    public static void rootSchemaDiscover(String i, CommandExecutionContext c) {
-        String a = args(i, ":root schema discover");
-        if (a.isEmpty()) {
-            usage(":root schema discover <tree_id>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_SCHEMA_DISCOVER, asInt(a, 0), null);
-    }
-
-    /**
-     * Binds a tree to an id, which every other tree command then works on.
-     *
-     * Nothing else creates that binding: without it the engine answers every
-     * tree command by saying it has no tree.
-     */
-    public static void rootTreeAttach(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree attach");
-        String id = head(a);
-        String rest = tail(a);
-        if (id.isEmpty() || rest.isEmpty()) {
-            usage(":root tree attach <tree_id> <file_id|name> <tree_path>");
-            return;
-        }
-        String fileToken = head(rest);
-        String treePath = tail(rest);
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_INSPECT,
-             asInt(id, 0), fileToken + "\t" + treePath);
-    }
-
-    public static void rootTreePrint(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree print");
-        if (a.isEmpty()) {
-            usage(":root tree print <tree_id>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_INSPECT, asInt(a, 0), null);
-    }
-
-    public static void rootTreeEntries(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree entries");
-        if (a.isEmpty()) {
-            usage(":root tree entries <tree_id>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_QUERY_ENTRIES, asInt(a, 0), null);
-    }
-
-    public static void rootTreeBranches(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree branches");
-        if (a.isEmpty()) {
-            usage(":root tree branches <tree_id>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_SCAN_BRANCHES, asInt(a, 0), null);
-    }
-
-    public static void rootTreeLeaves(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree leaves");
-        if (a.isEmpty()) {
-            usage(":root tree leaves <tree_id>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_SCAN_BRANCHES, asInt(a, 0), null);
-    }
-
-    public static void rootTreeGetentry(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree getentry");
-        if (a.isEmpty()) {
-            usage(":root tree getentry <tree_id> <entry>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_GET_ENTRY,
-             asInt(head(a), 0), tail(a));
-    }
-
-    /**
-     * A column comes back as typed numbers, so it is read as numbers.
-     * Printing the block as text would show the raw bytes.
-     */
-    public static void rootTreeColumn(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree column");
-        if (a.isEmpty() || tail(a).isEmpty()) {
-            usage(":root tree column <tree_id> <branch>");
-            return;
-        }
-        com.sphere.core.rootbackend.RootBackend b = backend(c);
-        if (b == null) {
-            return;
-        }
-        String branch = tail(a);
-        double[] values = b.treeColumnAwait(asInt(head(a), 0), branch, TIMEOUT_MS);
-        if (values.length == 0) {
-            AppLogger.error(whyNoColumn(b, asInt(head(a), 0), branch));
-            return;
-        }
-        com.sphere.components.rootview.RootPlotsPanel.instance()
-            .showColumn(branch, values);
-        AppLogger.info(summarize(branch, values));
-    }
-
-    /** Draws one branch against another in the Plots tab. */
-    public static void rootTreePlot(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree plot");
-        String id = head(a);
-        String rest = tail(a);
-        if (id.isEmpty() || rest.isEmpty() || tail(rest).isEmpty()) {
-            usage(":root tree plot <tree_id> <x_branch> <y_branch>");
-            return;
-        }
-        com.sphere.core.rootbackend.RootBackend b = backend(c);
-        if (b == null) {
-            return;
-        }
-        final int jobId = asInt(id, 0);
-        final String xName = head(rest);
-        final String yName = head(tail(rest));
-        double[] xValues = b.treeColumnAwait(jobId, xName, TIMEOUT_MS);
-        double[] yValues = b.treeColumnAwait(jobId, yName, TIMEOUT_MS);
-        if (xValues.length == 0 || yValues.length == 0) {
-            AppLogger.error(whyNoColumn(b, jobId,
-                xValues.length == 0 ? xName : yName));
-            return;
-        }
-        com.sphere.components.rootview.RootPlotsPanel.instance()
-            .showCurve(xName, yName, xValues, yValues);
-        AppLogger.info(String.format(java.util.Locale.ROOT,
-            "%s vs %s drawn in the Plots tab, %d points",
-            yName, xName, Math.min(xValues.length, yValues.length)));
-    }
 
     // ---- the Plots tab ------------------------------------------------------
 
@@ -1511,13 +1474,319 @@ public class Handlers {
         }
     }
 
+    // ---- Julia --------------------------------------------------------------
+
+    /** The one interpreter every Julia command shares. */
+    static com.sphere.core.julia.JuliaSession julia() {
+        return com.sphere.core.julia.JuliaSession.instance(
+            new com.sphere.utils.SettingsManager());
+    }
+
+    public static void juliaStart(String i, CommandExecutionContext c) {
+        try {
+            julia().start();
+            AppLogger.info("Julia session open. What it defines stays between commands.");
+        } catch (java.io.IOException unavailable) {
+            AppLogger.error(unavailable.getMessage());
+        }
+    }
+
+    public static void juliaStop(String i, CommandExecutionContext c) {
+        julia().shutdown();
+        AppLogger.info("Julia session closed. Its variables went with it.");
+    }
+
+    public static void juliaMode(String i, CommandExecutionContext c) {
+        String clean = (i != null) ? i.trim() : "";
+        if (clean.equals(":julia mode")) {
+            switchMode(c, "julia", "[julia]");
+        }
+    }
+
+    public static void juliaExit(String i, CommandExecutionContext c) {
+        switchMode(c, null, "");
+    }
+
+    // ---- the permanent modes ------------------------------------------------
+
+    /** Prints what the three columns measure and where those widths came from. */
+    public static void layoutReport(String i, CommandExecutionContext c) {
+        AppLogger.info(com.sphere.Sphere.layoutReport());
+    }
+
+    public static void fortMode(String i, CommandExecutionContext c) {
+        String clean = (i != null) ? i.trim() : "";
+        if (clean.equals(":fort mode")) {
+            switchMode(c, "fortran", "[fortran]");
+        }
+    }
+
+    public static void fortExit(String i, CommandExecutionContext c) {
+        switchMode(c, null, "");
+    }
+
+    /** The mode whose lines :exec would run, or null when none is active. */
+    static String collectingMode(CommandExecutionContext c) {
+        final String mode = (c == null || c.ctx == null) ? null : c.ctx.currentMode;
+        if (!com.sphere.core.exec.CodeBuffer.collects(mode)) {
+            AppLogger.error("No permanent mode is active. Enter one with \":py mode\","
+                            + " \":cpp mode\", \":julia mode\" or \":fort mode\".");
+            return null;
+        }
+        return mode;
+    }
+
+    public static void execReset(String i, CommandExecutionContext c) {
+        final String mode = collectingMode(c);
+        if (mode != null) {
+            com.sphere.core.exec.CodeBuffer.clear(mode);
+        }
+    }
+
+    /**
+     * Runs what a mode still holds. With Enter running each finished line, only
+     * Fortran normally has anything left here: it has no interpreter, so its
+     * program is built up first and run by this command.
+     */
+    public static void execRun(String i, CommandExecutionContext c) {
+        final String mode = collectingMode(c);
+        if (mode == null) {
+            return;
+        }
+        final String code = com.sphere.core.exec.CodeBuffer.text(mode);
+        if (code.isBlank()) {
+            AppLogger.error("Nothing to run: the " + mode + " block is empty.");
+            return;
+        }
+        if (!"fortran".equals(mode)) {
+            com.sphere.core.exec.CodeBuffer.clear(mode);
+        }
+        if (c.ctx != null && c.ctx.router != null) {
+            c.ctx.router.runModeBlock(mode, code, true);
+        }
+    }
+
+    /** Runs a file in the session, so what it defines is still there afterwards. */
+    public static void juliaRun(String i, CommandExecutionContext c) {
+        String a = args(i, ":julia run");
+        if (a.isEmpty()) {
+            usage(":julia run <file.jl>");
+            return;
+        }
+        java.io.File file = resolve(a);
+        if (!file.isFile()) {
+            AppLogger.error("No such file: " + file);
+            return;
+        }
+        try {
+            julia().start();
+        } catch (java.io.IOException unavailable) {
+            AppLogger.error(unavailable.getMessage());
+            return;
+        }
+        julia().runFile(file);
+    }
+
+    public static void juliaVars(String i, CommandExecutionContext c) {
+        askAndReport("julia");
+    }
+
+    public static void juliaDiag(String i, CommandExecutionContext c) {
+        reportTool("julia", "JULIA_DIR", "julia", "--version");
+    }
+
+    // ---- variables ----------------------------------------------------------
+
+    /** Lists what every language is holding right now. */
+    public static void varsList(String i, CommandExecutionContext c) {
+        registerRootVariables();
+        java.util.List<com.sphere.components.variables.VariableStore.Variable> held =
+            com.sphere.components.variables.VariableStore.all();
+        if (held.isEmpty()) {
+            AppLogger.raw("No variable yet. A running language answers :vars refresh; "
+                + "one that has ended writes a file in "
+                + variablesFolder() + ", and :vars helper <language> writes what it "
+                + "takes to do that.");
+            return;
+        }
+        StringBuilder text = new StringBuilder();
+        String source = "";
+        for (com.sphere.components.variables.VariableStore.Variable variable : held) {
+            if (!variable.source().equals(source)) {
+                source = variable.source();
+                text.append(text.length() == 0 ? "" : "\n").append(source).append(':');
+            }
+            text.append(String.format("%n  %-28s %-16s %s",
+                        variable.name(), variable.type(), variable.value()));
+        }
+        AppLogger.raw(text.toString());
+    }
+
+    /** Says where the variables would come from, and what is in the way. */
+    public static void varsDiag(String i, CommandExecutionContext c) {
+        registerRootVariables();
+        AppLogger.info(com.sphere.components.variables.VariablesPanel.instance()
+                                                                    .diagnosis());
+    }
+
+    /** Asks the languages that are still running, and rereads the folder. */
+    public static void varsRefresh(String i, CommandExecutionContext c) {
+        registerRootVariables();
+        com.sphere.components.variables.VariablesPanel.instance().refreshAll();
+        AppLogger.info("Asked " + String.join(", ",
+            com.sphere.components.variables.VariableSources.names())
+            + " and reread " + variablesFolder());
+    }
+
+    public static void varsClear(String i, CommandExecutionContext c) {
+        String a = args(i, ":vars clear");
+        // The files the runs left behind go too, otherwise the next pass over the
+        // folder publishes them again and the table fills back up.
+        final int removed = com.sphere.components.variables.VariablesPanel.instance()
+                                .forget(a.isEmpty() ? null : a);
+        AppLogger.info((a.isEmpty() ? "Variables tab emptied"
+                                    : "Dropped the variables of " + a)
+                       + (removed == 0 ? "" : ", " + removed + " file(s) removed"));
+    }
+
+    /** Shows or moves the folder the variable files are read from. */
+    public static void varsFolder(String i, CommandExecutionContext c) {
+        String a = args(i, ":vars folder");
+        com.sphere.components.variables.VariablesPanel panel =
+            com.sphere.components.variables.VariablesPanel.instance();
+        if (!a.isEmpty()) {
+            panel.setFolder(resolve(a).toPath());
+        }
+        AppLogger.info("Variables are read from " + variablesFolder());
+    }
+
+    public static void varsWatch(String i, CommandExecutionContext c) {
+        String a = args(i, ":vars watch");
+        com.sphere.components.variables.VariablesPanel panel =
+            com.sphere.components.variables.VariablesPanel.instance();
+        if (a.isEmpty()) {
+            StringBuilder text = new StringBuilder("Watching for variable files in:");
+            for (java.nio.file.Path folder : panel.watched()) {
+                text.append("\n  ").append(folder);
+            }
+            AppLogger.raw(text.toString());
+            return;
+        }
+        java.io.File folder = resolve(a);
+        if (!folder.isDirectory()) {
+            AppLogger.error("Not a folder: " + folder);
+            return;
+        }
+        panel.watch(folder.toPath());
+        AppLogger.info("Watching " + folder + " for variable files");
+    }
+
+    public static void varsUnwatch(String i, CommandExecutionContext c) {
+        String a = args(i, ":vars unwatch");
+        if (a.isEmpty()) {
+            usage(":vars unwatch <folder>");
+            return;
+        }
+        final boolean dropped = com.sphere.components.variables.VariablesPanel
+            .instance().unwatch(resolve(a).toPath());
+        if (dropped) {
+            AppLogger.info("No longer watching " + resolve(a));
+        } else {
+            AppLogger.error("That folder was not being watched. "
+                + "Try :vars watch to see which are.");
+        }
+    }
+
+    /** Turns off, or back on, collecting a Python script's variables. */
+    public static void varsWrap(String i, CommandExecutionContext c) {
+        String a = args(i, ":vars wrap").toLowerCase(java.util.Locale.ROOT);
+        if (a.equals("on") || a.equals("off")) {
+            com.sphere.components.variables.PythonProbe.setWrapping(a.equals("on"));
+        } else if (!a.isEmpty()) {
+            usage(":vars wrap [on|off]");
+            return;
+        }
+        AppLogger.info("A Python script "
+            + (com.sphere.components.variables.PythonProbe.isWrapping()
+               ? "is run so that its variables are collected"
+               : "is run as it is, and publishes nothing"));
+    }
+
+    /** Writes what a language needs in order to publish its variables. */
+    public static void varsHelper(String i, CommandExecutionContext c) {
+        String a = args(i, ":vars helper");
+        if (a.isEmpty()) {
+            usage(":vars helper <" + String.join("|",
+                com.sphere.components.variables.VariableHelpers.languages()) + ">");
+            return;
+        }
+        try {
+            java.nio.file.Path folder = com.sphere.components.variables.VariablesPanel
+                .instance().folder().getParent();
+            java.nio.file.Path written = com.sphere.components.variables.VariableHelpers
+                .write(folder == null ? java.nio.file.Path.of(".") : folder, a);
+            AppLogger.info("Wrote " + written);
+        } catch (java.io.IOException unwritable) {
+            AppLogger.error(unwritable.getMessage());
+        }
+    }
+
+    /** Asks one language again, then says what it answered. */
+    static void askAndReport(String source) {
+        registerRootVariables();
+        com.sphere.components.variables.VariablesPanel.instance().refreshAll();
+        int held = 0;
+        for (com.sphere.components.variables.VariableStore.Variable variable
+                : com.sphere.components.variables.VariableStore.all()) {
+            if (variable.source().equals(source)) {
+                held++;
+            }
+        }
+        if (held > 0) {
+            AppLogger.info(held + " " + source + " variables in the Variables tab");
+            return;
+        }
+        AppLogger.raw("Nothing from " + source + " yet. It answers while it is running; "
+            + "once it has ended it has to leave a " + source + ".vars file in "
+            + variablesFolder() + ". Try :vars helper " + source + ".");
+    }
+
+    /** The ROOT interpreter is only asked once it exists. */
+    static void registerRootVariables() {
+        if (!com.sphere.components.variables.VariableSources.names()
+                .contains(com.sphere.components.variables.RootVariables.SOURCE)
+            && com.sphere.core.rootbackend.RootBackend.getInstance() != null) {
+            com.sphere.components.variables.VariableSources.register(
+                new com.sphere.components.variables.RootVariables());
+        }
+    }
+
+    static String variablesFolder() {
+        try {
+            return com.sphere.components.variables.VariablesPanel.instance()
+                                                                 .folder().toString();
+        } catch (java.io.IOException unreachable) {
+            return "the variables folder";
+        }
+    }
+
+    /** Says what the clipboard holds and which fields answer the copy keys. */
+    public static void clipStatus(String i, CommandExecutionContext c) {
+        AppLogger.info(com.sphere.components.ClipboardBridge.status());
+    }
+
+    /** Writes a marker to the clipboard and reads it back. */
+    public static void clipTest(String i, CommandExecutionContext c) {
+        AppLogger.info(com.sphere.components.ClipboardBridge.roundTrip());
+    }
+
     public static void plotsClear(String i, CommandExecutionContext c) {
         com.sphere.components.rootview.RootPlotsPanel.instance().clear();
         AppLogger.info("Plots tab emptied");
     }
 
     /** A path as typed, taken from the console's own folder when relative. */
-    private static java.io.File resolve(String path) {
+    static java.io.File resolve(String path) {
         java.io.File given = new java.io.File(path);
         return given.isAbsolute() ? given
             : com.sphere.core.fs.WorkingDirectory.get().resolve(path).toFile();
@@ -1530,7 +1799,7 @@ public class Handlers {
      * three different moves: attach a tree, fix the name, or pick another
      * branch.
      */
-    private static String whyNoColumn(com.sphere.core.rootbackend.RootBackend b,
+    static String whyNoColumn(com.sphere.core.rootbackend.RootBackend b,
                                       int jobId, String branch) {
         return whyNoColumn(branchesOf(b, jobId), jobId, branch);
     }
@@ -1550,7 +1819,7 @@ public class Handlers {
     }
 
     /** The branch names of a bound tree, empty when none is bound. */
-    private static java.util.List<String> branchesOf(
+    static java.util.List<String> branchesOf(
             com.sphere.core.rootbackend.RootBackend b, int jobId) {
         java.util.List<String> names = new java.util.ArrayList<>();
         String answer = b.treeBranchesAwait(jobId, TIMEOUT_MS);
@@ -1565,7 +1834,7 @@ public class Handlers {
     }
 
     /** How many values came back, what they span, and the first of them. */
-    private static String summarize(String branch, double[] values) {
+    static String summarize(String branch, double[] values) {
         double min = values[0];
         double max = values[0];
         double sum = 0;
@@ -1587,903 +1856,11 @@ public class Handlers {
             branch, values.length, min, max, sum / values.length, first);
     }
 
-    public static void rootTreeStats(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree stats");
-        if (a.isEmpty() || tail(a).isEmpty()) {
-            usage(":root tree stats <tree_id> <branch>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_COMPUTE_STATS,
-             asInt(head(a), 0), tail(a));
-    }
-
-    public static void rootTreeFilter(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree filter");
-        if (a.isEmpty() || tail(a).isEmpty()) {
-            usage(":root tree filter <tree_id> <expression>");
-            return;
-        }
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_APPLY_FILTER,
-             asInt(head(a), 0), tail(a));
-    }
-
-    public static void rootOpenRemoteFile(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file open-remote");
-        if (a.isEmpty()) {
-            usage(":root file open-remote <url>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TFile::Open(\"" + a0 + "\")");
-    }
-
-    public static void rootLs(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_KEYS, 0,
-             head(args(i, ":root file ls")));
-    }
-
-    public static void rootFileKeys(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_KEYS, 0,
-             head(args(i, ":root file keys")));
-    }
-
-    public static void rootFileCd(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file cd");
-        if (a.isEmpty()) {
-            usage(":root file cd <path>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDirectory->cd(\"" + a0 + "\")");
-    }
-
-    public static void rootFilePwd(String i, CommandExecutionContext c) {
-        cling(c, "gDirectory->pwd()");
-    }
-
-    public static void rootFileDir(String i, CommandExecutionContext c) {
-        send(c, com.sphere.core.rootbackend.RootBackend.CMD_FILE_KEYS, 0,
-             head(args(i, ":root file dir")));
-    }
-
-    public static void rootFileGet(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file get");
-        if (a.isEmpty()) {
-            usage(":root file get <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDirectory->Get(\"" + a0 + "\")->ClassName()");
-    }
-
-    public static void rootFileRecreate(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file recreate");
-        if (a.isEmpty()) {
-            usage(":root file recreate <path>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TFile::Open(\"" + a0 + "\",\"RECREATE\")");
-    }
-
-    public static void rootFileOpenUpdate(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file open-update");
-        if (a.isEmpty()) {
-            usage(":root file open-update <path>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TFile::Open(\"" + a0 + "\",\"UPDATE\")");
-    }
-
-    public static void rootFileMkdir(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file mkdir");
-        if (a.isEmpty()) {
-            usage(":root file mkdir <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDirectory->mkdir(\"" + a0 + "\")");
-    }
-
-    public static void rootFileRmdir(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file rmdir");
-        if (a.isEmpty()) {
-            usage(":root file rmdir <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDirectory->rmdir(\"" + a0 + "\")");
-    }
-
-    public static void rootFileDelete(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file delete");
-        if (a.isEmpty()) {
-            usage(":root file delete <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDirectory->Delete(\"" + a0 + "\")");
-    }
-
-    public static void rootFileCopy(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file copy");
-        if (a.isEmpty()) {
-            usage(":root file copy <src> <dst>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "gDirectory->Get(\"" + a0 + "\")->Clone(\"" + a1 + "\")");
-    }
-
-    public static void rootFileMove(String i, CommandExecutionContext c) {
-        String a = args(i, ":root file move");
-        if (a.isEmpty()) {
-            usage(":root file move <src> <dst>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "gDirectory->Get(\"" + a0 + "\")->Clone(\"" + a1 + "\");gDirectory->Delete(\"" + a0 + "\")");
-    }
-
-    public static void rootFileInfo(String i, CommandExecutionContext c) {
-        cling(c, "gFile->Print()");
-    }
-
-    public static void rootListHandles(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfFiles()->Print()");
-    }
-
-    public static void rootCd(String i, CommandExecutionContext c) {
-        String a = args(i, ":root cd");
-        if (a.isEmpty()) {
-            usage(":root cd <path>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDirectory->cd(\"" + a0 + "\")");
-    }
-
-    public static void rootPwd(String i, CommandExecutionContext c) {
-        cling(c, "gDirectory->pwd()");
-    }
-
-    public static void rootMkdir(String i, CommandExecutionContext c) {
-        String a = args(i, ":root mkdir");
-        if (a.isEmpty()) {
-            usage(":root mkdir <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDirectory->mkdir(\"" + a0 + "\")");
-    }
-
-    public static void rootGetHist(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist get");
-        if (a.isEmpty()) {
-            usage(":root hist get <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TH1", a0) + "->ClassName()");
-    }
-
-    public static void rootDumpHistBins(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist bins");
-        if (a.isEmpty()) {
-            usage(":root hist bins <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TH1", a0) + "->Print(\"all\")");
-    }
-
-    public static void rootHistReset(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist reset");
-        if (a.isEmpty()) {
-            usage(":root hist reset <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TH1", a0) + "->Reset()");
-    }
-
-    public static void rootHistRebin(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist rebin");
-        if (a.isEmpty()) {
-            usage(":root hist rebin <name> <n>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Rebin(" + a1 + ")");
-    }
-
-    public static void rootHistScale(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist scale");
-        if (a.isEmpty()) {
-            usage(":root hist scale <name> <f>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Scale(" + a1 + ")");
-    }
-
-    public static void rootHistDraw(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist draw");
-        if (a.isEmpty()) {
-            usage(":root hist draw <name> [opt]");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Draw(\"" + a1 + "\")");
-    }
-
-    public static void rootHistFit(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist fit");
-        if (a.isEmpty()) {
-            usage(":root hist fit <name> <f>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Fit(\"" + a1 + "\")");
-    }
-
-    public static void rootHistIntegral(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist integral");
-        if (a.isEmpty()) {
-            usage(":root hist integral <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TH1", a0) + "->Integral()");
-    }
-
-    public static void rootHistMax(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist max");
-        if (a.isEmpty()) {
-            usage(":root hist max <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TH1", a0) + "->GetMaximum()");
-    }
-
-    public static void rootHistMin(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist min");
-        if (a.isEmpty()) {
-            usage(":root hist min <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TH1", a0) + "->GetMinimum()");
-    }
-
-    public static void rootHistList(String i, CommandExecutionContext c) {
-        cling(c, "gDirectory->GetList()->Print()");
-    }
-
-    public static void rootHistSmooth(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist smooth");
-        if (a.isEmpty()) {
-            usage(":root hist smooth <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TH1", a0) + "->Smooth()");
-    }
-
-    public static void rootHistProject(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist project");
-        if (a.isEmpty()) {
-            usage(":root hist project <name> <axis>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH2", a0) + "->ProjectionX(\"" + a1 + "\")");
-    }
-
-    public static void rootHistStatbox(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist statbox");
-        if (a.isEmpty()) {
-            usage(":root hist statbox <0|1>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gStyle->SetOptStat(" + a0 + ")");
-    }
-
-    public static void rootHistSetbin(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist setbin");
-        if (a.isEmpty()) {
-            usage(":root hist setbin <name> <bin> <v>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->SetBinContent(" + a1 + ")");
-    }
-
-    public static void rootHistFill(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist fill");
-        if (a.isEmpty()) {
-            usage(":root hist fill <name> <v>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Fill(" + a1 + ")");
-    }
-
-    public static void rootHistClone(String i, CommandExecutionContext c) {
-        String a = args(i, ":root hist clone");
-        if (a.isEmpty()) {
-            usage(":root hist clone <name> <new>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Clone(\"" + a1 + "\")");
-    }
-
-    public static void rootGetObject(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj get");
-        if (a.isEmpty()) {
-            usage(":root obj get <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->ClassName()");
-    }
-
-    public static void rootDumpObject(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj dump");
-        if (a.isEmpty()) {
-            usage(":root obj dump <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Dump()");
-    }
-
-    public static void rootDescribeObject(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj describe");
-        if (a.isEmpty()) {
-            usage(":root obj describe <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->Print()");
-    }
-
-    public static void rootObjClone(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj clone");
-        if (a.isEmpty()) {
-            usage(":root obj clone <name> <new>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Clone(\"" + a1 + "\")");
-    }
-
-    public static void rootObjWrite(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj write");
-        if (a.isEmpty()) {
-            usage(":root obj write <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Write()");
-    }
-
-    public static void rootObjDelete(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj delete");
-        if (a.isEmpty()) {
-            usage(":root obj delete <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Delete()");
-    }
-
-    public static void rootObjMethods(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj methods");
-        if (a.isEmpty()) {
-            usage(":root obj methods <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->GetListOfMethods()->Print()");
-    }
-
-    public static void rootObjMembers(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj members");
-        if (a.isEmpty()) {
-            usage(":root obj members <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->GetListOfDataMembers()->Print()");
-    }
-
-    public static void rootObjList(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfSpecials()->Print()");
-    }
-
-    public static void rootObjClass(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj class");
-        if (a.isEmpty()) {
-            usage(":root obj class <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->ClassName()");
-    }
-
-    public static void rootObjType(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj type");
-        if (a.isEmpty()) {
-            usage(":root obj type <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->IsA()->GetName()");
-    }
-
-    public static void rootObjPrint(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj print");
-        if (a.isEmpty()) {
-            usage(":root obj print <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Print()");
-    }
-
-    public static void rootObjInspect(String i, CommandExecutionContext c) {
-        String a = args(i, ":root obj inspect");
-        if (a.isEmpty()) {
-            usage(":root obj inspect <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Inspect()");
-    }
-
-    public static void rootTreeScan(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree scan");
-        if (a.isEmpty()) {
-            usage(":root tree scan <name> [expr]");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TTree", a0) + "->Scan(\"" + a1 + "\")");
-    }
-
-    public static void rootTreeDraw(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree draw");
-        if (a.isEmpty()) {
-            usage(":root tree draw <name> <expr>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TTree", a0) + "->Draw(\"" + a1 + "\")");
-    }
-
-    public static void rootTreeProcess(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree process");
-        if (a.isEmpty()) {
-            usage(":root tree process <name> <macro>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TTree", a0) + "->Process(\"" + a1 + "\")");
-    }
-
-    public static void rootTreeProject(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree project");
-        if (a.isEmpty()) {
-            usage(":root tree project <name> <h> <e>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TTree", a0) + "->Project(\"" + a1 + "\")");
-    }
-
-    public static void rootTreeCopytree(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree copytree");
-        if (a.isEmpty()) {
-            usage(":root tree copytree <name> <cut>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TTree", a0) + "->CopyTree(\"" + a1 + "\")");
-    }
-
-    public static void rootGetTree(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree open");
-        if (a.isEmpty()) {
-            usage(":root tree open <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TTree", a0) + "->GetEntries()");
-    }
-
-    public static void rootGetBranch(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tree branch");
-        if (a.isEmpty()) {
-            usage(":root tree branch <name> <b>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TTree", a0) + "->GetBranch(\"" + a1 + "\")->Print()");
-    }
-
-    public static void rootChainAdd(String i, CommandExecutionContext c) {
-        String a = args(i, ":root chain add");
-        if (a.isEmpty()) {
-            usage(":root chain add <name> <file>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TChain", a0) + "->Add(\"" + a1 + "\")");
-    }
-
-    public static void rootRdfOpen(String i, CommandExecutionContext c) {
-        String a = args(i, ":root rdf open");
-        if (a.isEmpty()) {
-            usage(":root rdf open <tree> <file>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "ROOT::RDataFrame(\"" + a0 + "\",\"" + a1 + "\")");
-    }
-
-    public static void rootRdfFilter(String i, CommandExecutionContext c) {
-        String a = args(i, ":root rdf filter");
-        if (a.isEmpty()) {
-            usage(":root rdf filter <expr>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "df.Filter(\"" + a0 + "\")");
-    }
-
-    public static void rootRdfCount(String i, CommandExecutionContext c) {
-        cling(c, "df.Count().GetValue()");
-    }
-
-    public static void rootGraphDraw(String i, CommandExecutionContext c) {
-        String a = args(i, ":root graph draw");
-        if (a.isEmpty()) {
-            usage(":root graph draw <name> [opt]");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TGraph", a0) + "->Draw(\"" + a1 + "\")");
-    }
-
-    public static void rootGraphFit(String i, CommandExecutionContext c) {
-        String a = args(i, ":root graph fit");
-        if (a.isEmpty()) {
-            usage(":root graph fit <name> <f>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TGraph", a0) + "->Fit(\"" + a1 + "\")");
-    }
-
-    public static void rootGraphPoints(String i, CommandExecutionContext c) {
-        String a = args(i, ":root graph points");
-        if (a.isEmpty()) {
-            usage(":root graph points <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TGraph", a0) + "->Print()");
-    }
-
-    public static void rootGraphAdd(String i, CommandExecutionContext c) {
-        String a = args(i, ":root graph add");
-        if (a.isEmpty()) {
-            usage(":root graph add <name> <x> <y>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TGraph", a0) + "->SetPoint(" + a1 + ")");
-    }
-
-    public static void rootCanvasNew(String i, CommandExecutionContext c) {
-        String a = args(i, ":root canvas new");
-        if (a.isEmpty()) {
-            usage(":root canvas new <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "new TCanvas(\"" + a0 + "\",\"" + a0 + "\",800,600)");
-    }
-
-    public static void rootCanvasCd(String i, CommandExecutionContext c) {
-        String a = args(i, ":root canvas cd");
-        if (a.isEmpty()) {
-            usage(":root canvas cd <pad>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gPad->cd(" + a0 + ")");
-    }
-
-    public static void rootCanvasSave(String i, CommandExecutionContext c) {
-        String a = args(i, ":root canvas save");
-        if (a.isEmpty()) {
-            usage(":root canvas save <file>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gPad->SaveAs(\"" + a0 + "\")");
-    }
-
-    public static void rootCanvasClear(String i, CommandExecutionContext c) {
-        cling(c, "gPad->Clear()");
-    }
-
-    public static void rootCanvasUpdate(String i, CommandExecutionContext c) {
-        cling(c, "gPad->Update()");
-    }
-
-    public static void rootCanvasList(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfCanvases()->Print()");
-    }
-
-    public static void rootStyleSet(String i, CommandExecutionContext c) {
-        String a = args(i, ":root style set");
-        if (a.isEmpty()) {
-            usage(":root style set <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->SetStyle(\"" + a0 + "\")");
-    }
-
-    public static void rootFuncNew(String i, CommandExecutionContext c) {
-        String a = args(i, ":root func new");
-        if (a.isEmpty()) {
-            usage(":root func new <name> <f>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "new TF1(\"" + a0 + "\",\"" + a1 + "\",0,1)");
-    }
-
-    public static void rootFitExpr(String i, CommandExecutionContext c) {
-        String a = args(i, ":root fit expr");
-        if (a.isEmpty()) {
-            usage(":root fit expr <obj> <f>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Fit(\"" + a1 + "\")");
-    }
-
-    public static void rootFitFunction(String i, CommandExecutionContext c) {
-        String a = args(i, ":root fit function");
-        if (a.isEmpty()) {
-            usage(":root fit function <obj> <f>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TH1", a0) + "->Fit(\"" + a1 + "\")");
-    }
-
-    public static void rootFitReset(String i, CommandExecutionContext c) {
-        cling(c, "gMinuit->mnrset(1)");
-    }
-
-    public static void rootFitParams(String i, CommandExecutionContext c) {
-        String a = args(i, ":root fit params");
-        if (a.isEmpty()) {
-            usage(":root fit params <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "" + obj("TF1", a0) + "->Print()");
-    }
-
-    public static void rootMathEval(String i, CommandExecutionContext c) {
-        String a = args(i, ":root math eval");
-        if (a.isEmpty()) {
-            usage(":root math eval <name> <x>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TF1", a0) + "->Eval(" + a1 + ")");
-    }
-
-    public static void rootMathDeriv(String i, CommandExecutionContext c) {
-        String a = args(i, ":root math deriv");
-        if (a.isEmpty()) {
-            usage(":root math deriv <name> <x>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TF1", a0) + "->Derivative(" + a1 + ")");
-    }
-
-    public static void rootMathIntegral(String i, CommandExecutionContext c) {
-        String a = args(i, ":root math integral");
-        if (a.isEmpty()) {
-            usage(":root math integral <name> <a> <b>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "" + obj("TF1", a0) + "->Integral(" + a1 + ")");
-    }
-
-    public static void rootSysInfo(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetBuildArch()");
-    }
-
-    public static void rootSysMemory(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMemInfo(0)");
-    }
-
-    public static void rootSysPlugins(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfTypes()->Print()");
-    }
-
-    public static void rootStatus(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfFiles()->Print()");
-    }
-
-    public static void rootDump(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfSpecials()->Print()");
-    }
-
-    public static void rootReset(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->Reset()");
-    }
-
-    public static void rootGc(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->CheckObjectValidity()");
-    }
-
-    public static void rootStats(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMemInfo(0)");
-    }
-
-    public static void rootInfo(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetVersion()");
-    }
-
-    public static void rootVars(String i, CommandExecutionContext c) {
-        String a = args(i, ":root vars");
-        if (a.isEmpty()) {
-            usage(":root vars <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->GetGlobal(\"" + a0 + "\")->Print()");
-    }
-
-    public static void rootGetEnv(String i, CommandExecutionContext c) {
-        String a = args(i, ":root getenv");
-        if (a.isEmpty()) {
-            usage(":root getenv <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gSystem->Getenv(\"" + a0 + "\")");
-    }
-
-    public static void rootConfig(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMakeSharedLib()");
-    }
-
-    public static void rootDiag(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetVersion()");
-    }
-
-    public static void rootBenchmark(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetCpuInfo(0)");
-    }
-
-    public static void rootSafeMode(String i, CommandExecutionContext c) {
-        String a = args(i, ":root safe-mode");
-        if (a.isEmpty()) {
-            usage(":root safe-mode <0|1>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->SetBatch(" + a0 + ")");
-    }
-
-    public static void rootSetOutput(String i, CommandExecutionContext c) {
-        String a = args(i, ":root output set");
-        if (a.isEmpty()) {
-            usage(":root output set <file>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gSystem->RedirectOutput(\"" + a0 + "\")");
-    }
-
-    public static void rootLoadScript(String i, CommandExecutionContext c) {
-        String a = args(i, ":root script load");
-        if (a.isEmpty()) {
-            usage(":root script load <file>");
-            return;
-        }
-        String a0 = macroPath(a, c);
-        if (a0 == null) return;
-        cling(c, "gROOT->LoadMacro(\"" + a0 + "\")");
-    }
-
-    public static void rootRunScript(String i, CommandExecutionContext c) {
-        String a = args(i, ":root script run");
-        if (a.isEmpty()) {
-            usage(":root script run <file>");
-            return;
-        }
-        String a0 = macroPath(a, c);
-        if (a0 == null) return;
-        cling(c, "gROOT->ProcessLine(\".x " + a0 + "\")");
-    }
-
-    public static void rootCompileScripts(String i, CommandExecutionContext c) {
-        String a = args(i, ":root script compile");
-        if (a.trim().equals("--all")) {
-            rootScriptCompileAll(i, c);
-            return;
-        }
-        if (a.isEmpty()) {
-            usage(":root script compile <file> | --all");
-            return;
-        }
-        String a0 = macroPath(a, c);
-        if (a0 == null) return;
-        cling(c, "gROOT->LoadMacro(\"" + a0 + "+\")");
-    }
-
-    public static void rootLoadIncludes(String i, CommandExecutionContext c) {
-        String a = args(i, ":root includes load");
-        if (a.isEmpty()) {
-            usage(":root includes load <dir>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->ProcessLine(\".I " + a0 + "\")");
-    }
-
     /**
      * A macro named on its own is looked up in user_scripts/, the project's
      * folder first and then the global one, before being treated as a path.
      */
-    private static String macroPath(String argument, CommandExecutionContext c) {
+    static String macroPath(String argument, CommandExecutionContext c) {
         String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
         java.nio.file.Path found =
             com.sphere.core.rootbackend.RootUserPipeline.resolveMacro(argument, project);
@@ -2495,136 +1872,8 @@ public class Handlers {
         return com.sphere.core.rootbackend.RootUserPipeline.forCling(found);
     }
 
-    /** The macros of both layers, the project marked, so the user sees what runs. */
-    public static void rootScriptList(String i, CommandExecutionContext c) {
-        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
-        int shown = 0;
-        for (java.nio.file.Path root
-                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
-            java.util.List<java.nio.file.Path> found =
-                com.sphere.core.rootbackend.RootUserPipeline.macros(root);
-            if (found.isEmpty()) continue;
-            AppLogger.raw("  " + root.resolve(
-                com.sphere.core.rootbackend.RootUserPipeline.SCRIPTS_DIR));
-            for (java.nio.file.Path macro : found) {
-                AppLogger.raw(String.format("      %-32s %s",
-                    macro.getFileName(), humanBytes(sizeOf(macro))));
-                shown++;
-            }
-        }
-        if (shown == 0) {
-            AppLogger.info("No macro yet. Put a .C or .cpp in user_scripts/.");
-        } else {
-            AppLogger.raw("  " + shown + " macros. A later folder overrides an earlier name.");
-        }
-    }
-
-    /** The libraries of both layers, and the C++ sources waiting to be built. */
-    public static void rootIncludesList(String i, CommandExecutionContext c) {
-        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
-        int libraries = 0, sources = 0;
-        for (java.nio.file.Path root
-                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
-            java.util.List<java.nio.file.Path> found =
-                com.sphere.core.rootbackend.RootUserPipeline.libraries(root);
-            java.util.List<java.nio.file.Path> toBuild =
-                com.sphere.core.rootbackend.RootUserPipeline.sources(root);
-            if (found.isEmpty() && toBuild.isEmpty()) continue;
-            AppLogger.raw("  " + root.resolve(
-                com.sphere.core.rootbackend.RootUserPipeline.INCLUDES_DIR));
-            for (java.nio.file.Path library : found) {
-                AppLogger.raw(String.format("      %-32s %s  loaded at startup",
-                    library.getFileName(), humanBytes(sizeOf(library))));
-                libraries++;
-            }
-            for (java.nio.file.Path source : toBuild) {
-                AppLogger.raw(String.format("      %-32s %s  source, :root includes build",
-                    source.getFileName(), humanBytes(sizeOf(source))));
-                sources++;
-            }
-        }
-        if (libraries + sources == 0) {
-            AppLogger.info("Nothing in includes/ yet. A .so there is loaded at startup.");
-        }
-
-        com.sphere.core.rootbackend.RootUserCompiler compiler =
-            new com.sphere.core.rootbackend.RootUserCompiler(
-                new com.sphere.utils.SettingsManager(), backend(c));
-        AppLogger.raw("  compiler    " + String.valueOf(compiler.compiler()));
-        AppLogger.raw("  flags from  " + compiler.flagSource());
-        String rootCompiler = compiler.rootBuildCompiler();
-        if (rootCompiler != null) {
-            AppLogger.raw("  ROOT built with " + rootCompiler);
-        }
-    }
-
-    /** Loads again what is in includes/, for a library rebuilt while Sphere runs. */
-    public static void rootIncludesReload(String i, CommandExecutionContext c) {
-        com.sphere.core.rootbackend.RootBackend b = backend(c);
-        if (b == null) {
-            AppLogger.error("The ROOT engine is not running.");
-            return;
-        }
-        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
-        com.sphere.core.rootbackend.RootBackend.setActivePipelineProject(project);
-        var outcome = com.sphere.core.rootbackend.RootUserPipeline.loadInto(b, project);
-        if (outcome.total() == 0) {
-            AppLogger.info("Nothing to load in includes/.");
-        }
-        for (String problem : outcome.problems()) {
-            AppLogger.raw("      " + problem);
-        }
-    }
-
-    /**
-     * Builds the C++ of includes/ into shared libraries. One named source, or
-     * every source with --all, and only what changed unless --force is given.
-     */
-    public static void rootIncludesBuild(String i, CommandExecutionContext c) {
-        String a = args(i, ":root includes build").trim();
-        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
-
-        boolean all = a.contains("--all");
-        boolean force = a.contains("--force");
-        String named = a.replace("--all", "").replace("--force", "").trim();
-
-        if (!all && named.isEmpty()) {
-            AppLogger.raw("Usage: :root includes build <file.cpp> | --all [--force]");
-            AppLogger.raw("  --all      build every source of includes/, both layers");
-            AppLogger.raw("  --force    build even when the library is already newer");
-            return;
-        }
-
-        java.util.List<java.nio.file.Path> queue = new java.util.ArrayList<>();
-        if (all) {
-            for (java.nio.file.Path root
-                    : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
-                for (java.nio.file.Path source
-                        : com.sphere.core.rootbackend.RootUserPipeline.sources(root)) {
-                    if (force
-                        || com.sphere.core.rootbackend.RootUserCompiler.needsBuilding(source)) {
-                        queue.add(source);
-                    }
-                }
-            }
-            if (queue.isEmpty()) {
-                AppLogger.info("Nothing to build. Everything in includes/ is up to date.");
-                return;
-            }
-        } else {
-            java.nio.file.Path source = findSource(named, project);
-            if (source == null) {
-                AppLogger.error("No source named " + named + " in includes/.");
-                return;
-            }
-            queue.add(source);
-        }
-
-        runBuilds(queue, project, c);
-    }
-
     /** A source of includes/ by bare name, the project layer winning. */
-    private static java.nio.file.Path findSource(String name, String project) {
+    static java.nio.file.Path findSource(String name, String project) {
         String wanted = name.replace("\"", "").trim();
         java.nio.file.Path found = null;
         for (java.nio.file.Path root
@@ -2640,7 +1889,7 @@ public class Handlers {
     }
 
     /** Compiles a queue off the event thread, then reloads what was produced. */
-    private static void runBuilds(java.util.List<java.nio.file.Path> queue,
+    static void runBuilds(java.util.List<java.nio.file.Path> queue,
                                   String project, CommandExecutionContext c) {
         AppLogger.info("Building " + queue.size()
             + (queue.size() == 1 ? " source..." : " sources..."));
@@ -2714,50 +1963,12 @@ public class Handlers {
         }.execute();
     }
 
-    /**
-     * Compiles the macros of user_scripts/ with ACLiC, inside the interpreter.
-     * One named macro, or every macro with --all.
-     */
-    public static void rootScriptCompileAll(String i, CommandExecutionContext c) {
-        String project = c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
-        com.sphere.core.rootbackend.RootBackend engine = backend(c);
-        if (engine == null || !engine.isAvailable()) {
-            AppLogger.error("ACLiC compiles inside the interpreter, "
-                + "so the ROOT engine has to be running.");
-            return;
-        }
-
-        java.util.List<java.nio.file.Path> queue = new java.util.ArrayList<>();
-        for (java.nio.file.Path root
-                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
-            queue.addAll(com.sphere.core.rootbackend.RootUserPipeline.macros(root));
-        }
-        if (queue.isEmpty()) {
-            AppLogger.info("No macro in user_scripts/ to compile.");
-            return;
-        }
-
-        AppLogger.info("Compiling " + queue.size() + " macros with ACLiC...");
-        for (java.nio.file.Path macro : queue) {
-            String path = com.sphere.core.rootbackend.RootUserPipeline.forCling(macro);
-            cling(c, "gROOT->LoadMacro(\"" + path + "+\")");
-        }
-    }
-
-    /** Builds both folders in order: the libraries first, then the macros. */
-    public static void rootBuildAll(String i, CommandExecutionContext c) {
-        AppLogger.info("Building includes/ then user_scripts/.");
-        rootIncludesBuild(":root includes build --all", c);
-        // The macros come after, so ACLiC already has the libraries it may need.
-        rootScriptCompileAll(":root script compile --all", c);
-    }
-
     /** Same compiler family, ignoring the path and the version suffix. */
-    private static boolean sameCompilerFamily(String a, String b) {
+    static boolean sameCompilerFamily(String a, String b) {
         return family(a).equals(family(b));
     }
 
-    private static String family(String compiler) {
+    static String family(String compiler) {
         String name = java.nio.file.Path.of(compiler.trim().split("\\s+")[0])
                         .getFileName().toString().toLowerCase(java.util.Locale.ROOT);
         name = name.replaceAll("\\.exe$", "").replaceAll("-?\\d+(\\.\\d+)*$", "");
@@ -2766,398 +1977,8 @@ public class Handlers {
         return name;
     }
 
-    private static long sizeOf(java.nio.file.Path p) {
+    static long sizeOf(java.nio.file.Path p) {
         try { return java.nio.file.Files.size(p); } catch (java.io.IOException e) { return 0L; }
-    }
-
-    public static void rootCompileIncludes(String i, CommandExecutionContext c) {
-        String a = args(i, ":root includes compile");
-        if (a.isEmpty()) {
-            usage(":root includes compile <dir>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gSystem->AddIncludePath(\"-I" + a0 + "\")");
-    }
-
-    public static void rootGeomLoad(String i, CommandExecutionContext c) {
-        String a = args(i, ":root geom load");
-        if (a.isEmpty()) {
-            usage(":root geom load <file>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TGeoManager::Import(\"" + a0 + "\")");
-    }
-
-    public static void rootGeomDraw(String i, CommandExecutionContext c) {
-        cling(c, "gGeoManager->GetTopVolume()->Draw()");
-    }
-
-    public static void rootGeomExport(String i, CommandExecutionContext c) {
-        String a = args(i, ":root geom export");
-        if (a.isEmpty()) {
-            usage(":root geom export <file>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gGeoManager->Export(\"" + a0 + "\")");
-    }
-
-    public static void rootSqlConnect(String i, CommandExecutionContext c) {
-        String a = args(i, ":root sql connect");
-        if (a.isEmpty()) {
-            usage(":root sql connect <url>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TSQLServer::Connect(\"" + a0 + "\",\"\",\"\")");
-    }
-
-    public static void rootSqlQuery(String i, CommandExecutionContext c) {
-        String a = args(i, ":root sql query");
-        if (a.isEmpty()) {
-            usage(":root sql query <sql>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "db->Query(\"" + a0 + "\")");
-    }
-
-    public static void rootSqlDisconnect(String i, CommandExecutionContext c) {
-        cling(c, "db->Close()");
-    }
-
-    public static void rootNetServer(String i, CommandExecutionContext c) {
-        String a = args(i, ":root net server");
-        if (a.isEmpty()) {
-            usage(":root net server <port>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "new TServerSocket(" + a0 + ",kTRUE)");
-    }
-
-    public static void rootNetConnect(String i, CommandExecutionContext c) {
-        String a = args(i, ":root net connect");
-        if (a.isEmpty()) {
-            usage(":root net connect <host> <port>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "new TSocket(\"" + a0 + "\"," + a1 + ")");
-    }
-
-    public static void rootNetSend(String i, CommandExecutionContext c) {
-        String a = args(i, ":root net send");
-        if (a.isEmpty()) {
-            usage(":root net send <msg>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "sock->Send(\"" + a0 + "\")");
-    }
-
-    public static void rootProofOpen(String i, CommandExecutionContext c) {
-        String a = args(i, ":root proof open");
-        if (a.isEmpty()) {
-            usage(":root proof open <url>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TProof::Open(\"" + a0 + "\")");
-    }
-
-    public static void rootProofProcess(String i, CommandExecutionContext c) {
-        String a = args(i, ":root proof process");
-        if (a.isEmpty()) {
-            usage(":root proof process <sel>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gProof->Process(\"" + a0 + "\")");
-    }
-
-    public static void rootProofStatus(String i, CommandExecutionContext c) {
-        cling(c, "gProof->Print()");
-    }
-
-    public static void rootGuiNew(String i, CommandExecutionContext c) {
-        String a = args(i, ":root gui new");
-        if (a.isEmpty()) {
-            usage(":root gui new <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "new TGMainFrame(gClient->GetRoot())");
-    }
-
-    public static void rootGuiShow(String i, CommandExecutionContext c) {
-        cling(c, "gClient->GetRoot()->MapWindow()");
-    }
-
-    public static void rootGuiClose(String i, CommandExecutionContext c) {
-        cling(c, "gClient->GetRoot()->UnmapWindow()");
-    }
-
-    public static void rootPyImport(String i, CommandExecutionContext c) {
-        String a = args(i, ":root py import");
-        if (a.isEmpty()) {
-            usage(":root py import <mod>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TPython::Exec(\"import " + a0 + "\")");
-    }
-
-    public static void rootPyEval(String i, CommandExecutionContext c) {
-        String a = args(i, ":root py eval");
-        if (a.isEmpty()) {
-            usage(":root py eval <expr>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TPython::Eval(\"" + a0 + "\")");
-    }
-
-    public static void rootPyExec(String i, CommandExecutionContext c) {
-        String a = args(i, ":root py exec");
-        if (a.isEmpty()) {
-            usage(":root py exec <code>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TPython::Exec(\"" + a0 + "\")");
-    }
-
-    public static void rootTmvaFactory(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tmva factory");
-        if (a.isEmpty()) {
-            usage(":root tmva factory <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "new TMVA::Factory(\"" + a0 + "\",0,\"\")");
-    }
-
-    public static void rootTmvaTrain(String i, CommandExecutionContext c) {
-        cling(c, "factory->TrainAllMethods()");
-    }
-
-    public static void rootTmvaTest(String i, CommandExecutionContext c) {
-        cling(c, "factory->TestAllMethods()");
-    }
-
-    public static void rootTmvaEvaluate(String i, CommandExecutionContext c) {
-        cling(c, "factory->EvaluateAllMethods()");
-    }
-
-    public static void rootTmvaGui(String i, CommandExecutionContext c) {
-        String a = args(i, ":root tmva gui");
-        if (a.isEmpty()) {
-            usage(":root tmva gui <file>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "TMVA::TMVAGui(\"" + a0 + "\")");
-    }
-
-    public static void rootRoofitWorkspace(String i, CommandExecutionContext c) {
-        String a = args(i, ":root roofit workspace");
-        if (a.isEmpty()) {
-            usage(":root roofit workspace <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "new RooWorkspace(\"" + a0 + "\")");
-    }
-
-    public static void rootRoofitPdf(String i, CommandExecutionContext c) {
-        String a = args(i, ":root roofit pdf");
-        if (a.isEmpty()) {
-            usage(":root roofit pdf <expr>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "w->factory(\"" + a0 + "\")");
-    }
-
-    public static void rootRoofitFit(String i, CommandExecutionContext c) {
-        String a = args(i, ":root roofit fit");
-        if (a.isEmpty()) {
-            usage(":root roofit fit <pdf> <data>");
-            return;
-        }
-        String a0 = head(a);
-        String a1 = tail(a);
-        cling(c, "w->pdf(\"" + a0 + "\")->fitTo(*w->data(\"" + a1 + "\"))");
-    }
-
-    public static void rootRoofitPlot(String i, CommandExecutionContext c) {
-        String a = args(i, ":root roofit plot");
-        if (a.isEmpty()) {
-            usage(":root roofit plot <var>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "w->var(\"" + a0 + "\")->frame()->Draw()");
-    }
-
-    public static void rootProfile(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetCpuInfo(0)");
-    }
-
-    public static void rootProfileStats(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMemInfo(0)");
-    }
-
-    public static void rootProfileJson(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMemInfo(0)");
-    }
-
-    public static void rootProfileReset(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->ResetSignal(kSigSegmentationViolation)");
-    }
-
-    public static void rootProfileLevel(String i, CommandExecutionContext c) {
-        String a = args(i, ":root profile level");
-        if (a.isEmpty()) {
-            usage(":root profile level <n>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDebug=" + a0 + "");
-    }
-
-    public static void rootProfileThreshold(String i, CommandExecutionContext c) {
-        String a = args(i, ":root profile threshold");
-        if (a.isEmpty()) {
-            usage(":root profile threshold <ms>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDebug=" + a0 + "");
-    }
-
-    public static void rootProfilingStatus(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMemInfo(0)");
-    }
-
-    public static void rootProfilingJson(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMemInfo(0)");
-    }
-
-    public static void rootProfilingReset(String i, CommandExecutionContext c) {
-        cling(c, "gDebug=0");
-    }
-
-    public static void rootProfilingLevel(String i, CommandExecutionContext c) {
-        String a = args(i, ":root profiling level");
-        if (a.isEmpty()) {
-            usage(":root profiling level <n>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDebug=" + a0 + "");
-    }
-
-    public static void rootDebugDump(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfSpecials()->Print()");
-    }
-
-    public static void rootDebugGraphviz(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfClasses()->Print()");
-    }
-
-    public static void rootDebugAudit(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfFiles()->Print()");
-    }
-
-    public static void rootDebugLevel(String i, CommandExecutionContext c) {
-        String a = args(i, ":root debug level");
-        if (a.isEmpty()) {
-            usage(":root debug level <0-5>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gDebug=" + a0 + "");
-    }
-
-    public static void rootWatchdogStatus(String i, CommandExecutionContext c) {
-        cling(c, "gSystem->GetMemInfo(0)");
-    }
-
-    public static void rootWatchdogKill(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->Reset()");
-    }
-
-    public static void rootSetCacheSize(String i, CommandExecutionContext c) {
-        String a = args(i, ":root cache size");
-        if (a.isEmpty()) {
-            usage(":root cache size <n>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gEnv->SetValue(\"TFile.CacheSize\"," + a0 + ")");
-    }
-
-    public static void rootSetCachePolicy(String i, CommandExecutionContext c) {
-        String a = args(i, ":root cache policy");
-        if (a.isEmpty()) {
-            usage(":root cache policy <n>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gEnv->SetValue(\"TFile.CachePolicy\"," + a0 + ")");
-    }
-
-    public static void rootCacheStats(String i, CommandExecutionContext c) {
-        cling(c, "gEnv->Print()");
-    }
-
-    public static void rootCacheClear(String i, CommandExecutionContext c) {
-        cling(c, "gROOT->GetListOfFiles()->Print()");
-    }
-
-    public static void rootSetMaxObjSize(String i, CommandExecutionContext c) {
-        String a = args(i, ":root limits obj-size");
-        if (a.isEmpty()) {
-            usage(":root limits obj-size <n>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gEnv->SetValue(\"TFile.MaxSize\"," + a0 + ")");
-    }
-
-    public static void rootSetMaxHandles(String i, CommandExecutionContext c) {
-        String a = args(i, ":root limits handles");
-        if (a.isEmpty()) {
-            usage(":root limits handles <n>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gEnv->SetValue(\"TFile.MaxHandles\"," + a0 + ")");
-    }
-
-    public static void rootSetMaxAge(String i, CommandExecutionContext c) {
-        String a = args(i, ":root limits age");
-        if (a.isEmpty()) {
-            usage(":root limits age <n>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gEnv->SetValue(\"TFile.MaxAge\"," + a0 + ")");
-    }
-
-    public static void rootAnalyze(String i, CommandExecutionContext c) {
-        String a = args(i, ":root analyze");
-        if (a.isEmpty()) {
-            usage(":root analyze <name>");
-            return;
-        }
-        String a0 = a;
-        cling(c, "gROOT->FindObject(\"" + a0 + "\")->Print()");
     }
 
 }

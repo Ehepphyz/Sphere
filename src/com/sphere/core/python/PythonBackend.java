@@ -181,6 +181,22 @@ public class PythonBackend implements Backend {
                     AppLogger.error("Security: Script '" + scriptFile.getAbsolutePath() + "' is not authorized.");
                     return null;
                 }
+                // The script runs as __main__ with its own arguments, inside a
+                // namespace Sphere keeps, so the Variables tab is filled without
+                // the script importing or calling anything. Collecting variables
+                // is a convenience: anything that goes wrong here leaves the
+                // script to run the plain way rather than not running at all.
+                try {
+                    if (com.sphere.components.variables.PythonProbe.isWrapping()) {
+                        command.add("-c");
+                        command.add(com.sphere.components.variables.PythonProbe.WRAPPER);
+                    }
+                } catch (Throwable unusable) {
+                    command.clear();
+                    command.add(pythonExecutable);
+                    AppLogger.error("Variables will not be collected for this run: "
+                                    + unusable);
+                }
                 command.addAll(tokens);
             } else {
                 if (!firstToken.startsWith("-") && SecurityManager.isModuleAllowed(firstToken)) {
@@ -380,6 +396,17 @@ public class PythonBackend implements Backend {
             }
         }
 
+        /** The command as a person would write it, without the wrapper's body. */
+        private String readable(List<String> command) {
+            StringBuilder text = new StringBuilder();
+            for (int i = 0; i < command.size(); i++) {
+                final String part = command.get(i);
+                text.append(i == 0 ? "" : " ")
+                    .append(part.length() > 120 ? "<sphere wrapper>" : part);
+            }
+            return text.toString();
+        }
+
         public PythonResult run(List<String> command, boolean logCommand, PythonOutputListener listener) {
             if (command == null || command.isEmpty()) {
                 AppLogger.error("No command to execute.");
@@ -387,13 +414,24 @@ public class PythonBackend implements Backend {
             }
 
             if (logCommand) {
-                AppLogger.info("Executing: " + String.join(" ", command));
+                AppLogger.info("Executing: " + readable(command));
             }
 
             Process process;
             try {
                 ProcessBuilder pb = new ProcessBuilder(command);
                 pb.redirectErrorStream(false);
+                try {
+                    final String variables =
+                        com.sphere.components.variables.PythonProbe.folder();
+                    if (variables != null) {
+                        pb.environment().put(
+                            com.sphere.components.variables.PythonProbe.FOLDER_VARIABLE,
+                            variables);
+                    }
+                } catch (Throwable unreachable) {
+                    AppLogger.error("Variables folder unreachable: " + unreachable);
+                }
                 synchronized (PythonBackend.this) {
                     process = pb.start();
                     currentProcess = process; // Captures the active reference for UI cancellation
@@ -482,6 +520,14 @@ public class PythonBackend implements Backend {
                 if (currentProcess == process) {
                     currentProcess = null;
                 }
+            }
+
+            // The run is over, so whatever it wrote is final: showing it now
+            // rather than on the next sweep keeps the tab in step with the console.
+            try {
+                com.sphere.components.variables.VariablesPanel.instance().reread();
+            } catch (Throwable unreadable) {
+                AppLogger.error("Could not read the variables of this run: " + unreadable);
             }
 
             return new PythonResult(stdoutBuilder.toString(), stderrBuilder.toString(), exitCode, timedOut);

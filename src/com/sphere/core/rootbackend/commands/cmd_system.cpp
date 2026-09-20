@@ -18,6 +18,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -73,6 +74,85 @@ enum class SystemOpCode : std::uint16_t {
   Count // Total number of opcodes used for static table sizing
 };
 
+/**
+ * The name each root-config key answers to, and the opcode it selects.
+ *
+ * The sub-opcode used to be read from the packet's flags word alone. Nothing on
+ * the Java side ever wrote that word, so every request landed on opcode 0 and
+ * the twenty-seven other entries were unreachable. Naming them in the payload
+ * costs nothing on the wire and needs no mirrored enum.
+ */
+struct SystemOpCodeName {
+  std::string_view name;
+  SystemOpCode code;
+};
+
+constexpr std::array<SystemOpCodeName, 27> kSystemOpCodeNames{{
+    {"version", SystemOpCode::GetRootVersion},
+    {"incdir", SystemOpCode::GetIncDir},
+    {"libdir", SystemOpCode::GetLibDir},
+    {"features", SystemOpCode::GetFeatures},
+    {"cflags", SystemOpCode::GetCflags},
+    {"libs", SystemOpCode::GetLibs},
+    {"metrics", SystemOpCode::GetMetrics},
+    {"prefix", SystemOpCode::GetPrefix},
+    {"exec-prefix", SystemOpCode::GetExecPrefix},
+    {"auxcflags", SystemOpCode::GetAuxCflags},
+    {"ldflags", SystemOpCode::GetLdFlags},
+    {"glibs", SystemOpCode::GetGlibs},
+    {"evelibs", SystemOpCode::GetEveLibs},
+    {"bindir", SystemOpCode::GetBinDir},
+    {"etcdir", SystemOpCode::GetEtcDir},
+    {"tutdir", SystemOpCode::GetTutDir},
+    {"srcdir", SystemOpCode::GetSrcDir},
+    {"arch", SystemOpCode::GetArch},
+    {"platform", SystemOpCode::GetPlatform},
+    {"config", SystemOpCode::GetConfig},
+    {"ncpu", SystemOpCode::GetNcpu},
+    {"git-revision", SystemOpCode::GetGitRevision},
+    {"python-version", SystemOpCode::GetPythonVersion},
+    {"cxx-standard", SystemOpCode::GetCxxStandard},
+    {"cc", SystemOpCode::GetCc},
+    {"cxx", SystemOpCode::GetCxx},
+    {"ld", SystemOpCode::GetLd},
+}};
+
+/// The key a request names, or Count when the name matches none.
+[[nodiscard]] SystemOpCode
+system_opcode_from_name(std::string_view request) noexcept {
+  std::string key;
+  key.reserve(request.size());
+  for (const char c : request) {
+    if (c == '_') {
+      key.push_back('-');
+    } else if (!std::isspace(static_cast<unsigned char>(c))) {
+      key.push_back(
+          static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+  }
+  // "--cflags" is what one types at a root-config prompt.
+  while (!key.empty() && key.front() == '-') {
+    key.erase(key.begin());
+  }
+  for (const SystemOpCodeName &entry : kSystemOpCodeNames) {
+    if (entry.name == key) {
+      return entry.code;
+    }
+  }
+  return SystemOpCode::Count;
+}
+
+[[nodiscard]] std::string system_opcode_name_list() {
+  std::string out;
+  for (const SystemOpCodeName &entry : kSystemOpCodeNames) {
+    if (!out.empty()) {
+      out += " ";
+    }
+    out.append(entry.name);
+  }
+  return out;
+}
+
 // Lightweight lock-free telemetry tracking IPC execution performance
 struct SystemTelemetry {
   std::atomic<std::uint64_t> requests_processed{0};
@@ -96,10 +176,13 @@ public:
   // Zero-allocation lookup returning string_view for instant SIMD payload serialization
   std::string_view get(SystemOpCode code) const {
     const auto index = static_cast<std::size_t>(code);
-    if (index < cache_.size() && !cache_[index].empty()) {
-      return cache_[index];
+    if (index >= cache_.size()) {
+      return "ERROR: Configuration key invalid";
     }
-    return "ERROR: Configuration key invalid";
+    // Empty is the right answer for ldflags and auxcflags on most builds, so
+    // only a key outside the table is an error.
+    return cache_[index].empty() ? std::string_view("(empty)")
+                                 : std::string_view(cache_[index]);
   }
 
 private:
@@ -362,15 +445,307 @@ void handle_cached_config(ShmLayout &shm, const Proto::PacketHeader &pkt) {
                 AdvancedRootConfigCache::instance().get(OpCode));
 }
 
+// -----------------------------------------------------------------------------
+// What the engine knows about itself
+// -----------------------------------------------------------------------------
+
+[[nodiscard]] const char *engine_state_name(std::uint32_t state) noexcept {
+  switch (static_cast<EngineState>(state)) {
+  case EngineState::UNINITIALIZED: return "uninitialized";
+  case EngineState::INITIALIZING:  return "initializing";
+  case EngineState::READY:         return "ready";
+  case EngineState::RUNNING:       return "running";
+  case EngineState::DEGRADED:      return "degraded";
+  case EngineState::STOPPING:      return "stopping";
+  case EngineState::STOPPED:       return "stopped";
+  case EngineState::RECOVERY:      return "recovery";
+  case EngineState::CORRUPTED:     return "corrupted";
+  case EngineState::ERROR:         return "error";
+  }
+  return "unknown";
+}
+
+/// Views a metrics request can ask for.
+enum class MetricsView { Text, Json, Engine, Memory, Heap, Reset };
+
+[[nodiscard]] MetricsView metrics_view(std::string_view request) noexcept {
+  if (request == "json")   { return MetricsView::Json; }
+  if (request == "engine") { return MetricsView::Engine; }
+  if (request == "memory") { return MetricsView::Memory; }
+  if (request == "heap")   { return MetricsView::Heap; }
+  if (request == "reset")  { return MetricsView::Reset; }
+  return MetricsView::Text;
+}
+
+/// Resident and virtual size of this process, in KB, as ROOT reports them.
+struct ProcessFootprint {
+  long resident_kb{0};
+  long virtual_kb{0};
+  double cpu_user_s{0.0};
+  double cpu_sys_s{0.0};
+  bool known{false};
+};
+
+[[nodiscard]] ProcessFootprint process_footprint() {
+  ProcessFootprint out;
+  if (gSystem == nullptr) {
+    return out;
+  }
+  ProcInfo_t info;
+  if (gSystem->GetProcInfo(&info) != 0) {
+    return out;
+  }
+  out.resident_kb = static_cast<long>(info.fMemResident);
+  out.virtual_kb = static_cast<long>(info.fMemVirtual);
+  out.cpu_user_s = static_cast<double>(info.fCpuUser);
+  out.cpu_sys_s = static_cast<double>(info.fCpuSys);
+  out.known = true;
+  return out;
+}
+
+/// One "name=value" pair per line, or one JSON object, depending on the view.
+class Report {
+public:
+  explicit Report(bool as_json) : json_(as_json) {}
+
+  void section(const char *name) {
+    if (!json_) {
+      if (!text_.empty()) {
+        text_ += "\n";
+      }
+      text_ += "[";
+      text_ += name;
+      text_ += "]\n";
+    }
+  }
+
+  void add(const char *key, std::uint64_t value) {
+    write(key, std::to_string(value), false);
+  }
+
+  void add(const char *key, const std::string &value) {
+    write(key, value, true);
+  }
+
+  void add(const char *key, double value) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%.3f", value);
+    write(key, std::string(buffer), false);
+  }
+
+  [[nodiscard]] std::string take() {
+    return json_ ? "{" + body_ + "}" : text_;
+  }
+
+private:
+  void write(const char *key, const std::string &value, bool quote) {
+    if (json_) {
+      if (!body_.empty()) {
+        body_ += ",";
+      }
+      body_ += "\"";
+      body_ += key;
+      body_ += "\":";
+      body_ += quote ? "\"" + value + "\"" : value;
+      return;
+    }
+    text_ += "  ";
+    text_ += key;
+    text_ += " = ";
+    text_ += value;
+    text_ += "\n";
+  }
+
+  bool json_;
+  std::string text_;
+  std::string body_;
+};
+
+/**
+ * One word on whether the engine is well, and why when it is not.
+ *
+ * Reading a column of counters to find out takes a habit the user should not
+ * need; the conditions that matter are known here, so they are named here.
+ */
+[[nodiscard]] std::string engine_health(const ShmLayout &shm,
+                                        const SystemTelemetry &tel) {
+  if (shm.header != nullptr) {
+    const auto state = static_cast<EngineState>(shm.header->state.load());
+    if (state == EngineState::CORRUPTED || state == EngineState::ERROR) {
+      return std::string("failed, state ") +
+             engine_state_name(shm.header->state.load());
+    }
+    if (state == EngineState::DEGRADED) {
+      return "degraded";
+    }
+  }
+  const std::uint64_t failures = tel.shm_allocation_failures.load();
+  if (failures != 0) {
+    return "short of heap, " + std::to_string(failures) + " refused";
+  }
+  if (shm.stats != nullptr && shm.stats->crc_failures_total.load() != 0) {
+    return "checksum failures, " +
+           std::to_string(shm.stats->crc_failures_total.load());
+  }
+  if (shm.cmd_ring != nullptr && shm.cmd_ring->occupancy() > 0.80f) {
+    return "commands backing up";
+  }
+  if (shm.evt_ring != nullptr && shm.evt_ring->occupancy() > 0.80f) {
+    return "answers backing up, nothing is draining them";
+  }
+  if (tel.invalid_opcodes.load() != 0) {
+    return "answering, " + std::to_string(tel.invalid_opcodes.load()) +
+           " requests refused";
+  }
+  return "answering";
+}
+
+/**
+ * The engine's own figures, in the requested view.
+ *
+ * Every number here is read from this process or from the region it owns. The
+ * commands that report on the engine used to ask ROOT instead, which knows
+ * nothing about any of it.
+ */
+[[nodiscard]] std::string build_metrics_report(ShmLayout &shm,
+                                               MetricsView view) {
+  auto &tel = get_telemetry();
+
+  if (view == MetricsView::Reset) {
+    tel.requests_processed.store(0, std::memory_order_relaxed);
+    tel.shm_allocation_failures.store(0, std::memory_order_relaxed);
+    tel.invalid_opcodes.store(0, std::memory_order_relaxed);
+    if (shm.stats != nullptr) {
+      shm.stats->max_job_latency_ns.store(0, std::memory_order_relaxed);
+      shm.stats->crc_failures_total.store(0, std::memory_order_relaxed);
+    }
+    if (shm.header != nullptr) {
+      shm.header->last_error_code.store(0, std::memory_order_relaxed);
+    }
+    return "counters cleared";
+  }
+
+  const bool json = (view == MetricsView::Json);
+  const bool all = (view == MetricsView::Text) || json;
+  Report report(json);
+
+  if (all || view == MetricsView::Engine) {
+    const auto now = std::chrono::steady_clock::now();
+    const std::uint64_t uptime =
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                now - g_engine_start_time)
+                .count());
+    report.section("engine");
+    // The verdict first: a page of counters is not an answer on its own.
+    report.add("health", engine_health(shm, tel));
+    report.add("uptime_seconds", uptime);
+    report.add("requests_per_second",
+               (uptime == 0)
+                   ? 0.0
+                   : static_cast<double>(tel.requests_processed.load()) /
+                         static_cast<double>(uptime));
+    if (shm.header != nullptr) {
+      report.add("state",
+                 std::string(engine_state_name(shm.header->state.load())));
+      report.add("last_error_code",
+                 static_cast<std::uint64_t>(shm.header->last_error_code.load()));
+      report.add("heartbeat_cpp", shm.header->heartbeat_cpp.load());
+      report.add("heartbeat_java", shm.header->heartbeat_java.load());
+      report.add("cycles", shm.header->engine_cycles.load());
+      report.add("jobs_completed", shm.header->jobs_completed.load());
+      report.add("jobs_failed", shm.header->jobs_failed.load());
+    }
+    if (shm.stats != nullptr) {
+      report.add("jobs_inflight", shm.stats->jobs_inflight.load());
+      report.add("latency_last_ns", shm.stats->last_job_latency_ns.load());
+      report.add("latency_avg_ns", shm.stats->avg_job_latency_ns.load());
+      report.add("latency_max_ns", shm.stats->max_job_latency_ns.load());
+    }
+    report.add("requests_processed", tel.requests_processed.load());
+    report.add("alloc_failures", tel.shm_allocation_failures.load());
+    report.add("invalid_opcodes", tel.invalid_opcodes.load());
+    if (shm.stats != nullptr) {
+      report.add("crc_failures", shm.stats->crc_failures_total.load());
+    }
+  }
+
+  if (all) {
+    report.section("rings");
+    if (shm.cmd_ring != nullptr) {
+      report.add("cmd_queued", shm.cmd_ring->size_approx());
+      report.add("cmd_capacity", shm.cmd_ring->capacity());
+      report.add("cmd_percent_full",
+                 static_cast<double>(shm.cmd_ring->occupancy()) * 100.0);
+    }
+    if (shm.evt_ring != nullptr) {
+      report.add("evt_queued", shm.evt_ring->size_approx());
+      report.add("evt_capacity", shm.evt_ring->capacity());
+      report.add("evt_percent_full",
+                 static_cast<double>(shm.evt_ring->occupancy()) * 100.0);
+    }
+    if (shm.header != nullptr) {
+      report.add("raw_occupancy",
+                 static_cast<double>(shm.header->raw_occupancy.load()));
+      report.add("predicted_pressure",
+                 static_cast<double>(shm.header->predicted_pressure.load()));
+      report.add("control_loop_jitter_ns",
+                 shm.header->control_loop_jitter_ns.load());
+    }
+  }
+
+  if (all || view == MetricsView::Heap) {
+    report.section("heap");
+    const ShmHeapHeader *heap =
+        (shm.data_heap != nullptr) ? get_heap_header(shm) : nullptr;
+    if (heap != nullptr) {
+      report.add("allocated_bytes", heap->allocated_bytes.load());
+      report.add("total_capacity", heap->total_capacity.load());
+      report.add("active_allocations", heap->active_allocations.load());
+      report.add("reclaimable_bytes", heap->reclaimable_bytes.load());
+    }
+    const ShmHeapRoot *root =
+        (shm.data_heap != nullptr) ? get_heap_root(shm) : nullptr;
+    if (root != nullptr) {
+      report.add("chunks", static_cast<std::uint64_t>(root->n_chunks.load()));
+      report.add("recycled_total", root->recycled_total.load());
+      report.add("carved_total", root->carved_total.load());
+      report.add("stale_rejected", root->stale_rejected.load());
+    }
+    if (shm.header != nullptr) {
+      report.add("fragmentation_score",
+                 static_cast<std::uint64_t>(
+                     shm.header->heap_fragmentation_score.load()));
+    }
+  }
+
+  if (all || view == MetricsView::Memory) {
+    report.section("process");
+    const ProcessFootprint footprint = process_footprint();
+    if (footprint.known) {
+      report.add("resident_kb",
+                 static_cast<std::uint64_t>(footprint.resident_kb));
+      report.add("virtual_kb",
+                 static_cast<std::uint64_t>(footprint.virtual_kb));
+      report.add("cpu_user_seconds", footprint.cpu_user_s);
+      report.add("cpu_system_seconds", footprint.cpu_sys_s);
+    }
+    if (shm.header != nullptr) {
+      report.add("region_bytes", shm.header->total_size);
+      report.add("region_version",
+                 static_cast<std::uint64_t>(shm.header->version.load()));
+    }
+    report.add("simd_alignment", static_cast<std::uint64_t>(SIMD_ALIGNMENT));
+  }
+
+  return report.take();
+}
+
 // Runtime Telemetry Status Reporter
 inline void handle_metrics(ShmLayout &shm,
                            const Proto::PacketHeader &pkt) {
-  auto &tel = get_telemetry();
-  std::string report =
-      "processed=" + std::to_string(tel.requests_processed.load()) +
-      " alloc_failures=" + std::to_string(tel.shm_allocation_failures.load()) +
-      " invalid_opcodes=" + std::to_string(tel.invalid_opcodes.load());
-  send_response(shm, pkt.job_id, pkt.req_id, report);
+  send_response(shm, pkt.job_id, pkt.req_id,
+                build_metrics_report(shm, MetricsView::Text));
 }
 
 // Static O(1) Dispatch Table Registry
@@ -379,6 +754,12 @@ public:
   static SystemCommandDispatcher &instance() {
     static SystemCommandDispatcher dispatcher;
     return dispatcher;
+  }
+
+  /// Runs one key, already resolved by name.
+  void dispatch(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                SystemOpCode code) const {
+    table_[static_cast<std::size_t>(code)](shm, pkt);
   }
 
   void dispatch(ShmLayout &shm, const Proto::PacketHeader &pkt) const {
@@ -655,6 +1036,105 @@ bool object_lookup_ready() {
   return ready;
 }
 
+/**
+ * Objects the interpreter keeps between two commands, addressed by name.
+ *
+ * A data frame, a workspace, a factory, a connection or a socket is not a named
+ * TObject, so Need<T> cannot find it, and a command that built one left nothing
+ * behind for the next command to use. This table is what a name now resolves
+ * to. It holds only <map> and <string>, so no ROOT class is named here: the
+ * type appears at the call site, and a class a build does not carry fails that
+ * one command rather than this block.
+ */
+bool handles_ready() {
+  static const bool ready = (gInterpreter != nullptr) &&
+      declare_block("named handles",
+        "#include <map>\n"
+        "#include <stdexcept>\n"
+        "#include <string>\n"
+        "#include <typeinfo>\n"
+        "namespace SphereBridge {\n"
+        "  struct Handle {\n"
+        "    void *ptr;\n"
+        "    std::string type;   // typeid, which is what a lookup is checked on\n"
+        "    std::string shown;  // the same type as it is written in a command\n"
+        "    void (*drop)(void *);\n"
+        "  };\n"
+        "  inline std::map<std::string, Handle> &Handles() {\n"
+        "    static std::map<std::string, Handle> table;\n"
+        "    return table;\n"
+        "  }\n"
+        "  inline std::string Bound() {\n"
+        "    if (Handles().empty()) { return \"nothing\"; }\n"
+        "    std::string out;\n"
+        "    for (std::map<std::string, Handle>::const_iterator it =\n"
+        "             Handles().begin(); it != Handles().end(); ++it) {\n"
+        "      if (!out.empty()) { out += \", \"; }\n"
+        "      out += it->first;\n"
+        "    }\n"
+        "    return out;\n"
+        "  }\n"
+        "  template <typename T> void Release(void *p) { delete (T *)p; }\n"
+        // Binding a name a second time frees what it held, so a chain of
+        // commands on one name does not pile up objects nobody can reach.
+        "  template <typename T>\n"
+        "  std::string Keep(const char *name, T *ptr, const char *shown) {\n"
+        "    if (ptr == nullptr) {\n"
+        "      return std::string(\"ERROR: nothing to bind to '\") + name + \"'\";\n"
+        "    }\n"
+        "    std::map<std::string, Handle>::iterator it = Handles().find(name);\n"
+        "    if (it != Handles().end() && it->second.drop != 0 &&\n"
+        "        it->second.ptr != (void *)ptr) {\n"
+        "      it->second.drop(it->second.ptr);\n"
+        "    }\n"
+        "    Handle bound;\n"
+        "    bound.ptr = (void *)ptr;\n"
+        "    bound.type = typeid(T).name();\n"
+        "    bound.shown = shown;\n"
+        "    bound.drop = &Release<T>;\n"
+        "    Handles()[name] = bound;\n"
+        "    return std::string(name) + \" -> \" + shown;\n"
+        "  }\n"
+        // A name bound to the wrong kind of object is the mistake worth naming,
+        // so the refusal says what it does hold rather than only what it is not.
+        "  template <typename T> T *Held(const char *name) {\n"
+        "    std::map<std::string, Handle>::iterator it = Handles().find(name);\n"
+        "    if (it == Handles().end()) {\n"
+        "      throw std::runtime_error(std::string(\"no handle called '\") +\n"
+        "          name + \"'. Bound: \" + Bound() + \".\");\n"
+        "    }\n"
+        "    if (it->second.type != typeid(T).name()) {\n"
+        "      throw std::runtime_error(std::string(\"handle '\") + name +\n"
+        "          \"' holds a \" + it->second.shown + \".\");\n"
+        "    }\n"
+        "    return (T *)it->second.ptr;\n"
+        "  }\n"
+        "  inline std::string HandleList() {\n"
+        "    if (Handles().empty()) { return \"no handle bound\"; }\n"
+        "    std::string out;\n"
+        "    for (std::map<std::string, Handle>::const_iterator it =\n"
+        "             Handles().begin(); it != Handles().end(); ++it) {\n"
+        "      if (!out.empty()) { out += \"\\n\"; }\n"
+        "      out += it->first;\n"
+        "      out += std::string(12 > it->first.size()\n"
+        "                             ? 12 - it->first.size() : 1, ' ');\n"
+        "      out += it->second.shown;\n"
+        "    }\n"
+        "    return out;\n"
+        "  }\n"
+        "  inline std::string HandleDrop(const char *name) {\n"
+        "    std::map<std::string, Handle>::iterator it = Handles().find(name);\n"
+        "    if (it == Handles().end()) {\n"
+        "      return std::string(\"no handle called '\") + name + \"'\";\n"
+        "    }\n"
+        "    if (it->second.drop != 0) { it->second.drop(it->second.ptr); }\n"
+        "    Handles().erase(it);\n"
+        "    return std::string(name) + \" dropped\";\n"
+        "  }\n"
+        "}\n");
+  return ready;
+}
+
 // Runs one line through the ROOT interpreter and answers with its result.
 void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt,
                        void *context) {
@@ -690,6 +1170,17 @@ void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt,
                   "rootbackend_error.log. Name the object through gDirectory or "
                   "gFile directly in the meantime.");
     return;
+  }
+
+  if (command.find("SphereBridge::Keep<") != std::string::npos ||
+      command.find("SphereBridge::Held<") != std::string::npos ||
+      command.find("SphereBridge::Handle") != std::string::npos) {
+    if (!handles_ready()) {
+      send_response(shm, pkt.job_id, pkt.req_id,
+                    "ERROR: this ROOT build refused the named-handle table; see "
+                    "rootbackend_error.log.");
+      return;
+    }
   }
 
   slot->clear();
@@ -772,7 +1263,93 @@ void handle_uptime(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context
 
 void handle_system(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context) {
   (void)context;
-  SystemCommandDispatcher::instance().dispatch(shm, pkt);
+
+  // The key travels in the payload. A request that carries none is answered
+  // with the list, which is more use than the flags word it used to fall on.
+  const std::string request = read_payload(shm, pkt);
+  if (request.empty()) {
+    if ((pkt.flags & 0xFFFF) != 0) {
+      SystemCommandDispatcher::instance().dispatch(shm, pkt);
+      return;
+    }
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  "keys: " + system_opcode_name_list());
+    return;
+  }
+
+  const SystemOpCode code = system_opcode_from_name(request);
+  if (code == SystemOpCode::Count) {
+    get_telemetry().invalid_opcodes.fetch_add(1, std::memory_order_relaxed);
+    send_response(shm, pkt.job_id, pkt.req_id,
+                  "ERROR: no root-config key called '" + request +
+                      "'. keys: " + system_opcode_name_list());
+    return;
+  }
+  SystemCommandDispatcher::instance().dispatch(shm, pkt, code);
+}
+
+void handle_sys_metrics(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                        void *context) {
+  (void)context;
+  send_response(shm, pkt.job_id, pkt.req_id,
+                build_metrics_report(shm, metrics_view(read_payload(shm, pkt))));
+}
+
+/**
+ * ROOT's implicit multithreading, on or off for the whole engine.
+ *
+ * RDataFrame, the tree readers and the RNTuple readers all take their parallelism
+ * from this one switch, and nothing in Sphere could reach it.
+ */
+void handle_sys_threads(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                        void *context) {
+  (void)context;
+
+  const std::string request = read_payload(shm, pkt);
+  const std::string verb = request.substr(0, request.find(' '));
+
+  auto report = [&]() {
+    const bool on = ROOT::IsImplicitMTEnabled();
+    return std::string("implicit multithreading ") + (on ? "on" : "off") +
+           ", pool " + std::to_string(ROOT::GetThreadPoolSize()) + " threads";
+  };
+
+  if (verb == "off") {
+    ROOT::DisableImplicitMT();
+    send_response(shm, pkt.job_id, pkt.req_id, report());
+    return;
+  }
+
+  if (verb == "on") {
+    // Zero means "as many threads as the machine has", which is ROOT's own
+    // default and the right answer when the user names no number.
+    unsigned int threads = 0;
+    const std::size_t at = request.find(' ');
+    if (at != std::string::npos) {
+      const std::string rest = request.substr(at + 1);
+      char *end = nullptr;
+      const long asked = std::strtol(rest.c_str(), &end, 10);
+      if (end != rest.c_str() && asked > 0 && asked < 4096) {
+        threads = static_cast<unsigned int>(asked);
+      }
+    }
+    // Turning it on twice is ignored by ROOT, so the count would not change.
+    if (ROOT::IsImplicitMTEnabled()) {
+      ROOT::DisableImplicitMT();
+    }
+    ROOT::EnableImplicitMT(threads);
+    send_response(shm, pkt.job_id, pkt.req_id, report());
+    return;
+  }
+
+  if (verb.empty() || verb == "status") {
+    send_response(shm, pkt.job_id, pkt.req_id, report());
+    return;
+  }
+
+  get_telemetry().invalid_opcodes.fetch_add(1, std::memory_order_relaxed);
+  send_response(shm, pkt.job_id, pkt.req_id,
+                "ERROR: say on, on <n>, off or status");
 }
 
 // Installs the handlers above into the process-wide CommandRegistry.
@@ -783,6 +1360,7 @@ void warm_up() {
   // own chatter stays out of the engine log.
   if (interpreter_result_slot() != nullptr && gInterpreter != nullptr) {
     (void)object_lookup_ready();
+    (void)handles_ready();
     OutputCapture capture;
     TInterpreter::EErrorCode error = TInterpreter::kNoError;
     (void)gInterpreter->ProcessLine(
@@ -813,6 +1391,10 @@ void register_all() {
   registry.register_command(Proto::PacketType::CMD_SYS_VERSION, &handle_version);
   registry.register_command(Proto::PacketType::CMD_SYS_UPTIME, &handle_uptime);
   registry.register_command(Proto::PacketType::CMD_SYS_CONFIG, &handle_system);
+  registry.register_command(Proto::PacketType::CMD_SYS_METRICS,
+                            &handle_sys_metrics);
+  registry.register_command(Proto::PacketType::CMD_SYS_THREADS,
+                            &handle_sys_threads);
   registry.register_command(Proto::PacketType::CMD_CLING_EXEC, &handle_cling_exec);
 }
 

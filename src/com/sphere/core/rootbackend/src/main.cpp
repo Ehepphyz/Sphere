@@ -8,6 +8,7 @@
 #include "commands/cmd_file.h"
 #include "commands/cmd_system.h"
 #include "commands/cmd_inspect.h"
+#include "commands/cmd_ntuple.h"
 #include "commands/cmd_ttree.h"
 #include "logger.h"
 #include "platform.h"
@@ -359,6 +360,7 @@ bool claim_region(const std::string &path, const char *what) {
 void shutdown_command_modules() noexcept {
   try {
     Sphere::cmd::ttree::shutdown_thread_pool();
+    Sphere::cmd::ntuple::shutdown();
     Sphere::cmd::file::close_all_files();
   } catch (const std::exception &ex) {
     std::cerr << "[Main] Error during command shutdown: " << ex.what() << "\n";
@@ -682,6 +684,7 @@ int main(int argc, char **argv) {
   Sphere::cmd::file::register_all();
   Sphere::cmd::ttree::register_all();
   Sphere::cmd::inspect::register_all();
+  Sphere::cmd::ntuple::register_all();
 
   try {
     Sphere::RootRuntime runtime(true,

@@ -369,9 +369,18 @@ static_assert(sizeof(ShmHeader) == 1408, "ABI: ShmHeader size drift.");
 }
 
 /// Total size of the heap bookkeeping that precedes the first chunk.
+///
+/// Rounded to SIMD_ALIGNMENT, not to a cache line: the chunk header is 128
+/// bytes and every size class is a multiple of 128, so this one value decides
+/// whether payloads land on a 128-byte boundary or 64 bytes off it.
 [[nodiscard]] constexpr std::size_t heap_metadata_size() noexcept {
-  return align_up(heap_root_offset() + sizeof(ShmHeapRoot), CACHE_LINE_SIZE);
+  return align_up(heap_root_offset() + sizeof(ShmHeapRoot), SIMD_ALIGNMENT);
 }
+
+static_assert(sizeof(Chunk) % SIMD_ALIGNMENT == 0,
+              "The chunk header must keep payloads on a SIMD boundary.");
+static_assert(heap_metadata_size() % SIMD_ALIGNMENT == 0,
+              "The first chunk must start on a SIMD boundary.");
 
 // -----------------------------------------------------------------------------
 // Initialization

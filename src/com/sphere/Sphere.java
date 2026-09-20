@@ -45,6 +45,8 @@ public class Sphere extends JFrame {
     private JPanel statusBar;
     private JLabel statusModeLabel;
     private static java.util.function.Consumer<String> globalModeListener;
+    /** Shows next to the prompt that a block is open and waiting. */
+    private static java.util.function.Consumer<Boolean> globalPendingListener;
     private JLabel pathLabel;
     private JLabel modeIndicator;
     private JTextField commandInputField;
@@ -60,9 +62,45 @@ public class Sphere extends JFrame {
     private JSplitPane leftVerticalSplit;
     private JSplitPane rightVerticalSplit;
     private JSplitPane mainSplit;
+    private JSplitPane centerRightSplit;
+
+    /** The window a console command reports on. */
+    private static Sphere activeWindow;
+
+    /** The free area of the screen, kept so the window can be refitted to it. */
+    private Rectangle freeArea;
+
+    /** How many times the window has been resized to reach its intended inside. */
+    private int fitAttempts;
+
+    /** True once Sphere has finished sizing itself, so a resize is the user's. */
+    private boolean settled;
+
+    /** Waits for the dragging to stop before writing, rather than at every pixel. */
+    private javax.swing.Timer resizeWriter;
 
     // State
     private final Preferences prefs = Preferences.userNodeForPackage(Sphere.class);
+
+    /** How many times the tree is laid out before it is shown, one per nested pane. */
+    private static final int LAYOUT_PASSES = 4;
+
+    /** How many pixels off the intended inside is close enough to leave alone. */
+    private static final int TOLERANCE = 2;
+
+    /** A window manager may refuse to grow the window; this stops the asking. */
+    private static final int MAX_FIT_ATTEMPTS = 4;
+
+    /** How much of the free screen area the window takes, when settings.conf is silent. */
+    private static final double DEFAULT_WINDOW_SHARE = 0.95;
+
+    /** The width both side panels open on, when settings.conf is silent. */
+    private static final int DEFAULT_SIDE_PANEL_WIDTH = 300;
+
+    /** What one screen is worth differs from desk to desk, so both are settings. */
+    private static double windowShare = DEFAULT_WINDOW_SHARE;
+    private static int sidePanelWidth = DEFAULT_SIDE_PANEL_WIDTH;
+
     private final SessionManager session = new SessionManager("WorkStation");
     private final HistoryManager historyManager = new HistoryManager();
     private final CommandRouter router = new CommandRouter();
@@ -254,6 +292,8 @@ public class Sphere extends JFrame {
         this.editorFrame = new QuickCodeEditorFrame(null);
         activeEditorFrame = this.editorFrame;
 
+        activeWindow = this;
+
         JSplitPane leftPane = initLeftPane();
         JPanel consolePanel   = initConsole();
         JSplitPane rightPane = initRightPane();
@@ -263,7 +303,101 @@ public class Sphere extends JFrame {
         attachWindowHooks();
     }
 
+    /**
+     * Writes one layout setting back into [LAYOUT_SIZE].
+     *
+     * What is adjusted by hand has to survive the next launch, otherwise the
+     * adjustment is to be made again every morning.
+     */
+    private static void writeLayoutSetting(String key, String value) {
+        try {
+            com.sphere.utils.SettingsManager settings = new com.sphere.utils.SettingsManager();
+            settings.setProperty("LAYOUT_SIZE", key, value);
+            settings.save();
+        } catch (RuntimeException unwritable) {
+            AppLogger.error("Could not write " + key + " to settings.conf: "
+                            + unwritable.getMessage());
+        }
+    }
+
+    /** The width the user gave the side panels, kept for the next launch. */
+    private static void rememberSidePanelWidth(int width) {
+        if (width == sidePanelWidth) {
+            return;
+        }
+        sidePanelWidth = width;
+        writeLayoutSetting("SIDE_PANEL_WIDTH", Integer.toString(width));
+    }
+
+    /** The share of the screen the user gave the window, once the dragging stops. */
+    private void rememberWindowShare() {
+        if (freeArea == null || freeArea.width <= 0 || getContentPane().getWidth() <= 0) {
+            return;
+        }
+        final double share = getContentPane().getWidth() / (double) freeArea.width;
+        if (share < 0.3 || share > 1.0
+            || Math.abs(share - windowShare) < 0.005) {
+            return;
+        }
+        windowShare = share;
+        writeLayoutSetting("WINDOW_SHARE",
+                           String.format(java.util.Locale.ROOT, "%.3f", share));
+    }
+
+    /** A resize is answered once it has stopped, not at every pixel of the drag. */
+    private void scheduleWindowShareWrite() {
+        if (!settled) {
+            return;
+        }
+        if (resizeWriter == null) {
+            resizeWriter = new javax.swing.Timer(800, event -> rememberWindowShare());
+            resizeWriter.setRepeats(false);
+        }
+        resizeWriter.restart();
+    }
+
+    /** Called once Sphere has stopped sizing itself. */
+    void layoutSettled() {
+        settled = true;
+    }
+
+    /**
+     * Reads the two layout settings from [LAYOUT_SIZE] in settings.conf.
+     *
+     * A value per machine rather than one per family of systems: what a desktop
+     * reserves, and how it scales, differs from one machine to the next even under
+     * the same name. A value outside what makes sense is reported and ignored.
+     */
+    private static void readLayoutSettings() {
+        try {
+            com.sphere.utils.SettingsManager settings = new com.sphere.utils.SettingsManager();
+            final String share = settings.getProperty("LAYOUT_SIZE", "WINDOW_SHARE");
+            if (share != null && !share.isBlank()) {
+                final double asked = Double.parseDouble(share.trim());
+                if (asked >= 0.3 && asked <= 1.0) {
+                    windowShare = asked;
+                } else {
+                    AppLogger.error("WINDOW_SHARE must be between 0.3 and 1.0.");
+                }
+            }
+            final String width = settings.getProperty("LAYOUT_SIZE", "SIDE_PANEL_WIDTH");
+            if (width != null && !width.isBlank()) {
+                final int asked = Integer.parseInt(width.trim());
+                if (asked >= 100 && asked <= 1000) {
+                    sidePanelWidth = asked;
+                } else {
+                    AppLogger.error("SIDE_PANEL_WIDTH must be between 100 and 1000 pixels.");
+                }
+            }
+        } catch (NumberFormatException notANumber) {
+            AppLogger.error("WINDOW_SHARE or SIDE_PANEL_WIDTH is not a number.");
+        } catch (RuntimeException unreadable) {
+            // settings.conf is unreadable; the values written above stand.
+        }
+    }
+
     private void initFrame() {
+        readLayoutSettings();
         setTitle("Sphere - HEP WorkStation");
         
         // Every size at once: the window manager picks, instead of shrinking a
@@ -272,10 +406,72 @@ public class Sphere extends JFrame {
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
 
-        Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
-        setSize((int) (screenSize.width * 0.85), (int) (screenSize.height * 0.85));
-        setLocationRelativeTo(null);
+        // The free area of the screen the window opens on, taskbar or dock taken
+        // out. getMaximumWindowBounds() is meant to say this, but several Linux
+        // desktops and macOS hand back the whole screen, so the reserved edges are
+        // asked for and subtracted here instead.
+        GraphicsConfiguration screen = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                                          .getDefaultScreenDevice().getDefaultConfiguration();
+        Rectangle bounds = screen.getBounds();
+        java.awt.Insets reserved = Toolkit.getDefaultToolkit().getScreenInsets(screen);
+        Rectangle byInsets = new Rectangle(bounds.x + reserved.left, bounds.y + reserved.top,
+                                           bounds.width - reserved.left - reserved.right,
+                                           bounds.height - reserved.top - reserved.bottom);
+        // Neither source is reliable everywhere: the reserved edges come back empty
+        // on several desktops, and the maximum bounds come back as the whole screen
+        // on others. What both agree on is free on all of them.
+        Rectangle byMaximum = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                                                 .getMaximumWindowBounds();
+        freeArea = byInsets.intersection(byMaximum);
+        if (freeArea.width < 400 || freeArea.height < 300) {
+            freeArea = byInsets;
+        }
+        setSize((int) (freeArea.width * windowShare), (int) (freeArea.height * windowShare));
+        centreInFreeArea();
         setLayout(new BorderLayout());
+    }
+
+    /**
+     * Grows the window so that its inside, and not its outside, gets the intended
+     * size.
+     *
+     * A window carries its title bar and its borders on top of what it shows, and
+     * those are thin on Windows and thick on several Linux desktops and on macOS.
+     * Sizing the window alone therefore gave a smaller working area on those
+     * systems for the same numbers. The decorations are only measurable once the
+     * window has been given to the system, which is why this is called then.
+     */
+    void fitInsideToScreen() {
+        if (freeArea == null || fitAttempts >= MAX_FIT_ATTEMPTS) {
+            return;
+        }
+        final java.awt.Container inside = getContentPane();
+        final int haveWide = inside.getWidth();
+        final int haveHigh = inside.getHeight();
+        if (haveWide <= 0 || haveHigh <= 0) {
+            return;
+        }
+        final int wantWide = (int) (freeArea.width * windowShare);
+        final int wantHigh = (int) (freeArea.height * windowShare);
+        final int growWide = wantWide - haveWide;
+        final int growHigh = wantHigh - haveHigh;
+        if (Math.abs(growWide) <= TOLERANCE && Math.abs(growHigh) <= TOLERANCE) {
+            return;
+        }
+        fitAttempts++;
+        setSize(Math.min(getWidth() + growWide, freeArea.width),
+                Math.min(getHeight() + growHigh, freeArea.height));
+        centreInFreeArea();
+    }
+
+    /** Centred in the free area: centring on the screen slides it under a top bar. */
+    private void centreInFreeArea() {
+        if (freeArea == null) {
+            setLocationRelativeTo(null);
+            return;
+        }
+        setLocation(freeArea.x + (freeArea.width - getWidth()) / 2,
+                    freeArea.y + (freeArea.height - getHeight()) / 2);
     }
 
     private JPanel initConsole() {
@@ -437,7 +633,10 @@ public class Sphere extends JFrame {
         topRightTabs.setUI(new SPTabbedPaneUI());
         topRightTabs.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
         
-        topRightTabs.addTab("Variables", new JPanel());
+        com.sphere.components.variables.VariablesPanel variables =
+            com.sphere.components.variables.VariablesPanel.instance();
+        topRightTabs.addTab("Variables", variables);
+        variables.setReveal(() -> topRightTabs.setSelectedComponent(variables));
         topRightTabs.addTab("Physics", new JPanel());
         com.sphere.components.rootview.RootPlotsPanel plots =
             com.sphere.components.rootview.RootPlotsPanel.instance();
@@ -464,22 +663,45 @@ public class Sphere extends JFrame {
     }
 
     private void assembleMainLayout(JSplitPane leftPane, JComponent consolePanel, JSplitPane rightPane) {
-        JSplitPane centerRightSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, consolePanel, rightPane);
+        // Both dividers are persistent: the shares are only what an installation
+        // that has never been adjusted opens on. Asking for a proportion here used
+        // to be undone by the layout that followed setVisible, which is why the
+        // panel beside the console had to be dragged at every launch.
+        // The right panel is given the width of the left one, and the console takes
+        // what is left. Said this way the two sides stay equal whatever the window
+        // does, without a second proportion to keep in step with the first.
+        centerRightSplit = new com.sphere.components.PersistentSplitPane(
+                JSplitPane.HORIZONTAL_SPLIT, consolePanel, rightPane,
+                prefs, "centerRightSplit",
+                span -> span - centerRightSplit.getDividerSize()
+                             - mainSplit.getDividerLocation());
         centerRightSplit.setBorder(null);
-        centerRightSplit.setResizeWeight(0.75);
+        // All of a width change goes to the console: the right panel keeps the
+        // width of the left one, so it has no share to take. Weights that disagreed
+        // with the intended widths were what moved the dividers after they had been
+        // placed, and that correction is what was seen jumping.
+        centerRightSplit.setResizeWeight(1.0);
 
-        mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPane, centerRightSplit);
+        mainSplit = new com.sphere.components.PersistentSplitPane(
+                JSplitPane.HORIZONTAL_SPLIT, leftPane, centerRightSplit,
+                prefs, "mainSplit", sidePanelWidth);
+        ((com.sphere.components.PersistentSplitPane) mainSplit)
+            .setOnUserMoved(Sphere::rememberSidePanelWidth);
         mainSplit.setBorder(null);
-        mainSplit.setResizeWeight(0.25);
+        // The side panels keep their width; the console takes every extra pixel.
+        mainSplit.setResizeWeight(0.0);
 
         leftPane.setMinimumSize(new Dimension(120, 200));
         rightPane.setMinimumSize(new Dimension(120, 200));
         consolePanel.setMinimumSize(new Dimension(200, 200));
 
-        SwingUtilities.invokeLater(() -> {
-            mainSplit.setDividerLocation(0.23);
-            centerRightSplit.setDividerLocation(0.85);
-        });
+        // The two side panels are asked for the same width before anything is laid
+        // out. A split pane honors the preferred width of its children on the very
+        // first pass, so the dividers land there straight away instead of being put
+        // somewhere else and moved afterwards, in full view.
+        leftPane.setPreferredSize(new Dimension(sidePanelWidth, 200));
+        rightPane.setPreferredSize(new Dimension(sidePanelWidth, 200));
+
         add(mainSplit, BorderLayout.CENTER);
     }
 
@@ -514,6 +736,13 @@ public class Sphere extends JFrame {
 
         // FIX: Assign the local UI update logic to a global static hook
         globalModeListener = (String indicator) -> updateStatusBarMode(indicator);
+        globalPendingListener = (Boolean pending) -> SwingUtilities.invokeLater(() -> {
+            if (modeIndicator == null) {
+                return;
+            }
+            final String shown = modeIndicator.getText().replace(" ...", "");
+            modeIndicator.setText(Boolean.TRUE.equals(pending) ? shown + " ..." : shown);
+        });
     }
 
     /**
@@ -527,6 +756,61 @@ public class Sphere extends JFrame {
     public static void assignGlobalIndicator(String indicator) {
         if (globalModeListener != null) {
             globalModeListener.accept(indicator);
+        }
+    }
+
+    /** Marks, next to the prompt, that Enter is waiting for the block to close. */
+    /**
+     * What the three columns actually measure, and where those numbers came
+     * from. An interface that opens wrong looks the same whatever the reason,
+     * so this says which one it is rather than leaving it to be guessed.
+     */
+    public static String layoutReport() {
+        Sphere window = activeWindow;
+        if (window == null || window.mainSplit == null || window.centerRightSplit == null) {
+            return "The workbench is not built yet.";
+        }
+        final int total = window.getWidth();
+        final int left = window.mainSplit.getDividerLocation();
+        final int console = window.centerRightSplit.getDividerLocation();
+        // The divider sits between the two, so its thickness belongs to neither.
+        final int right = window.centerRightSplit.getWidth() - console
+                        - window.centerRightSplit.getDividerSize();
+        StringBuilder said = new StringBuilder("Layout");
+        final java.awt.Insets frame = window.getInsets();
+        final java.awt.Container inside = window.getContentPane();
+        said.append(String.format("%n  screen free   %5d x %d",
+            window.freeArea == null ? 0 : window.freeArea.width,
+            window.freeArea == null ? 0 : window.freeArea.height));
+        said.append(String.format("%n  window        %5d x %d", total, window.getHeight()));
+        said.append(String.format("%n  lost to frame %5d x %d   (measured)",
+            total - inside.getWidth(), window.getHeight() - inside.getHeight()));
+        said.append(String.format("%n  system claims %5d x %d   (left %d right %d top %d bottom %d)",
+            frame.left + frame.right, frame.top + frame.bottom,
+            frame.left, frame.right, frame.top, frame.bottom));
+        said.append(String.format("%n  drawing area  %5d x %d   <- what you actually see",
+            inside.getWidth(), inside.getHeight()));
+        final int drawn = Math.max(inside.getWidth(), 1);
+        said.append(String.format("%n  left panel    %5d  (%3.0f%%)", left, pc(left, drawn)));
+        said.append(String.format("%n  console       %5d  (%3.0f%%)", console, pc(console, drawn)));
+        said.append(String.format("%n  right panel   %5d  (%3.0f%%)", right, pc(right, drawn)));
+        said.append(String.format("%n  left - right  %5d px apart", Math.abs(left - right)));
+        for (JSplitPane pane : new JSplitPane[] { window.mainSplit, window.centerRightSplit,
+                                                  window.leftVerticalSplit, window.rightVerticalSplit }) {
+            if (pane instanceof com.sphere.components.PersistentSplitPane kept) {
+                said.append("\n  ").append(kept.state());
+            }
+        }
+        return said.toString();
+    }
+
+    private static double pc(int part, int whole) {
+        return whole > 0 ? 100.0 * part / whole : 0;
+    }
+
+    public static void assignPendingMarker(boolean pending) {
+        if (globalPendingListener != null) {
+            globalPendingListener.accept(pending);
         }
     }
 
@@ -585,6 +869,13 @@ public class Sphere extends JFrame {
     }
 
     private void attachWindowHooks() {
+        addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent event) {
+                scheduleWindowShareWrite();
+            }
+        });
+
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
@@ -611,6 +902,15 @@ public class Sphere extends JFrame {
                     int pos = commandInputField.getCaretPosition();
                     commandInputField.setText(text.substring(0, pos) + "\n" + text.substring(pos));
                     commandInputField.setCaretPosition(pos + 1);
+                    e.consume();
+                    return;
+                }
+
+                // Escape drops the block being written, and only that: a few
+                // lines, never a whole session's work.
+                if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+                    commandInputField.setText("");
+                    router.abandonPendingBlock();
                     e.consume();
                     return;
                 }
@@ -707,6 +1007,10 @@ public class Sphere extends JFrame {
      * Core Main Application Entry Point
      * ------------------------------------------------------------------------- */
     public static void main(String[] args) {
+        // Before anything else, so that whatever fails below is said rather than
+        // written to a terminal that may not exist.
+        com.sphere.core.JavaErrors.install();
+
         String os = System.getProperty("os.name").toLowerCase();
 
         // 1. Conditionally isolate Linux/WSL font anti-aliasing pipelines
@@ -731,8 +1035,14 @@ public class Sphere extends JFrame {
         try {
             ThemeManager.applyDarkTheme();
         } catch (Exception e) {
-            System.err.println("Theme application failed: " + e.getMessage());
+            com.sphere.utils.AppLogger.error("Theme application failed: " + e.getMessage());
         }
+
+        // The jar manifest has the JVM show a picture before the first class of
+        // Sphere is loaded. Here only because the properties above must be set
+        // before the toolkit starts, and a window of our own would start it.
+        com.sphere.core.Splash.begin();
+        com.sphere.core.Splash.step("Reading the settings");
 
         // 5. Instantiate settings and synchronize configuration registry
         com.sphere.utils.SettingsManager settings = null;
@@ -740,8 +1050,10 @@ public class Sphere extends JFrame {
             settings = new com.sphere.utils.SettingsManager();
             com.sphere.utils.EngineConfigRegistry.synchronize(settings);
         } catch (Exception e) {
-            System.err.println("Settings initialization failed: " + e.getMessage());
+            com.sphere.utils.AppLogger.error("Settings initialization failed: " + e.getMessage());
         }
+
+        com.sphere.core.Splash.step("Starting the ROOT bridge");
 
         // 6. Initialize the ROOT backend (Completely silent unless configuration is active and fails)
         // The same sequence is reachable from the console menu, so it lives in
@@ -757,10 +1069,58 @@ public class Sphere extends JFrame {
             }
         }
 
+        com.sphere.core.Splash.step("Building the interface");
+
         // 7. Safely instantiate the GUI layout tree on the Event Dispatch Thread (EDT)
         SwingUtilities.invokeLater(() -> {
-            Sphere frame = new Sphere();
-            frame.setVisible(true);
+            // The whole first display blocks the event thread for as long as the
+            // machine needs: building the tree, parsing the icons, then the render
+            // pipeline itself. That is not a freeze to report, and the stretch has
+            // to start here -- the constructor is part of it.
+            com.sphere.core.EdtWatchdog.expectBusy(true);
+            try {
+                Sphere frame = new Sphere();
+                // Laid out before being shown, so the dividers are in place on the
+                // first picture. Several passes because the panes settle one level at
+                // a time: the inner one only knows its width once the outer one has
+                // taken its own.
+                frame.addNotify();
+                frame.fitInsideToScreen();
+                for (int pass = 0; pass < LAYOUT_PASSES; pass++) {
+                    // invalidate() before each pass: moving a divider asks for a new
+                    // layout through the repaint manager, which answers later, so a
+                    // plain validate() would find the tree already valid and skip the
+                    // pass that was needed.
+                    frame.invalidate();
+                    frame.validate();
+                }
+                frame.setVisible(true);
+                com.sphere.core.Splash.done();
+                // X11 and macOS only decorate the window when it reaches the screen,
+                // so its borders measure zero until now and the fit made earlier was
+                // made on nothing. Windows creates them sooner, which is why only
+                // those two systems opened smaller.
+                // Measured rather than calculated: the window is grown, laid out,
+                // measured again, until what it draws matches what was asked for.
+                for (int attempt = 0; attempt < MAX_FIT_ATTEMPTS; attempt++) {
+                    frame.fitInsideToScreen();
+                    frame.invalidate();
+                    frame.validate();
+                }
+                // The settle pass runs after this block, so it closes the stretch
+                // itself; ending it here would leave the last layout unprotected.
+                SwingUtilities.invokeLater(() -> {
+                    try {
+                        frame.fitInsideToScreen();
+                        frame.layoutSettled();
+                    } finally {
+                        com.sphere.core.EdtWatchdog.expectBusy(false);
+                    }
+                });
+            } catch (RuntimeException | Error startupFailed) {
+                com.sphere.core.EdtWatchdog.expectBusy(false);
+                throw startupFailed;
+            }
         });
     }
 }

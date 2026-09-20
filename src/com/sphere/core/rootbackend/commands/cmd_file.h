@@ -40,6 +40,10 @@ void handle_save(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
 // Lists what an open file holds, subdirectories included.
 void handle_keys(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
 
+// Merges files into one, the way hadd does. The request reads
+// "<output>\n<input>\n<input>...".
+void handle_merge(ShmLayout &shm, const Proto::PacketHeader &pkt, void *context);
+
 // Installs the handlers above into the process-wide CommandRegistry.
 void register_all();
 

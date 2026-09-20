@@ -3,6 +3,7 @@
 #ifndef SPHERE_CMD_TTREE_H
 #define SPHERE_CMD_TTREE_H
 
+#include "isa_allocator.h"
 #include "lockfree_ring.h"
 #include "packets.h"
 #include "shm_layout.h"
@@ -75,11 +76,15 @@ bool register_and_compile_jit_filter(std::string_view function_name,
 
 /**
 * Executes a precompiled JIT filter over a tree column
+*
+* The results land in memory aligned on the host CPU's vector width, so that
+* whatever reads the column next -- a SIMD pass, or a tensor handed to Python
+* through DLPack -- takes it without a realigning copy.
 */
-void execute_jit_filter_on_tree(std::uint32_t job_id,
-                                std::string_view function_name,
-                                std::string_view branch_name,
-                                std::vector<float> &out_filtered_results);
+void execute_jit_filter_on_tree(
+    std::uint32_t job_id, std::string_view function_name,
+    std::string_view branch_name,
+    Memory::isa_vector<float> &out_filtered_results);
 
 void process_tree_by_clusters(
     std::uint32_t job_id,

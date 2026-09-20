@@ -114,9 +114,21 @@ public final class GdbAdapter implements DebugAdapter {
         File binary = new File(source.getAbsoluteFile().getParentFile(),
                                base + "_debug" + (windows ? ".exe" : ""));
 
-        boolean isC = name.endsWith(".c");
-        String key = isC ? "GCC_DIR" : "GPP_DIR";
-        String fallback = isC ? "gcc" : "g++";
+        // The compiler follows the source, so gdb debugs a Fortran program the
+        // same way it debugs a C++ one: the debug tables are what it reads, and
+        // gfortran writes them just as g++ does.
+        final String key;
+        final String fallback;
+        if (name.endsWith(".c")) {
+            key = "GCC_DIR";
+            fallback = "gcc";
+        } else if (isFortran(name)) {
+            key = "ENV_FC";
+            fallback = "gfortran";
+        } else {
+            key = "GPP_DIR";
+            fallback = "g++";
+        }
         String compiler = settings == null ? fallback : settings.resolveTool(key, fallback);
         if (compiler == null) {
             fail("No compiler: set " + key + " in settings.conf.");
@@ -140,6 +152,15 @@ public final class GdbAdapter implements DebugAdapter {
             return null;
         }
         return binary;
+    }
+
+    /** The suffixes gfortran takes, free form and fixed form alike. */
+    static boolean isFortran(String name) {
+        final String lower = name.toLowerCase();
+        return lower.endsWith(".f90") || lower.endsWith(".f95")
+            || lower.endsWith(".f03") || lower.endsWith(".f08")
+            || lower.endsWith(".f") || lower.endsWith(".for")
+            || lower.endsWith(".ftn");
     }
 
     // ---- Commands ----------------------------------------------------------

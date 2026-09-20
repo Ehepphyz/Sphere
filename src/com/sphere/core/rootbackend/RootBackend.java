@@ -41,10 +41,15 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final int MAX_WORKERS = 64;
     public static final long CACHE_LINE_SIZE = 64L;
 
+    // Every heap payload starts on this boundary, and the C++ side pads every
+    // block up to it (common_config.h, SIMD_ALIGNMENT).
+    public static final long SIMD_ALIGNMENT = 128L;
+
     public static final int SHM_MAGIC = 0x53504852; // 'SPHR'
-    // 4 since the bulk ring partition was added: an older region is laid out
-    // again rather than read with the wrong offsets.
-    public static final int SHM_VERSION = 4;
+    // 5 since heap payloads moved to SIMD_ALIGNMENT: the metadata block that
+    // precedes them grew, so every chunk offset moved. An older region is laid
+    // out again rather than read with the wrong offsets.
+    public static final int SHM_VERSION = 5;
     public static final int PROTO_VERSION = 3;
 
     // ---- ShmHeader (inc/shm_layout.h), 1408 bytes at region offset 0 --------
@@ -211,10 +216,25 @@ public final class RootBackend implements AutoCloseable, Backend {
     // releasing never allocates a chunk of its own.
     public static final short CMD_RELEASE_CHUNK   = 15;
     public static final short CMD_ALLOC_CHUNK     = 16;
+    // What the engine knows about itself. The payload names the view:
+    // text, json, engine, memory, heap, reset.
+    public static final short CMD_SYS_METRICS     = 17;
+    // ROOT implicit multithreading. The payload reads on, on <n>, off, status.
+    public static final short CMD_SYS_THREADS     = 18;
     public static final short EVT_CHUNK_READY     = 114;
     public static final short CMD_FILE_SCAN       = 27;
     public static final short CMD_FILE_LIST       = 28;
     public static final short CMD_FILE_KEYS       = 29;
+    // Merges files into one, the way hadd does.
+    public static final short CMD_FILE_MERGE      = 30;
+
+    // RNTuple, the columnar format that replaces TTree
+    public static final short CMD_NTUPLE_LIST     = 40;
+    public static final short CMD_NTUPLE_ATTACH   = 41;
+    public static final short CMD_NTUPLE_INFO     = 42;
+    public static final short CMD_NTUPLE_FIELDS   = 43;
+    public static final short CMD_NTUPLE_COLUMN   = 44;
+    public static final short CMD_NTUPLE_WRITE    = 45;
 
     public static final short CMD_TTREE_INSPECT       = 20;
     public static final short CMD_TTREE_QUERY_ENTRIES = 21;
@@ -236,6 +256,12 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final short EVT_SYS_VERSION     = 110;
     public static final short EVT_SYS_UPTIME      = 111;
     public static final short EVT_SYS_CONFIG      = 112;
+    public static final short EVT_SYS_METRICS     = 115;
+    public static final short EVT_SYS_THREADS     = 116;
+    public static final short EVT_FILE_MERGED     = 106;
+    public static final short EVT_NTUPLE_INFO     = 140;
+    public static final short EVT_NTUPLE_SCHEMA   = 141;
+    public static final short EVT_NTUPLE_COLUMN   = 142;
 
     public static final short EVT_BACKPRESSURE      = 120;
     public static final short EVT_DEADLINE_EXCEEDED = 121;
@@ -536,8 +562,8 @@ public final class RootBackend implements AutoCloseable, Backend {
         final long mappedSize = this.shmBaseSegment.byteSize();
 
         long baseAddress = this.shmBaseSegment.address();
-        if ((baseAddress % CACHE_LINE_SIZE) != 0) {
-            AppLogger.warn(String.format("SHM Base address 0x%X is NOT aligned to a 64-byte cache line boundary!", baseAddress));
+        if ((baseAddress % SIMD_ALIGNMENT) != 0) {
+            AppLogger.warn(String.format("SHM Base address 0x%X is NOT aligned to a %d-byte SIMD boundary!", baseAddress, SIMD_ALIGNMENT));
         }
 
         verifyRegionHeader();
@@ -1092,6 +1118,17 @@ public final class RootBackend implements AutoCloseable, Backend {
         if (proto != PROTO_VERSION) {
             AppLogger.warn("The engine and this build disagree on what the opcodes "
                 + "mean; some replies may not be understood.");
+        }
+
+        // Where the first chunk starts decides the alignment of every payload
+        // that follows it, on this side as on the C++ side.
+        long dataHeap = this.shmBaseSegment.get(ValueLayout.JAVA_LONG, HDR_OFF_DATA_HEAP);
+        long firstPayload = dataHeap + HEAP_METADATA_SIZE + CHUNK_HEADER_SIZE;
+        if ((firstPayload % SIMD_ALIGNMENT) != 0) {
+            AppLogger.error(String.format(
+                "Heap payloads start %d bytes off the %d-byte SIMD boundary; "
+                + "this build and the engine disagree on the heap layout.",
+                firstPayload % SIMD_ALIGNMENT, SIMD_ALIGNMENT));
         }
     }
 
@@ -1661,7 +1698,10 @@ public final class RootBackend implements AutoCloseable, Backend {
         4194432L, 16777344L, 67108992L, 134217856L, 268435584L, 536871040L
     };
 
-    private static final long HEAP_METADATA_SIZE = 3008L;
+    // align_up(sizeof(ShmHeapHeader) + sizeof(ShmHeapRoot), SIMD_ALIGNMENT).
+    // This is the one value that decides whether payloads land on a 128-byte
+    // boundary; it must match heap_metadata_size() in inc/shm_layout.h.
+    private static final long HEAP_METADATA_SIZE = 3072L;
     private static final long CACHE_LINE         = 64L;
     private static final int  KIND_BUCKETS       = 16;
     private static final int  PRODUCER_BUCKETS   = 16;
@@ -2221,6 +2261,7 @@ public final class RootBackend implements AutoCloseable, Backend {
         if (cmd == EVT_SYS_VERSION)   { return "SYS_VERSION"; }
         if (cmd == EVT_SYS_UPTIME)    { return "SYS_UPTIME"; }
         if (cmd == EVT_SYS_CONFIG)    { return "SYS_CONFIG"; }
+        if (cmd == EVT_SYS_METRICS)   { return "SYS_METRICS"; }
 
         final String reqId = " (req_id=" + Integer.toUnsignedString(reply.reqId()) + ")";
         if (cmd == EVT_ERROR) {

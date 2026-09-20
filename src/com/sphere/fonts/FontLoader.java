@@ -149,7 +149,7 @@ public class FontLoader {
             return new Font(Font.SANS_SERIF, style, (int) size);
             
         } catch (Exception e) {
-            System.err.println("Error loading font " + fontFileName + ": " + e.getMessage());
+            com.sphere.utils.AppLogger.error("Error loading font " + fontFileName + ": " + e.getMessage());
             // FIXED: Hard fallback routing onto raw native system constant to guarantee safe pipeline initialization
             return new Font(Font.SANS_SERIF, style, (int) size);
         }

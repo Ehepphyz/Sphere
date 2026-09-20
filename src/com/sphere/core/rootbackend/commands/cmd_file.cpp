@@ -9,6 +9,7 @@
 #include <TClass.h>
 #include <TDirectory.h>
 #include <TFile.h>
+#include <TFileMerger.h>
 #include <TKey.h>
 #include <TList.h>
 
@@ -487,8 +488,75 @@ void handle_keys(ShmLayout &shm, const Proto::PacketHeader &pkt,
   send_text(shm, pkt, Proto::PacketType::EVT_OK, render_keys(rows, skipped));
 }
 
+/**
+ * Merges files into one, the way hadd does.
+ *
+ * The request reads "<output>\n<input>\n<input>...". This runs in the engine
+ * rather than in a spawned hadd: the files are often already open here, and a
+ * merge of several gigabytes has no business crossing the bridge twice.
+ */
+void handle_merge(ShmLayout &shm, const Proto::PacketHeader &pkt,
+                  void *context) {
+  (void)context;
+
+  const std::string request(extract_path(shm, pkt));
+  std::vector<std::string> paths;
+  std::size_t start = 0;
+  while (start <= request.size()) {
+    const std::size_t end = request.find('\n', start);
+    std::string one = request.substr(
+        start, (end == std::string::npos) ? std::string::npos : end - start);
+    while (!one.empty() && (one.back() == ' ' || one.back() == '\r')) {
+      one.pop_back();
+    }
+    if (!one.empty()) {
+      paths.push_back(one);
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+
+  if (paths.size() < 3) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: a merge needs an output and at least two inputs. "
+              "Usage: :root file merge <output> <input> <input> ...");
+    return;
+  }
+
+  TFileMerger merger(kFALSE, kFALSE);
+  if (!merger.OutputFile(paths[0].c_str(), "RECREATE")) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: cannot write " + paths[0]);
+    return;
+  }
+  for (std::size_t i = 1; i < paths.size(); ++i) {
+    if (!merger.AddFile(paths[i].c_str(), kFALSE)) {
+      send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+                "ERROR: cannot read " + paths[i]);
+      return;
+    }
+  }
+  if (!merger.Merge()) {
+    send_text(shm, pkt, Proto::PacketType::EVT_ERROR,
+              "ERROR: the merge failed; " + paths[0] + " may be incomplete");
+    return;
+  }
+
+  std::uint64_t written = 0;
+  if (std::unique_ptr<TFile> result(TFile::Open(paths[0].c_str(), "READ"));
+      result && !result->IsZombie()) {
+    written = static_cast<std::uint64_t>(result->GetSize());
+  }
+  send_text(shm, pkt, Proto::PacketType::EVT_OK,
+            "merged " + std::to_string(paths.size() - 1) + " files into " +
+                paths[0] + "  " + std::to_string(written) + " bytes");
+}
+
 void register_all() {
   auto &registry = CommandRegistry::instance();
+  registry.register_command(Proto::PacketType::CMD_FILE_MERGE, &handle_merge);
   registry.register_command(Proto::PacketType::CMD_OPEN_FILE, &handle_open);
   registry.register_command(Proto::PacketType::CMD_CLOSE_FILE, &handle_close);
   registry.register_command(Proto::PacketType::CMD_CLOSE_ALL_FILES,

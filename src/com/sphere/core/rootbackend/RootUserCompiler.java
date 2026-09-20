@@ -222,9 +222,14 @@ public final class RootUserCompiler {
         String name = source.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String stem = dot > 0 ? name.substring(0, dot) : name;
+        return source.getParent().resolve(libraryName(stem, extension));
+    }
+
+    /** The file name a source's library gets, prefix included. */
+    public static String libraryName(String stem, String extension) {
         boolean windows = extension.equals(".dll");
         String prefix = windows || stem.startsWith("lib") ? "" : "lib";
-        return source.getParent().resolve(prefix + stem + extension);
+        return prefix + stem + extension;
     }
 
     /** Where this compiler would put the library, asking the engine first. */

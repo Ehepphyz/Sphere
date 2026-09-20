@@ -69,7 +69,7 @@ public class SettingsManager {
                 }
             }
         } catch (IOException e) {
-            System.err.println("Critical Error: Unable to read " + CONFIG_FILENAME);
+            com.sphere.utils.AppLogger.error("Critical Error: Unable to read " + CONFIG_FILENAME);
         }
         reportDuplicates();
     }
@@ -83,7 +83,7 @@ public class SettingsManager {
                 writer.newLine();
             }
         } catch (IOException e) {
-            System.err.println("Critical Error: Unable to save " + CONFIG_FILENAME);
+            com.sphere.utils.AppLogger.error("Critical Error: Unable to save " + CONFIG_FILENAME);
             return;
         }
         rawLines.clear();

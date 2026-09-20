@@ -192,7 +192,7 @@ public class PyEnvManagerDialog extends JDialog {
             this.setLocationRelativeTo(null);
 
         } catch (Throwable ex) {
-            ex.printStackTrace();
+            com.sphere.core.JavaErrors.report("opening the Python environment manager", ex);
             JOptionPane.showMessageDialog(
                     null,
                     "Exception occurred during construction:\n" + ex.toString(),

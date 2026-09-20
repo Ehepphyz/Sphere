@@ -22,6 +22,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class NotebookExecutor implements PythonKernelProcess.Listener {
 
+    /** The name the kernel's variables appear under in the Variables tab. */
+    private static final String SOURCE = "python";
+
     /** What the editor has to do when the kernel says something. */
     public interface View {
         void cellStarted(Cell cell);
@@ -62,6 +65,22 @@ public final class NotebookExecutor implements PythonKernelProcess.Listener {
         if (!kernel.isRunning()) {
             view.kernelState("starting", false);
             kernel.start();
+            // The namespace is alive from here on, so the Variables tab can ask
+            // for it rather than waiting for the notebook to show it.
+            com.sphere.components.variables.VariableSources.register(
+                new com.sphere.components.variables.VariableSources.Source() {
+                    @Override
+                    public String name() {
+                        return SOURCE;
+                    }
+
+                    @Override
+                    public void refresh() {
+                        if (kernel.isRunning()) {
+                            kernel.variables();
+                        }
+                    }
+                });
         }
     }
 
@@ -286,7 +305,24 @@ public final class NotebookExecutor implements PythonKernelProcess.Listener {
 
     @Override
     public void onVariables(int execId, List<Map<String, Object>> items) {
+        publish(items);
         onEdt(() -> view.variablesReady(items));
+    }
+
+    /** Hands the namespace to the Variables tab as well as to the notebook. */
+    private void publish(List<Map<String, Object>> items) {
+        List<com.sphere.components.variables.VariableStore.Variable> variables =
+            new ArrayList<>();
+        for (Map<String, Object> item : items) {
+            variables.add(new com.sphere.components.variables.VariableStore.Variable(
+                SOURCE, text(item.get("name")), text(item.get("type")),
+                text(item.get("info"))));
+        }
+        com.sphere.components.variables.VariableStore.publish(SOURCE, variables);
+    }
+
+    private static String text(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     @Override
@@ -296,6 +332,10 @@ public final class NotebookExecutor implements PythonKernelProcess.Listener {
         synchronized (queue) {
             queue.clear();
         }
+        // The namespace went with the process; leaving its variables on show
+        // would be showing values that no longer exist anywhere.
+        com.sphere.components.variables.VariableSources.unregister(SOURCE);
+        com.sphere.components.variables.VariableStore.clear(SOURCE);
         onEdt(() -> view.kernelState(reason == null ? "stopped" : reason, false));
     }
 

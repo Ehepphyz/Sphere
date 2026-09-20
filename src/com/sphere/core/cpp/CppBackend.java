@@ -17,7 +17,11 @@ import com.sphere.core.Backend;
  * cross-platform abstraction (Windows, Linux, macOS, WSL), and volatile inline code evaluations.
  */
 public class CppBackend implements Backend {
-    private final Map<String, CppToolchain> toolchains = new HashMap<>();
+    // Insertion order is the order of preference: the toolchains are declared
+    // best first, and the first one that resolves is taken. A HashMap gave that
+    // list back in hash order, so a machine carrying both g++ and clang could
+    // end up compiling C++ with the C driver and failing to link.
+    private final Map<String, CppToolchain> toolchains = new LinkedHashMap<>();
     private final Map<String, CppCommand> systemCommands = new HashMap<>();
     private final CppCommandParser commandParser = new CppCommandParser();
 
@@ -66,11 +70,14 @@ public class CppBackend implements Backend {
         // the binaries are, under [SYSTEM_PATH]. The six CPP_GCC style keys read
         // before are not in that file, so no toolchain was ever registered.
         registerToolchain("g++",     "GPP_DIR",     "g++",     false);
-        registerToolchain("gcc",     "GCC_DIR",     "gcc",     false);
         registerToolchain("clang++", "CLANGPP_DIR", "clang++", false);
-        registerToolchain("clang",   "CLANG_DIR",   "clang",   false);
         registerToolchain("msvc",    "CPP_MSVC_CL", "cl.exe",  false);
         registerToolchain("wsl-gcc", "CPP_WSL_GCC", "g++",     true);
+
+        // C drivers last. They compile a .cpp but link without the C++ standard
+        // library, so a machine carrying gcc without g++ would fail on std::cout.
+        registerToolchain("gcc",     "GCC_DIR",     "gcc",     false);
+        registerToolchain("clang",   "CLANG_DIR",   "clang",   false);
 
         // A declared compiler path wins: it is the one the user pointed at.
         String declared = settings.resolveTool("CPP_COMPILER_PATH", null);
@@ -742,6 +749,10 @@ public class CppBackend implements Backend {
 
             StringBuilder stdoutBuilder = new StringBuilder();
             StringBuilder stderrBuilder = new StringBuilder();
+            // Nothing reports the memory of a child process after it has gone, so
+            // it is followed while it runs.
+            final com.sphere.core.telemetry.ProcessMemory.Watcher memory =
+                isCompileStep ? null : com.sphere.core.telemetry.ProcessMemory.watch(process);
 
             CompletableFuture<Void> stdoutTask = CompletableFuture.runAsync(() -> {
                 try (BufferedReader reader = new BufferedReader(
@@ -806,6 +817,32 @@ public class CppBackend implements Backend {
                     metrics.recordCompile(durationMillis, errorOccurred);
                 } else {
                     metrics.recordRun(durationMillis, errorOccurred, timedOut);
+                }
+                if (memory != null) {
+                    memory.close();
+                }
+                // The line itself is kept, and not only added to a total: it is what
+                // lets this build be held against the ones before it.
+                if (isCompileStep) {
+                    int[] found = com.sphere.core.telemetry.CommandFacts.diagnosticsIn(
+                        stdoutBuilder + System.lineSeparator() + stderrBuilder);
+                    com.sphere.core.telemetry.RunLog.add(
+                        com.sphere.core.telemetry.RunRecord.compile("cpp",
+                            com.sphere.core.telemetry.CommandFacts.sourceOf(command),
+                            com.sphere.core.telemetry.CommandFacts.toolOf(command),
+                            com.sphere.core.telemetry.CommandFacts.flagsOf(command),
+                            durationMillis,
+                            com.sphere.core.telemetry.CommandFacts.producedBytes(command),
+                            exitCode, found[0], found[1], false));
+                } else {
+                    com.sphere.core.telemetry.RunLog.add(
+                        com.sphere.core.telemetry.RunRecord.run("cpp",
+                            com.sphere.core.telemetry.CommandFacts.sourceOf(command),
+                            com.sphere.core.telemetry.CommandFacts.toolOf(command),
+                            com.sphere.core.telemetry.CommandFacts.flagsOf(command),
+                            durationMillis, exitCode,
+                            memory == null ? com.sphere.core.telemetry.RunRecord.UNKNOWN
+                                           : memory.peakKilobytes(), timedOut));
                 }
             }
 
