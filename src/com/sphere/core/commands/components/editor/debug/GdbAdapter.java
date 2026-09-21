@@ -22,6 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * -g -O0 first, because a binary without line information cannot stop anywhere.
  */
 public final class GdbAdapter implements DebugAdapter {
+    /** How long a debug build is given before it is stopped. */
+    private static final int COMPILE_TIMEOUT_SECONDS = 300;
+
 
     private final SettingsManager settings;
     private final AtomicInteger token = new AtomicInteger(1);
@@ -147,7 +150,15 @@ public final class GdbAdapter implements DebugAdapter {
                 output.append(line).append('\n');
             }
         }
-        if (process.waitFor() != 0) {
+        // A compiler that wedges -- a stuck network include path, a hung WSL
+        // call -- would otherwise hold this thread for the rest of the session.
+        if (!process.waitFor(COMPILE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            fail("The compiler did not finish in " + COMPILE_TIMEOUT_SECONDS
+                 + " s and was stopped.");
+            return null;
+        }
+        if (process.exitValue() != 0) {
             fail("Compilation failed:\n" + output);
             return null;
         }

@@ -1393,4 +1393,214 @@ public final class RootHistCommands {
         Handlers.cling(c, "(" + Handlers.obj("TF1", w[0]) + "->Draw(\"" + (w.length > 1 ? w[1] : "") + "\"), std::string(\"drawn\"))");
     }
 
+    /** <a> <b> [options] */
+    public static void rootHistChi2Test(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist chi2test"));
+        if (w.length < 2) {
+            Handlers.usage(":root hist chi2test <a> <b> [options]");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->Chi2Test(SphereBridge::Need<TH1>(\"" + w[1] + "\", \"TH1\"), \"" + (w.length > 2 ? Handlers.join(w, 2) : "UU") + "\")");
+    }
+
+    /** <name> */
+    public static void rootHistSumw2(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist sumw2"));
+        if (w.length < 1) {
+            Handlers.usage(":root hist sumw2 <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->Sumw2(); return std::string(\"weights are now tracked\"); }()");
+    }
+
+    /** <name> <fraction> */
+    public static void rootHistQuantiles(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist quantiles"));
+        if (w.length < 2) {
+            Handlers.usage(":root hist quantiles <name> <fraction>");
+            return;
+        }
+        Handlers.cling(c, "[]{ Double_t p[1] = { " + w[1] + " }; Double_t q[1] = { 0.0 }; SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->GetQuantiles(1, q, p); return q[0]; }()");
+    }
+
+    /** <name> <x> */
+    public static void rootHistInterpolate(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist interpolate"));
+        if (w.length < 2) {
+            Handlers.usage(":root hist interpolate <name> <x>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->Interpolate(" + w[1] + ")");
+    }
+
+    /** <name> <out> */
+    public static void rootHistCumulative(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist cumulative"));
+        if (w.length < 2) {
+            Handlers.usage(":root hist cumulative <name> <out>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *c = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->GetCumulative(); c->SetName(\"" + w[1] + "\"); c->SetDirectory(gDirectory); return std::string(c->GetName()); }()");
+    }
+
+    /** <name> */
+    public static void rootHistGetRandom(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist getrandom"));
+        if (w.length < 1) {
+            Handlers.usage(":root hist getrandom <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->GetRandom()");
+    }
+
+    /** <name> <function> <entries> */
+    public static void rootHistFillRandom(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist fillrandom"));
+        if (w.length < 3) {
+            Handlers.usage(":root hist fillrandom <name> <function> <entries>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->FillRandom(\"" + w[1] + "\", " + w[2] + "); return SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->GetEntries(); }()");
+    }
+
+    /** <out> <passed> <total> */
+    public static void rootHistDivideBinomial(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist dividebinomial"));
+        if (w.length < 3) {
+            Handlers.usage(":root hist dividebinomial <out> <passed> <total>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *o = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); o->Divide(SphereBridge::Need<TH1>(\"" + w[1] + "\", \"TH1\"), SphereBridge::Need<TH1>(\"" + w[2] + "\", \"TH1\"), 1.0, 1.0, \"B\"); return std::string(\"divided with binomial errors\"); }()");
+    }
+
+    /** <hist> <function> <out> */
+    public static void rootHistResiduals(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist residuals"));
+        if (w.length < 3) {
+            Handlers.usage(":root hist residuals <hist> <function> <out>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TF1 *f = SphereBridge::Need<TF1>(\"" + w[1] + "\", \"TF1\"); TH1D *r = new TH1D(\"" + w[2] + "\", \"residuals\", h->GetNbinsX(), h->GetXaxis()->GetXmin(), h->GetXaxis()->GetXmax()); for (int i = 1; i <= h->GetNbinsX(); ++i) { const double x = h->GetBinCenter(i); r->SetBinContent(i, h->GetBinContent(i) - f->Eval(x)); r->SetBinError(i, h->GetBinError(i)); } r->SetDirectory(gDirectory); return std::string(r->GetName()); }()");
+    }
+
+    /** <hist> <function> <out> */
+    public static void rootHistPulls(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist pulls"));
+        if (w.length < 3) {
+            Handlers.usage(":root hist pulls <hist> <function> <out>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TF1 *f = SphereBridge::Need<TF1>(\"" + w[1] + "\", \"TF1\"); TH1D *r = new TH1D(\"" + w[2] + "\", \"pulls\", h->GetNbinsX(), h->GetXaxis()->GetXmin(), h->GetXaxis()->GetXmax()); for (int i = 1; i <= h->GetNbinsX(); ++i) { const double e = h->GetBinError(i); const double d = h->GetBinContent(i) - f->Eval(h->GetBinCenter(i)); r->SetBinContent(i, e > 0.0 ? d / e : 0.0); } r->SetDirectory(gDirectory); return std::string(r->GetName()); }()");
+    }
+
+    /** <name> */
+    public static void rootHistUnderflow(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist underflow"));
+        if (w.length < 1) {
+            Handlers.usage(":root hist underflow <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->GetBinContent(0)");
+    }
+
+    /** <name> */
+    public static void rootHistOverflow(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist overflow"));
+        if (w.length < 1) {
+            Handlers.usage(":root hist overflow <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); return h->GetBinContent(h->GetNbinsX() + 1); }()");
+    }
+
+    /** <name> */
+    public static void rootHistMaximumBin(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist maxbin"));
+        if (w.length < 1) {
+            Handlers.usage(":root hist maxbin <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); const int b = h->GetMaximumBin(); return std::string(\"bin \") + std::to_string(b) + \"  at \" + std::to_string(h->GetBinCenter(b)) + \"  holding \" + std::to_string(h->GetBinContent(b)); }()");
+    }
+
+    /** <name> <bin> */
+    public static void rootHistBinWidth(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist binwidth"));
+        if (w.length < 2) {
+            Handlers.usage(":root hist binwidth <name> <bin>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->GetBinWidth(" + w[1] + ")");
+    }
+
+    /** <name> */
+    public static void rootHistEffectiveEntries(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root hist effective"));
+        if (w.length < 1) {
+            Handlers.usage(":root hist effective <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->GetEffectiveEntries()");
+    }
+
+    /** <name> <x> */
+    public static void rootFuncDerivative(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root func derivative"));
+        if (w.length < 2) {
+            Handlers.usage(":root func derivative <name> <x>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TF1>(\"" + w[0] + "\", \"TF1\")->Derivative(" + w[1] + ")");
+    }
+
+    /** <name> <x> */
+    public static void rootFuncSecond(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root func second"));
+        if (w.length < 2) {
+            Handlers.usage(":root func second <name> <x>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TF1>(\"" + w[0] + "\", \"TF1\")->Derivative2(" + w[1] + ")");
+    }
+
+    /** <name> <low> <high> */
+    public static void rootFuncIntegralError(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root func integralerror"));
+        if (w.length < 3) {
+            Handlers.usage(":root func integralerror <name> <low> <high>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TF1>(\"" + w[0] + "\", \"TF1\")->IntegralError(" + w[1] + ", " + w[2] + ")");
+    }
+
+    /** <name> */
+    public static void rootFuncRandom(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root func random"));
+        if (w.length < 1) {
+            Handlers.usage(":root func random <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TF1>(\"" + w[0] + "\", \"TF1\")->GetRandom()");
+    }
+
+    /** <name> <0|1> */
+    public static void rootFuncNormalized(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root func normalized"));
+        if (w.length < 2) {
+            Handlers.usage(":root func normalized <name> <0|1>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Need<TF1>(\"" + w[0] + "\", \"TF1\")->SetNormalized(" + w[1] + " != 0); return std::string(\"" + w[1] + "\") == \"0\" ? std::string(\"left as it is\") : std::string(\"normalized\"); }()");
+    }
+
+    /** <name> <low> <high> */
+    public static void rootFuncFwhm(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root func fwhm"));
+        if (w.length < 3) {
+            Handlers.usage(":root func fwhm <name> <low> <high>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TF1 *f = SphereBridge::Need<TF1>(\"" + w[0] + "\", \"TF1\"); const double top = f->GetMaximum(" + w[1] + ", " + w[2] + "); const double at = f->GetMaximumX(" + w[1] + ", " + w[2] + "); const double left = f->GetX(top / 2.0, " + w[1] + ", at); const double right = f->GetX(top / 2.0, at, " + w[2] + "); return right - left; }()");
+    }
+
 }

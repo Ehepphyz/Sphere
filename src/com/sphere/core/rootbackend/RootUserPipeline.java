@@ -326,7 +326,7 @@ public final class RootUserPipeline {
      * The manifest the library itself hands back, or null when it exports none.
      *
      * The symbol carries the pipeline's name, so the lookup cannot land on a
-     * neighbour that happens to export a manifest too.
+     * neighbor that happens to export a manifest too.
      */
     private static RootPipelineManifest askLibrary(RootBackend backend, Path library, String name) {
         final String expression =

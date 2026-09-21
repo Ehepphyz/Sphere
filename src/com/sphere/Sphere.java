@@ -103,12 +103,28 @@ public class Sphere extends JFrame {
 
     private final SessionManager session = new SessionManager("WorkStation");
     private final HistoryManager historyManager = new HistoryManager();
-    private final CommandRouter router = new CommandRouter();
+    /**
+     * Built before the event thread gets it, never by this field.
+     *
+     * Constructing a router builds the ROOT backend, which hashes the C++
+     * bridge and may compile it with g++. A field initializer runs as part of
+     * the constructor, and the constructor runs inside invokeLater, so that
+     * compile happened on the event thread -- exactly what the comment further
+     * down forbids and moves two other calls off it for. It is built on the
+     * startup thread now and handed in.
+     */
+    private final CommandRouter router;
     private final SettingsManager settings = new SettingsManager();
     /** Kept so the shutdown hook can stop the shells it started. */
     private TerminalManager terminals;
 
     public Sphere() {
+        this(new CommandRouter());
+    }
+
+    /** The one main uses: the router is already built, off the event thread. */
+    public Sphere(CommandRouter prepared) {
+        this.router = prepared == null ? new CommandRouter() : prepared;
         // Shutdown hook - Ensures session logs close cleanly on application termination
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             // The JVM leaves its children behind: without this, the shells, clangd
@@ -1069,6 +1085,11 @@ public class Sphere extends JFrame {
             }
         }
 
+        // The router carries the backends, and building the ROOT one hashes the
+        // C++ bridge and may compile it. Done here so the event thread never has to.
+        com.sphere.core.Splash.step("Starting the backends");
+        final CommandRouter preparedRouter = new CommandRouter();
+
         com.sphere.core.Splash.step("Building the interface");
 
         // 7. Safely instantiate the GUI layout tree on the Event Dispatch Thread (EDT)
@@ -1079,7 +1100,7 @@ public class Sphere extends JFrame {
             // to start here -- the constructor is part of it.
             com.sphere.core.EdtWatchdog.expectBusy(true);
             try {
-                Sphere frame = new Sphere();
+                Sphere frame = new Sphere(preparedRouter);
                 // Laid out before being shown, so the dividers are in place on the
                 // first picture. Several passes because the panes settle one level at
                 // a time: the inner one only knows its width once the outer one has

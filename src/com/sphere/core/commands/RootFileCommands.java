@@ -124,7 +124,17 @@ public final class RootFileCommands {
         }
         String a0 = Handlers.head(a);
         String a1 = Handlers.tail(a);
-        Handlers.cling(c, "gDirectory->Get(\"" + a0 + "\")->Clone(\"" + a1 + "\");gDirectory->Delete(\"" + a0 + "\")");
+        // Two statements cannot be sent as one expression: the engine wraps
+        // what it is given in a return, and a semicolon ends it there. The move
+        // also has to refuse a missing object rather than clone a null pointer,
+        // and it deletes only once the copy is really written.
+        Handlers.cling(c, "[]{ TObject *o = gDirectory->Get(\"" + a0 + "\");"
+            + " if (o == nullptr) { return std::string(\"no object named " + a0 + "\"); }"
+            + " TObject *copy = o->Clone(\"" + a1 + "\");"
+            + " if (copy == nullptr) { return std::string(\"could not copy " + a0 + "\"); }"
+            + " copy->Write();"
+            + " gDirectory->Delete(\"" + a0 + ";*\");"
+            + " return std::string(\"" + a0 + " is now " + a1 + "\"); }()");
     }
 
     public static void rootFileOpenUpdate(String i, CommandExecutionContext c) {
@@ -431,6 +441,106 @@ public final class RootFileCommands {
             return;
         }
         Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + w[0] + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + w[0] + "\"); } std::string out = std::to_string(f->GetVersion()) + \"  \" + std::to_string(f->GetSize()) + \" bytes  compression \" + std::to_string(f->GetCompressionLevel()); f->Close(); return out; }()");
+    }
+
+    /** <name> <url> */
+    public static void rootXrootdOpen(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root xrootd open"));
+        if (w.length < 2) {
+            Handlers.usage(":root xrootd open <name> <url>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TFile>(\"" + w[0] + "\", TFile::Open(\"" + w[1] + "\"), \"TFile\")");
+    }
+
+    /** <url> */
+    public static void rootXrootdLs(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root xrootd ls"));
+        if (w.length < 1) {
+            Handlers.usage(":root xrootd ls <url>");
+            return;
+        }
+        Handlers.cling(c, "[]{ void *d = gSystem->OpenDirectory(\"" + w[0] + "\"); if (d == nullptr) { return std::string(\"cannot open " + w[0] + "\"); } std::string out; const char *e = nullptr; while ((e = gSystem->GetDirEntry(d)) != nullptr) { if (e[0] != 0 && strcmp(e, \".\") != 0 && strcmp(e, \"..\") != 0) { out += e; out += '\\n'; } } gSystem->FreeDirectory(d); return out; }()");
+    }
+
+    /** <from> <to> */
+    public static void rootXrootdCopy(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root xrootd copy"));
+        if (w.length < 2) {
+            Handlers.usage(":root xrootd copy <from> <to>");
+            return;
+        }
+        Handlers.cling(c, "TFile::Cp(\"" + w[0] + "\", \"" + w[1] + "\")");
+    }
+
+    /** <url> */
+    public static void rootXrootdExists(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root xrootd exists"));
+        if (w.length < 1) {
+            Handlers.usage(":root xrootd exists <url>");
+            return;
+        }
+        Handlers.cling(c, "(bool) (!gSystem->AccessPathName(\"" + w[0] + "\"))");
+    }
+
+    /** <url> */
+    public static void rootXrootdStat(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root xrootd stat"));
+        if (w.length < 1) {
+            Handlers.usage(":root xrootd stat <url>");
+            return;
+        }
+        Handlers.cling(c, "[]{ FileStat_t s; if (gSystem->GetPathInfo(\"" + w[0] + "\", s) != 0) { return std::string(\"cannot stat " + w[0] + "\"); } return std::string(\"bytes \") + std::to_string((long long) s.fSize) + \"  modified \" + std::to_string((long long) s.fMtime); }()");
+    }
+
+    /** <host> */
+    public static void rootXrootdRedirector(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root xrootd redirector"));
+        if (w.length < 1) {
+            Handlers.usage(":root xrootd redirector <host>");
+            return;
+        }
+        Handlers.cling(c, "[]{ gEnv->SetValue(\"XNet.Redirector\", \"" + w[0] + "\"); return std::string(gEnv->GetValue(\"XNet.Redirector\", \"\")); }()");
+    }
+
+    /** <name> */
+    public static void rootFileRecover(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root file recover"));
+        if (w.length < 1) {
+            Handlers.usage(":root file recover <name>");
+            return;
+        }
+        Handlers.cling(c, "(long) SphereBridge::Held<TFile>(\"" + w[0] + "\")->Recover()");
+    }
+
+    /** <name> */
+    public static void rootFileCompressionInfo(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root file compression"));
+        if (w.length < 1) {
+            Handlers.usage(":root file compression <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TFile *f = SphereBridge::Held<TFile>(\"" + w[0] + "\"); return std::string(\"factor \") + std::to_string(f->GetCompressionFactor()) + \"  setting \" + std::to_string(f->GetCompressionSettings()) + \"  bytes \" + std::to_string((long long) f->GetSize()); }()");
+    }
+
+    /** <name> */
+    public static void rootFileTreeList(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root file trees"));
+        if (w.length < 1) {
+            Handlers.usage(":root file trees <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TFile *f = SphereBridge::Held<TFile>(\"" + w[0] + "\"); std::string out; TIter next(f->GetListOfKeys()); TKey *k = nullptr; while ((k = (TKey *) next()) != nullptr) { if (strcmp(k->GetClassName(), \"TTree\") != 0) { continue; } TTree *t = (TTree *) f->Get(k->GetName()); if (t == nullptr) { continue; } out += k->GetName(); out += \"  \"; out += std::to_string((long long) t->GetEntries()); out += \" entries\\n\"; } return out.empty() ? std::string(\"no tree in this file\") : out; }()");
+    }
+
+    /** <name> */
+    public static void rootFileFree(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root file free"));
+        if (w.length < 1) {
+            Handlers.usage(":root file free <name>");
+            return;
+        }
+        Handlers.cling(c, "(long) SphereBridge::Held<TFile>(\"" + w[0] + "\")->GetNbytesFree()");
     }
 
 }

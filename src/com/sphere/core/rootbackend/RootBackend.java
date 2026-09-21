@@ -191,6 +191,9 @@ public final class RootBackend implements AutoCloseable, Backend {
     public static final int DROP_POLICY_DROP_NEWEST = 2;
 
     // Spin-wait backoff thresholds
+    /** How long the startup ping is given before it is treated as failed. */
+    private static final int PING_TIMEOUT_SECONDS = 30;
+
     private static final int MAX_SPIN_RETRIES = 10;
 
     // Intelligence & telemetry calibration
@@ -601,21 +604,33 @@ public final class RootBackend implements AutoCloseable, Backend {
                 ProcessBuilder pingBuilder = new ProcessBuilder(
                         executablePath, "--ping", "--shm", resolved.toString());
                 pingBuilder.directory(rootBridgePath.getParent().toFile());
+                // Both streams into one, and read to the end. ROOT writes its
+                // warnings to the error stream: leaving that stream unread lets
+                // the child fill the pipe and stop, and this probe runs during
+                // startup, before any window exists, so the splash would simply
+                // never go away.
+                pingBuilder.redirectErrorStream(true);
                 Process pingProcess = pingBuilder.start();
                 boolean pingSuccess = false;
 
                 try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(pingProcess.getInputStream()))) {
+                        new java.io.InputStreamReader(pingProcess.getInputStream(),
+                                java.nio.charset.StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
                         if (line.toUpperCase().contains("PONG")) {
                             pingSuccess = true;
-                            break;
                         }
                     }
                 }
 
-                pingProcess.waitFor();
+                // A bridge that answered and then hung is still a failed probe.
+                if (!pingProcess.waitFor(PING_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+                    pingProcess.destroyForcibly();
+                    pingSuccess = false;
+                    AppLogger.warn("RootBridge ping did not finish in "
+                        + PING_TIMEOUT_SECONDS + " s; it was stopped.");
+                }
 
                 if (pingSuccess) {
                     //AppLogger.info("RootBridge binary ping successful: Received 'PONG' signal.");

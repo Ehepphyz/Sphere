@@ -821,6 +821,300 @@ public final class RootEngineCommands {
         AppLogger.raw("  loaded      " + (one == null ? "no" : one.library().toString()));
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Chains                                                              */
+    /* ------------------------------------------------------------------ */
+
+    /** The chains saved in user_scripts/, both layers. */
+    public static void rootChainList(String i, CommandExecutionContext c) {
+        int found = 0;
+        for (java.nio.file.Path layer
+                : com.sphere.core.rootbackend.RootUserPipeline.layers(activeProject(c))) {
+            for (java.nio.file.Path one
+                    : com.sphere.core.rootbackend.RootPipelineChain.chainsIn(layer)) {
+                var chain = com.sphere.core.rootbackend.RootPipelineChain.read(one);
+                if (chain == null) {
+                    continue;
+                }
+                if (found == 0) {
+                    AppLogger.raw("  chain                tree        stages   reads");
+                }
+                found++;
+                AppLogger.raw(String.format("      %-16s %-11s %-8d %s",
+                    chain.name, chain.tree, chain.stages.size(), chain.file));
+            }
+        }
+        if (found == 0) {
+            AppLogger.info("No chain yet. The Chain tab of :root personal pipeline builds one.");
+        }
+    }
+
+    /** Everything one chain would do, both ways, without doing any of it. */
+    public static void rootChainShow(String i, CommandExecutionContext c) {
+        var chain = findChain(Handlers.head(Handlers.args(i, ":root chain show")),
+                              activeProject(c));
+        if (chain == null) {
+            AppLogger.error("No chain of that name. :root chain list says which there are.");
+            return;
+        }
+        AppLogger.raw("  reads       " + chain.tree + "  in  " + chain.file);
+        AppLogger.raw("  on the engine");
+        for (String one : chain.commands()) {
+            AppLogger.raw("      " + one);
+        }
+        AppLogger.raw("  as a macro  " + chain.name + ".C, written by :root chain macro");
+    }
+
+    /** Replays a saved chain on the engine, command by command. */
+    public static void rootChainRun(String i, CommandExecutionContext c) {
+        final String name = Handlers.head(Handlers.args(i, ":root chain run"));
+        var chain = findChain(name, activeProject(c));
+        if (chain == null) {
+            AppLogger.error("No chain named " + name + ".");
+            return;
+        }
+        final String why = chain.validate();
+        if (why != null) {
+            AppLogger.error(why);
+            return;
+        }
+        com.sphere.core.CommandRouter router = com.sphere.core.CommandRouter.active();
+        if (router == null) {
+            AppLogger.error("No command router is running to replay it.");
+            return;
+        }
+        AppLogger.info("Replaying " + chain.name + ": "
+            + chain.commands().size() + " commands.");
+        for (String one : chain.commands()) {
+            AppLogger.raw("  " + one);
+            router.processInput(one);
+        }
+    }
+
+    /** Writes the standalone macro a chain stands for. */
+    public static void rootChainMacro(String i, CommandExecutionContext c) {
+        final String name = Handlers.head(Handlers.args(i, ":root chain macro"));
+        var chain = findChain(name, activeProject(c));
+        if (chain == null) {
+            AppLogger.error("No chain named " + name + ".");
+            return;
+        }
+        java.nio.file.Path layer =
+            com.sphere.core.rootbackend.RootUserPipeline.globalRoot();
+        java.nio.file.Path target = layer
+            .resolve(com.sphere.core.rootbackend.RootUserPipeline.SCRIPTS_DIR)
+            .resolve(chain.name + ".C");
+        try {
+            java.nio.file.Files.writeString(target, chain.macro(),
+                java.nio.charset.StandardCharsets.UTF_8);
+            AppLogger.success("Written " + target);
+            AppLogger.raw("  :root script run " + chain.name + ".C");
+        } catch (java.io.IOException failure) {
+            AppLogger.error("Could not write " + target + ": " + failure.getMessage());
+        }
+    }
+
+    /** A chain by name, the project layer winning. */
+    private static com.sphere.core.rootbackend.RootPipelineChain findChain(
+            String name, String project) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        com.sphere.core.rootbackend.RootPipelineChain found = null;
+        for (java.nio.file.Path layer
+                : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
+            for (java.nio.file.Path one
+                    : com.sphere.core.rootbackend.RootPipelineChain.chainsIn(layer)) {
+                var chain = com.sphere.core.rootbackend.RootPipelineChain.read(one);
+                if (chain != null && chain.name.equalsIgnoreCase(name.trim())) {
+                    found = chain;
+                }
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Times a pipeline once per set of build flags.
+     *
+     * The answer decides whether -O3 and -march=native are worth what they cost
+     * -- the second ties the library to one kind of processor -- so it is worth
+     * asking rather than assuming.
+     */
+    public static void rootPipelineTime(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root pipeline time"));
+        if (w.length < 1) {
+            Handlers.usage(":root pipeline time <name> [calls]");
+            return;
+        }
+        java.nio.file.Path source = pipelineSource(w[0], activeProject(c));
+        if (source == null) {
+            AppLogger.error("No pipeline named " + w[0] + " in includes/.");
+            return;
+        }
+        var manifest = com.sphere.core.rootbackend.RootPipelineManifest.fromSource(source);
+        if (manifest == null) {
+            AppLogger.error(w[0] + " does not declare itself as a pipeline.");
+            return;
+        }
+        if (!com.sphere.core.rootbackend.RootPipelineTemplates.canBeTimed(manifest)) {
+            AppLogger.error("Only a transform or a filter taking numbers can be timed.");
+            return;
+        }
+        final long calls = w.length > 1 ? Handlers.asInt(w[1], 1000000) : 1000000L;
+        AppLogger.info("Building " + manifest.name + " once per set of flags...");
+
+        var compiler = new com.sphere.core.rootbackend.RootUserCompiler(
+            new com.sphere.utils.SettingsManager(), Handlers.backend(c));
+        var results = com.sphere.core.rootbackend.RootPipelineBench.compare(
+            compiler, manifest, source, calls);
+
+        AppLogger.raw(String.format("  %-26s %-14s %s", "flags", "per call", "gain"));
+        for (var one : results) {
+            AppLogger.raw(String.format("      %-24s %-14s %s",
+                one.label().isEmpty() ? "--" : one.label(),
+                one.succeeded() ? one.reading() : one.message(),
+                com.sphere.core.rootbackend.RootPipelineBench.relativeTo(one, results)));
+        }
+        var best = com.sphere.core.rootbackend.RootPipelineBench.best(results);
+        if (best != null) {
+            AppLogger.success("Fastest: " + best.label() + " at " + best.reading() + " per call.");
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Looking inside one                                                  */
+    /* ------------------------------------------------------------------ */
+
+    /** Calls a pipeline once and prints every value its code named. */
+    public static void rootPipelineWatch(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root pipeline watch"));
+        if (w.length < 1) {
+            Handlers.usage(":root pipeline watch <name> [args...]");
+            return;
+        }
+        var ready = readyFor(w[0], activeProject(c));
+        if (ready == null) {
+            return;
+        }
+        final double[] arguments = new double[ready.manifest.inputs.size()];
+        for (int n = 0; n < arguments.length; n++) {
+            arguments[n] = n + 1 < w.length ? asDouble(w[n + 1]) : 1.0;
+        }
+        var values = com.sphere.core.rootbackend.RootPipelineProbe.watch(
+            compilerFor(c), ready.manifest, ready.source, arguments);
+        if (values.isEmpty()) {
+            AppLogger.info("Nothing was recorded. Name a value with SPHERE_WATCH(x) "
+                + "inside the body, then look again.");
+            return;
+        }
+        for (var one : values) {
+            AppLogger.raw(String.format("      %-24s %s", one.name(), one.value()));
+        }
+    }
+
+    /** Sweeps the inputs and says how often the answer was not a number. */
+    public static void rootPipelineCheck(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root pipeline check"));
+        if (w.length < 1) {
+            Handlers.usage(":root pipeline check <name> [low] [high]");
+            return;
+        }
+        var ready = readyFor(w[0], activeProject(c));
+        if (ready == null) {
+            return;
+        }
+        final double low = w.length > 1 ? asDouble(w[1]) : 0.0;
+        final double high = w.length > 2 ? asDouble(w[2]) : 100.0;
+        AppLogger.info("Sweeping " + ready.manifest.name
+            + " over [" + low + ", " + high + "]...");
+        var found = com.sphere.core.rootbackend.RootPipelineProbe.health(
+            compilerFor(c), ready.manifest, ready.source, 20000, low, high);
+        AppLogger.raw("      " + found.summary());
+        if (found.isClean()) {
+            AppLogger.success("Every call answered a number.");
+        } else {
+            AppLogger.warn("Some calls did not. :root pipeline scan "
+                + ready.manifest.name + " finds where.");
+        }
+    }
+
+    /** Walks one input across a range and prints the curve. */
+    public static void rootPipelineScan(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root pipeline scan"));
+        if (w.length < 1) {
+            Handlers.usage(":root pipeline scan <name> [input] [low] [high] [others-at]");
+            return;
+        }
+        var ready = readyFor(w[0], activeProject(c));
+        if (ready == null) {
+            return;
+        }
+        int which = 0;
+        if (w.length > 1) {
+            for (int n = 0; n < ready.manifest.inputs.size(); n++) {
+                if (ready.manifest.inputs.get(n).name().equalsIgnoreCase(w[1])) {
+                    which = n;
+                }
+            }
+        }
+        final double low = w.length > 2 ? asDouble(w[2]) : 0.0;
+        final double high = w.length > 3 ? asDouble(w[3]) : 100.0;
+        final double held = w.length > 4 ? asDouble(w[4]) : 1.0;
+
+        var found = com.sphere.core.rootbackend.RootPipelineProbe.scan(
+            compilerFor(c), ready.manifest, ready.source, which, low, high, 41, held);
+        final String name = which < ready.manifest.inputs.size()
+            ? ready.manifest.inputs.get(which).name() : "input";
+        AppLogger.raw("  " + name + " from " + low + " to " + high
+            + ", the others held at " + held);
+        for (var p : found.points()) {
+            AppLogger.raw(String.format("      %12.6g   %s", p.x(), p.y()));
+        }
+        for (String one : found.findings()) {
+            AppLogger.warn("  " + one);
+        }
+        if (found.findings().isEmpty() && !found.points().isEmpty()) {
+            AppLogger.success("Nothing odd along that range.");
+        }
+    }
+
+    /** A pipeline that can be inspected, or a message saying why not. */
+    private record Ready(com.sphere.core.rootbackend.RootPipelineManifest manifest,
+                         java.nio.file.Path source) { }
+
+    private static Ready readyFor(String name, String project) {
+        java.nio.file.Path source = pipelineSource(name, project);
+        if (source == null) {
+            AppLogger.error("No pipeline named " + name + " in includes/.");
+            return null;
+        }
+        var manifest = com.sphere.core.rootbackend.RootPipelineManifest.fromSource(source);
+        if (manifest == null) {
+            AppLogger.error(name + " does not declare itself as a pipeline.");
+            return null;
+        }
+        if (!com.sphere.core.rootbackend.RootPipelineTemplates.canBeTimed(manifest)) {
+            AppLogger.error("Only a transform or a filter taking numbers can be inspected.");
+            return null;
+        }
+        return new Ready(manifest, source);
+    }
+
+    private static com.sphere.core.rootbackend.RootUserCompiler compilerFor(
+            CommandExecutionContext c) {
+        return new com.sphere.core.rootbackend.RootUserCompiler(
+            new com.sphere.utils.SettingsManager(), Handlers.backend(c));
+    }
+
+    private static double asDouble(String text) {
+        try {
+            return Double.parseDouble(text.trim());
+        } catch (NumberFormatException notANumber) {
+            return 1.0;
+        }
+    }
+
     /** The source of a pipeline by its name, the project layer winning. */
     private static java.nio.file.Path pipelineSource(String name, String project) {
         java.nio.file.Path found = null;
@@ -1179,6 +1473,54 @@ public final class RootEngineCommands {
             return;
         }
         Handlers.cling(c, "[]{ TString s(\"" + Handlers.join(w, 0) + "\"); return (long)s.Hash(); }()");
+    }
+
+    /** No arguments. */
+    public static void rootTimeNow(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time now"));
+        if (w.length < 0) {
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime d; return std::string(d.AsString()); }()");
+    }
+
+    /** <seconds> */
+    public static void rootTimeConvert(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time convert"));
+        if (w.length < 1) {
+            Handlers.usage(":root time convert <seconds>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime d((UInt_t) " + w[0] + "); return std::string(d.AsString()); }()");
+    }
+
+    /** The date to convert. */
+    public static void rootTimeUnix(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time unix"));
+        if (w.length < 1) {
+            Handlers.usage(":root time unix <YYYY-MM-DD HH:MM:SS>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime d(\"" + Handlers.join(w, 0) + "\"); return (long) d.Convert(); }()");
+    }
+
+    /** <a> <b> */
+    public static void rootTimeDiff(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time diff"));
+        if (w.length < 2) {
+            Handlers.usage(":root time diff <a> <b>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime a((UInt_t) " + w[0] + "); TDatime b((UInt_t) " + w[1] + "); return (long) b.Convert() - (long) a.Convert(); }()");
+    }
+
+    /** No arguments. */
+    public static void rootTimeStamp(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time stamp"));
+        if (w.length < 0) {
+            return;
+        }
+        Handlers.cling(c, "[]{ TTimeStamp t; return std::string(t.AsString(\"l\")); }()");
     }
 
 }

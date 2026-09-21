@@ -225,6 +225,65 @@ public final class RootUserCompiler {
         return source.getParent().resolve(libraryName(stem, extension));
     }
 
+    /**
+     * The asked-for flags, minus the -l this installation cannot satisfy.
+     *
+     * A module names the library it needs, but not every ROOT is built the same
+     * way: some are compiled without RooFit or TMVA, and MathMore only exists
+     * when GSL was present. Asking the linker for one of those turns a working
+     * pipeline into a build failure about a library the user never mentioned.
+     * So rather than hoping, the library is looked for, and dropped when it is
+     * not there; the linker then reports a missing symbol, which at least names
+     * what is actually absent. A -l ROOT already links is dropped as well,
+     * because repeating it only makes the command line harder to read.
+     */
+    private List<String> usableLinks(List<String> asked, List<String> rootFlags) {
+        List<String> out = new ArrayList<>();
+        List<Path> folders = libraryFolders(rootFlags);
+        for (String flag : asked) {
+            if (!flag.startsWith("-l")) {
+                out.add(flag);
+                continue;
+            }
+            if (rootFlags.contains(flag)) {
+                continue;
+            }
+            if (folders.isEmpty() || hasLibrary(folders, flag.substring(2))) {
+                out.add(flag);
+            }
+        }
+        return out;
+    }
+
+    /** Where this ROOT keeps its libraries, from the -L flags and from settings. */
+    private List<Path> libraryFolders(List<String> rootFlags) {
+        List<Path> folders = new ArrayList<>();
+        for (String flag : rootFlags) {
+            if (flag.startsWith("-L") && flag.length() > 2) {
+                Path dir = Path.of(flag.substring(2));
+                if (Files.isDirectory(dir) && !folders.contains(dir)) folders.add(dir);
+            }
+        }
+        String rootDir = settings.resolveTool("ROOT_DIR", null);
+        if (rootDir != null) {
+            Path dir = Path.of(rootDir, "lib");
+            if (Files.isDirectory(dir) && !folders.contains(dir)) folders.add(dir);
+        }
+        return folders;
+    }
+
+    private static boolean hasLibrary(List<Path> folders, String name) {
+        for (Path dir : folders) {
+            for (String extension : new String[]{".so", ".dylib", ".dll", ".a"}) {
+                if (Files.isRegularFile(dir.resolve("lib" + name + extension))
+                    || Files.isRegularFile(dir.resolve(name + extension))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** The file name a source's library gets, prefix included. */
     public static String libraryName(String stem, String extension) {
         boolean windows = extension.equals(".dll");
@@ -272,22 +331,29 @@ public final class RootUserCompiler {
         boolean windows = System.getProperty("os.name", "")
                             .toLowerCase(Locale.ROOT).contains("win");
 
+        List<String> root = rootFlags();
         List<String> command = new ArrayList<>();
         command.add(compiler);
         command.add("-shared");
         if (!windows) command.add("-fPIC");
         command.add("-std=c++20");
-        command.addAll(rootFlags());
-        if (extraFlags != null) command.addAll(extraFlags);
+        command.addAll(root);
+        if (extraFlags != null) command.addAll(usableLinks(extraFlags, root));
         command.add("-o");
         command.add(output.toAbsolutePath().toString());
         command.add(source.toAbsolutePath().toString());
+        return run(command, source, output);
+    }
 
+    /** Runs one compiler command and keeps what it said. */
+    private Build run(List<String> command, Path source, Path output) {
+        final String compiler = command.get(0);
         String line = String.join(" ", command);
         StringBuilder said = new StringBuilder();
 
         try {
             if (output.getParent() != null) Files.createDirectories(output.getParent());
+            writeOwnHeaders(source, 0);
 
             ProcessBuilder builder = new ProcessBuilder(command);
             builder.directory(source.getParent().toFile());
@@ -320,6 +386,89 @@ public final class RootUserCompiler {
             Thread.currentThread().interrupt();
             return new Build(source, output, false, -1,
                 said + "The compilation was interrupted.", line);
+        }
+    }
+
+    /**
+     * Compiles a source into a program rather than a library.
+     *
+     * Used for timing, where the point is to build the pipeline itself under
+     * one set of flags and run it, without giving the engine a second copy of
+     * a library it has already loaded.
+     */
+    public Build buildProgram(Path source, Path output, List<String> extraFlags) {
+        if (source == null || !Files.isRegularFile(source)) {
+            return new Build(source, output, false, -1, "No such source file.", "");
+        }
+        final String compiler = compiler();
+        if (compiler == null) {
+            return new Build(source, output, false, -1, "No C++ compiler.", "");
+        }
+        List<String> root = rootFlags();
+        List<String> command = new ArrayList<>();
+        command.add(compiler);
+        command.add("-std=c++20");
+        command.addAll(root);
+        if (extraFlags != null) command.addAll(usableLinks(extraFlags, root));
+        command.add("-o");
+        command.add(output.toAbsolutePath().toString());
+        command.add(source.toAbsolutePath().toString());
+        return run(command, source, output);
+    }
+
+    /**
+     * Puts the headers Sphere writes itself beside the source that asks for them.
+     *
+     * A pipeline that reads a parton distribution includes sphere_pdf.h, which
+     * is generated rather than installed. Writing it here rather than when the
+     * source is saved means it is also there for a source opened from an old
+     * project, for one a build produced by hand, and for the throwaway programs
+     * the timer and the inspector compile, which include the pipeline source
+     * from elsewhere: a quoted include is resolved beside the file holding the
+     * directive, so the header follows the source rather than the build.
+     */
+    private static void writeOwnHeaders(Path source, int depth) {
+        if (source == null || depth > 2 || !Files.isRegularFile(source)) {
+            return;
+        }
+        final Path folder = source.getParent();
+        if (folder == null) {
+            return;
+        }
+        final String text;
+        try {
+            text = Files.readString(source, StandardCharsets.UTF_8);
+        } catch (IOException cannotRead) {
+            return;
+        }
+        if (text.contains("\"" + RootPdfHeader.FILE_NAME + "\"")) {
+            final Path header = folder.resolve(RootPdfHeader.FILE_NAME);
+            try {
+                final String wanted = RootPdfHeader.source();
+                if (!Files.isRegularFile(header)
+                    || !Files.readString(header, StandardCharsets.UTF_8).equals(wanted)) {
+                    Files.writeString(header, wanted, StandardCharsets.UTF_8);
+                }
+            } catch (IOException cannotWrite) {
+                // The compiler will say what is missing, which is the clearer message.
+            }
+        }
+        // A generated program includes the real source by its own path, and it
+        // is that source's folder the header has to reach.
+        java.util.regex.Matcher included = java.util.regex.Pattern
+            .compile("#include\\s+\"([^\"]+)\"").matcher(text);
+        while (included.find()) {
+            final String named = included.group(1);
+            if (named.equals(RootPdfHeader.FILE_NAME)) {
+                continue;
+            }
+            Path other = Path.of(named);
+            if (!other.isAbsolute()) {
+                other = folder.resolve(named);
+            }
+            if (!other.normalize().equals(source.normalize())) {
+                writeOwnHeaders(other, depth + 1);
+            }
         }
     }
 

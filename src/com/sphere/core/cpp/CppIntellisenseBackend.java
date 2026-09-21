@@ -165,39 +165,86 @@ public final class CppIntellisenseBackend {
     }
 
     /**
+     * One header line, read a byte at a time up to its CRLF.
+     *
+     * Headers are ASCII by the protocol, so reading them as bytes is exact.
+     * Reading them through a Reader is what cannot be mixed with a byte-exact
+     * payload read: the Reader buffers ahead and swallows part of the body.
+     * Null when the stream ended.
+     */
+    private static String readHeaderLine(java.io.InputStream in) throws IOException {
+        java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream(64);
+        int c;
+        while ((c = in.read()) >= 0) {
+            if (c == '\n') {
+                byte[] bytes = line.toByteArray();
+                int end = bytes.length;
+                if (end > 0 && bytes[end - 1] == '\r') {
+                    end--;
+                }
+                return new String(bytes, 0, end, java.nio.charset.StandardCharsets.US_ASCII);
+            }
+            line.write(c);
+        }
+        return line.size() == 0 ? null
+             : new String(line.toByteArray(), java.nio.charset.StandardCharsets.US_ASCII);
+    }
+
+    /**
      * Processes incoming structural message sequences emitted on stdout by clangd.
      */
     private void startStdoutConsumer() {
         EXECUTOR.submit(() -> {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(clangdProcess.getInputStream(), StandardCharsets.UTF_8))) {
-                
-                String line;
-                int contentLength = -1;
+            // Framed in bytes, not in characters. Content-Length counts bytes,
+            // and a Reader hands back characters: one non-ASCII character in a
+            // payload -- a curly quote in a diagnostic, an accented path --
+            // makes the byte count larger than the character count, so a reader
+            // asked for that many characters waits for ones that only arrive
+            // with the next message and every frame after it is misaligned.
+            try (java.io.InputStream in = new java.io.BufferedInputStream(
+                    clangdProcess.getInputStream())) {
 
-                while ((line = reader.readLine()) != null) {
-                    line = line.trim();
-                    
-                    // Parse LSP headers
-                    if (line.startsWith("Content-Length:")) {
-                        contentLength = Integer.parseInt(line.substring(15).trim());
-                    } else if (line.isEmpty() && contentLength > 0) {
-                        // Header boundary reached; read the exact payload content body allocation length
-                        char[] buffer = new char[contentLength];
-                        int readBytes = 0;
-                        while (readBytes < contentLength) {
-                            int chunk = reader.read(buffer, readBytes, contentLength - readBytes);
-                            if (chunk == -1) break;
-                            readBytes += chunk;
+                while (true) {
+                    int contentLength = -1;
+                    String header;
+                    // Headers end at the blank line, each terminated by CRLF.
+                    while ((header = readHeaderLine(in)) != null && !header.isEmpty()) {
+                        if (header.regionMatches(true, 0, "Content-Length:", 0, 15)) {
+                            try {
+                                contentLength = Integer.parseInt(header.substring(15).trim());
+                            } catch (NumberFormatException notALength) {
+                                // A header that is not a number is not a frame we
+                                // can follow, so the stream is left to resynchronize
+                                // on the next one rather than guessing a size.
+                                contentLength = -1;
+                            }
                         }
+                    }
+                    if (header == null) {
+                        break;
+                    }
+                    if (contentLength <= 0) {
+                        continue;
+                    }
 
-                        String rpcResponse = new String(buffer);
-                        contentLength = -1; // Reset boundary marker configuration for upcoming message frames
-
-                        IntellisenseListener currentListener = this.activeListener;
-                        if (currentListener != null) {
-                            currentListener.onLspResponse(rpcResponse);
+                    byte[] payload = new byte[contentLength];
+                    int filled = 0;
+                    while (filled < contentLength) {
+                        final int chunk = in.read(payload, filled, contentLength - filled);
+                        if (chunk < 0) {
+                            break;
                         }
+                        filled += chunk;
+                    }
+                    if (filled < contentLength) {
+                        break;
+                    }
+
+                    final String rpcResponse =
+                        new String(payload, 0, filled, StandardCharsets.UTF_8);
+                    IntellisenseListener currentListener = this.activeListener;
+                    if (currentListener != null) {
+                        currentListener.onLspResponse(rpcResponse);
                     }
                 }
             } catch (IOException e) {

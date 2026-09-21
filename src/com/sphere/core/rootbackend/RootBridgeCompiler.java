@@ -30,6 +30,9 @@ import com.sphere.utils.SettingsManager;
  */
 public final class RootBridgeCompiler {
 
+    /** How long a toolchain probe is given before it is treated as absent. */
+    private static final int PROBE_TIMEOUT_SECONDS = 20;
+
     private static final String BINARY_NAME = System.getProperty("os.name").toLowerCase().contains("win")
             ? "root-bridge.exe"
             : "root-bridge";
@@ -442,6 +445,11 @@ public final class RootBridgeCompiler {
         try {
             ProcessBuilder pb = new ProcessBuilder(command);
             applyEnvironmentVariables(pb, settings);
+            // root-config writes to the error stream when the installation is
+            // half configured. Reading only the first line of the output stream
+            // and never the error one lets the probe fill its pipe and stop,
+            // taking the caller with it.
+            pb.redirectErrorStream(true);
             Process p = pb.start();
             String outputLine = "";
 
@@ -450,12 +458,26 @@ public final class RootBridgeCompiler {
                 if (line != null) {
                     outputLine = line.trim();
                 }
+                // Drained to the end so the child can finish writing and exit.
+                while (r.readLine() != null) {
+                    continue;
+                }
             }
 
-            if (p.waitFor() == 0) {
+            if (!p.waitFor(PROBE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                AppLogger.warn("The probe " + String.join(" ", command)
+                    + " did not answer in " + PROBE_TIMEOUT_SECONDS + " s.");
+                return "";
+            }
+            if (p.exitValue() == 0) {
                 return outputLine;
             }
-        } catch (Exception ignored) {}
+        } catch (java.io.IOException notThere) {
+            // No such program: the caller reads the empty answer as "not installed".
+        } catch (InterruptedException stopped) {
+            Thread.currentThread().interrupt();
+        }
         return "";
     }
 

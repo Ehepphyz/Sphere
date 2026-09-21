@@ -2,20 +2,22 @@
 
 **Sphere** functions as an experimental environment (a sandbox) or an advanced visual REPL. It allows to test scripts, run code on the fly, and inspect data without having to recompile large applications.
 
+![Image 1](images/start_present.png)
+
 ## Expanding Toward a Full HEP Simulation Pipeline
 My long‑term objectives also include integrating Geant4, MG5, and Herwig, in order to extend the system into a full HEP simulation and analysis pipeline.
 
-![Image 1](images/image1.png)
-![Image 4](images/image4.png)
-![Image 5](images/image5.png)
+![Image 2](images/image1.png)
+![Image 3](images/image4.png)
+![Image 4](images/image5.png)
 
 ## **Why It Is a Sandbox**
 
 ### **• On‑the‑fly execution**  
 The interactive CLI lets you inject and test code snippets in C++, Python, Julia in real time.
 
-![Image 2](images/image2.png)
-![Image 3](images/image3.png)
+![Image 5](images/image2.png)
+![Image 6](images/image3.png)
 ![Image 7](images/image7.png)
 
 ### **• Isolated and self‑contained environment**  
@@ -49,7 +51,7 @@ An interactive CLI with autocompletion (global TAB interception) and command his
 ## **Native C++ Backend & CERN ROOT Integration**  
 Sphere embeds a highly optimized C++ backend (`CppBackend`, `CppDiagnosticsEngine`) and communicates with CERN ROOT through a native bridge (`RootBackend` / `RootBridgeCompiler`).
 
-![Image 6](images/image6.png)
+![Image 9](images/image6.png)
 
 ---
 

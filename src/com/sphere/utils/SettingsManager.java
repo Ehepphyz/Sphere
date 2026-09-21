@@ -74,17 +74,53 @@ public class SettingsManager {
         reportDuplicates();
     }
 
+    /**
+     * Writes the settings, through a file beside the real one.
+     *
+     * Opening the live file to write truncates it first, so a write that fails
+     * part way -- a full disk, the file held open by another process on
+     * Windows, the machine going down -- leaves it truncated, and every tool
+     * path, ROOT_DIR and interpreter the user configured is gone at the next
+     * start. The new text goes into a file of its own and takes the place of
+     * the old one only once it is complete, so the file on disk is always one
+     * whole version or the other.
+     */
     public synchronized void saveSettings() {
         List<String> out = rawLines.isEmpty() ? renderFromScratch() : merge();
-        File file = new File(CONFIG_FILENAME);
-        try (BufferedWriter writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8)) {
-            for (String line : out) {
-                writer.write(line);
-                writer.newLine();
+        final Path target = new File(CONFIG_FILENAME).toPath().toAbsolutePath();
+        final Path folder = target.getParent() == null ? Path.of(".") : target.getParent();
+        Path scratch = null;
+        try {
+            Files.createDirectories(folder);
+            scratch = Files.createTempFile(folder, ".settings-", ".tmp");
+            try (BufferedWriter writer = Files.newBufferedWriter(scratch, StandardCharsets.UTF_8)) {
+                for (String line : out) {
+                    writer.write(line);
+                    writer.newLine();
+                }
+                writer.flush();
             }
+            try {
+                Files.move(scratch, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                           java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException notAtomic) {
+                // Some filesystems cannot swap in one step. The copy is still
+                // safer than writing in place, because the source is complete.
+                Files.move(scratch, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            scratch = null;
         } catch (IOException e) {
-            com.sphere.utils.AppLogger.error("Critical Error: Unable to save " + CONFIG_FILENAME);
+            com.sphere.utils.AppLogger.error("Critical Error: Unable to save " + CONFIG_FILENAME
+                + " (" + e.getMessage() + "). The file on disk was left as it was.");
             return;
+        } finally {
+            if (scratch != null) {
+                try {
+                    Files.deleteIfExists(scratch);
+                } catch (IOException leaveIt) {
+                    // A leftover beside the settings is harmless: it is not read.
+                }
+            }
         }
         rawLines.clear();
         rawLines.addAll(out);
@@ -798,17 +834,45 @@ public class SettingsManager {
         saveSettings();
     }
 
+    /**
+     * The section the one-argument reader would answer from, or null.
+     *
+     * Iterated the same way getProperty iterates, so the two agree on which
+     * declaration of a repeated key is the live one.
+     */
+    private String sectionHolding(String lookupKey) {
+        for (Map.Entry<String, List<Map.Entry<String, String>>> one : sections.entrySet()) {
+            for (Map.Entry<String, String> line : one.getValue()) {
+                if (line.getKey().equals(lookupKey)) {
+                    return one.getKey();
+                }
+            }
+        }
+        return null;
+    }
+
     public synchronized void setProperty(String key, String value) {
         if (key == null) return;
         String lookupKey = key.toUpperCase().trim();
-        String section = "GENERAL"; // Default target fallback for arbitrary engine sets
 
-        if (lookupKey.startsWith("WIN_") || lookupKey.startsWith("UNIX_")) {
-            section = "TERMINAL_CONFIG";
-        } else if (lookupKey.endsWith("_EXEC") || lookupKey.endsWith("_DIR") || lookupKey.endsWith("_FWORK_DIR")) {
-            section = "SYSTEM_PATH";
-        } else if (lookupKey.endsWith("_ARGS")) {
-            section = "ARGS";
+        // Where the key already is wins over where its name suggests it should
+        // go. The section was picked from the shape of the name alone, so a key
+        // written by hand into one section was rewritten into another, while
+        // the single-argument getProperty kept answering from the first section
+        // that carried it: the new value was stored and then never read. The
+        // section this finds is the one that reader would return, so a value
+        // set here is the value read back.
+        String section = sectionHolding(lookupKey);
+
+        if (section == null) {
+            section = "GENERAL"; // Default target fallback for arbitrary engine sets
+            if (lookupKey.startsWith("WIN_") || lookupKey.startsWith("UNIX_")) {
+                section = "TERMINAL_CONFIG";
+            } else if (lookupKey.endsWith("_EXEC") || lookupKey.endsWith("_DIR") || lookupKey.endsWith("_FWORK_DIR")) {
+                section = "SYSTEM_PATH";
+            } else if (lookupKey.endsWith("_ARGS")) {
+                section = "ARGS";
+            }
         }
 
         setProperty(section, lookupKey, value);

@@ -202,7 +202,15 @@ public final class DebugPanel extends JPanel implements DebugAdapter.Listener {
         stackModel.setRowCount(0);
         console.setText("");
         append("Starting session on " + file.getName() + "\n", false);
-        adapter.start(file, List.of(), host.activeBreakpoints(), this);
+        // Starting a session compiles the source first, which is a g++ run of
+        // unbounded length. This method is a button handler, so doing it here
+        // froze the whole window for the length of the compile.
+        final DebugAdapter starting = adapter;
+        final BreakpointModel breakpoints = host.activeBreakpoints();
+        Thread worker = new Thread(
+            () -> starting.start(file, List.of(), breakpoints, this), "sphere-debug-start");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     private void withAdapter(Consumer<DebugAdapter> action) {

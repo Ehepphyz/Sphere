@@ -74,6 +74,8 @@ public class WorkspaceFileExplorerPanel extends JPanel {
     private static final long PENDING_REFRESH_DELAY_MS = 400;
     // Sync queue
     private final LinkedBlockingQueue<String> syncQueue = new LinkedBlockingQueue<>();
+    private Thread syncWorkerThread;
+    private volatile boolean syncWorkerRunning = false;
     // OS detection
     private final boolean isWindows;
     private final boolean isMac;
@@ -343,17 +345,36 @@ public class WorkspaceFileExplorerPanel extends JPanel {
         }
     }
 
+    /**
+     * The worker that coalesces file-change notifications into one reload.
+     *
+     * It runs on a thread of its own rather than on scheduledExecutor. That
+     * executor has a single thread, and this loop never returns, so anything
+     * submitted to it afterwards waits forever: the two delayed refreshes that
+     * clear pendingRefresh were queued behind it and never ran, which left the
+     * flag set and the tree silently not refreshing for the rest of the
+     * session. A daemon thread also lets the process exit without waiting for
+     * a loop that only ends when the panel does.
+     */
     private void startSyncWorker() {
-        scheduledExecutor.execute(() -> {
-            while (true) {
+        syncWorkerRunning = true;
+        syncWorkerThread = new Thread(() -> {
+            while (syncWorkerRunning) {
                 try {
                     syncQueue.take();
                     Thread.sleep(50);
                     syncQueue.clear();
                     SwingUtilities.invokeLater(this::reloadTreeIncremental);
-                } catch (InterruptedException ignored) {}
+                } catch (InterruptedException stopping) {
+                    // The only interrupt comes from disposePanel. Restoring the
+                    // flag and leaving is what lets the thread actually end.
+                    Thread.currentThread().interrupt();
+                    return;
+                }
             }
-        });
+        }, "sphere-workspace-sync");
+        syncWorkerThread.setDaemon(true);
+        syncWorkerThread.start();
     }
 
     /* ---------------------------------------------------------------------
@@ -1457,8 +1478,13 @@ public class WorkspaceFileExplorerPanel extends JPanel {
         requestSync(); 
     }
     
-    public void disposePanel() { 
+    public void disposePanel() {
         stopAllWatchers();
-        scheduledExecutor.shutdownNow(); 
+        syncWorkerRunning = false;
+        if (syncWorkerThread != null) {
+            syncWorkerThread.interrupt();
+            syncWorkerThread = null;
+        }
+        scheduledExecutor.shutdownNow();
     }
 }

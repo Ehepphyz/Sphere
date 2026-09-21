@@ -62,7 +62,17 @@ public final class RootPipelineManifest {
         "const char *", "ROOT::RVec<double>", "ROOT::RVec<float>", "ROOT::RVec<int>"
     };
 
-    private static final String MARKER = "// sphere-pipeline 1 :: ";
+    /**
+     * The marker, and the version of the line that follows it.
+     *
+     * Version 1 carried six fields and one boolean for headers. Version 2 adds
+     * the modules the pipeline needs, which the boolean could not express. A
+     * source written by an earlier Sphere is still read, so raising the version
+     * costs nothing to whoever already has pipelines on disk.
+     */
+    private static final String PREFIX = "// sphere-pipeline ";
+    private static final int VERSION = 2;
+    private static final String MARKER = PREFIX + VERSION + " :: ";
     private static final String SEPARATOR = " :: ";
 
     // ---- what the form collects ---------------------------------------------
@@ -74,8 +84,9 @@ public final class RootPipelineManifest {
     /** True for the folder beside Sphere, false for the active project's own. */
     public boolean global = true;
 
-    public boolean rootHeaders = true;
-    public boolean useRVec = false;
+    /** The parts of ROOT this pipeline needs, for the includes and the -l flags. */
+    public final List<RootPipelineModules> modules = new ArrayList<>();
+
     public boolean threadSafe = true;
     public boolean openMp = false;
     public boolean optimize = true;
@@ -120,6 +131,9 @@ public final class RootPipelineManifest {
         if (openMp) {
             out.add("-fopenmp");
         }
+        // A module that is included must also be linked, or the library loads
+        // and then fails on a symbol, which reads as a mystery from the engine.
+        out.addAll(RootPipelineModules.linkFlagsOf(modules));
         if (extraFlags != null && !extraFlags.isBlank()) {
             for (String flag : extraFlags.trim().split("\\s+")) {
                 out.add(flag);
@@ -132,7 +146,6 @@ public final class RootPipelineManifest {
     private String options() {
         StringBuilder out = new StringBuilder();
         if (threadSafe) { out.append("threadsafe,"); }
-        if (useRVec)    { out.append("rvec,"); }
         if (openMp)     { out.append("openmp,"); }
         if (optimize)   { out.append("O3,"); }
         if (nativeArch) { out.append("native,"); }
@@ -160,6 +173,7 @@ public final class RootPipelineManifest {
              + kind.returnType + SEPARATOR
              + (args.length() == 0 ? "-" : args) + SEPARATOR
              + options() + SEPARATOR
+             + RootPipelineModules.encode(modules) + SEPARATOR
              + (description == null ? "" : description.replace(SEPARATOR, " "));
     }
 
@@ -173,7 +187,7 @@ public final class RootPipelineManifest {
      *
      * The pipeline's own name is part of it. A single shared name would be
      * resolved by the loader to whichever library came first, so every pipeline
-     * after the first would describe itself with its neighbour's line.
+     * after the first would describe itself with its neighbor's line.
      */
     public String exportName() {
         return exportName(name);
@@ -190,8 +204,19 @@ public final class RootPipelineManifest {
             return null;
         }
         String body = line.trim();
-        if (body.startsWith(MARKER)) {
-            body = body.substring(MARKER.length());
+        // The version decides where the description sits, so it is read first.
+        int version = VERSION;
+        if (body.startsWith(PREFIX)) {
+            final int at = body.indexOf(SEPARATOR, PREFIX.length());
+            if (at < 0) {
+                return null;
+            }
+            try {
+                version = Integer.parseInt(body.substring(PREFIX.length(), at).trim());
+            } catch (NumberFormatException notAVersion) {
+                return null;
+            }
+            body = body.substring(at + SEPARATOR.length());
         }
         String[] part = body.split(SEPARATOR, -1);
         if (part.length < 5) {
@@ -214,12 +239,28 @@ public final class RootPipelineManifest {
         }
         final String options = part[4].trim().toLowerCase(Locale.ROOT);
         manifest.threadSafe = options.contains("threadsafe");
-        manifest.useRVec = options.contains("rvec");
         manifest.openMp = options.contains("openmp");
         manifest.optimize = options.contains("o3");
         manifest.nativeArch = options.contains("native");
         manifest.showInHelp = options.contains("help");
-        manifest.description = part.length > 5 ? part[5].trim() : "";
+
+        if (version >= 2) {
+            manifest.modules.addAll(
+                RootPipelineModules.decode(part.length > 5 ? part[5] : ""));
+            manifest.description = part.length > 6 ? part[6].trim() : "";
+        } else {
+            // Version 1 said "ROOT headers" and "rvec". Those become the two
+            // modules that stood behind them, so an old source keeps building.
+            manifest.modules.add(RootPipelineModules.MATH);
+            if (options.contains("rvec")) {
+                manifest.modules.add(RootPipelineModules.VECTORS);
+            }
+            if (manifest.kind == Kind.HISTOGRAM) {
+                manifest.modules.add(RootPipelineModules.TREE);
+                manifest.modules.add(RootPipelineModules.HIST);
+            }
+            manifest.description = part.length > 5 ? part[5].trim() : "";
+        }
         return manifest;
     }
 
@@ -237,7 +278,10 @@ public final class RootPipelineManifest {
             List<String> head = Files.readAllLines(source, StandardCharsets.UTF_8);
             final int limit = Math.min(head.size(), 20);
             for (int i = 0; i < limit; i++) {
-                if (head.get(i).startsWith(MARKER)) {
+                // The prefix, not the whole marker: a source written by an
+                // earlier Sphere carries an earlier version number, and decode
+                // reads it, so it must still be recognized here.
+                if (head.get(i).startsWith(PREFIX)) {
                     return decode(head.get(i));
                 }
             }
@@ -290,7 +334,6 @@ public final class RootPipelineManifest {
             other = new RootPipelineManifest();
         }
         other.global = global;
-        other.rootHeaders = rootHeaders;
         other.generateTest = generateTest;
         other.extraFlags = extraFlags;
         return other;

@@ -108,7 +108,22 @@ public class CommandRouter {
         public List<String> snippetOptions = new ArrayList<>();
     }
 
+    /**
+     * The router this session is running, for a window that wants to type.
+     *
+     * Sphere builds exactly one. A panel that assembles commands should send
+     * them the way the user would rather than reach past the router into the
+     * backends, so that what it does and what the console does are the same
+     * thing.
+     */
+    private static volatile CommandRouter active;
+
+    public static CommandRouter active() {
+        return active;
+    }
+
     public CommandRouter() {
+        active = this;
         // Register default file system command plugins
         this.registerPlugin(new LsPlugin(this));
         this.registerPlugin(new CatPlugin(this));
@@ -798,22 +813,42 @@ public class CommandRouter {
                                 ProcessBuilder pathPb = new ProcessBuilder(interpreter, "-c",
                                     "import sys; print(','.join(sys.path))");
                                 pathPb.environment().putAll(System.getenv());
+                                // The interpreter's own startup can write a great
+                                // deal to its error stream -- a noisy sitecustomize,
+                                // a conda deprecation notice, PYTHONWARNINGS set to
+                                // all. Left unread it fills the pipe and the
+                                // interpreter stops there, and this runs inside the
+                                // worker that executes console commands, so the
+                                // command would never finish and the catch below
+                                // would say nothing about why.
+                                pathPb.redirectErrorStream(true);
                                 Process pathProc = pathPb.start();
+                                String pathsLine = null;
                                 try (BufferedReader r = new BufferedReader(
-                                        new InputStreamReader(pathProc.getInputStream()))) {
-                                    String pathsLine = r.readLine();
-                                    if (pathsLine != null && !pathsLine.isBlank()) {
-                                        for (String p : pathsLine.split(",")) {
-                                            if (p.contains("site-packages") || p.contains("Lib")) {
-                                                if (customPythonPath.length() > 0) {
-                                                    customPythonPath.append(File.pathSeparator);
-                                                }
-                                                customPythonPath.append(p.trim());
-                                            }
+                                        new InputStreamReader(pathProc.getInputStream(),
+                                                java.nio.charset.StandardCharsets.UTF_8))) {
+                                    String line;
+                                    while ((line = r.readLine()) != null) {
+                                        // The paths are the line holding separators;
+                                        // anything before it is the interpreter talking.
+                                        if (line.contains(",") || line.contains("site-packages")) {
+                                            pathsLine = line;
                                         }
                                     }
                                 }
-                                pathProc.waitFor();
+                                if (pathsLine != null && !pathsLine.isBlank()) {
+                                    for (String p : pathsLine.split(",")) {
+                                        if (p.contains("site-packages") || p.contains("Lib")) {
+                                            if (customPythonPath.length() > 0) {
+                                                customPythonPath.append(File.pathSeparator);
+                                            }
+                                            customPythonPath.append(p.trim());
+                                        }
+                                    }
+                                }
+                                if (!pathProc.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)) {
+                                    pathProc.destroyForcibly();
+                                }
                             }
                         } catch (Exception ignored) {
                             String userProf = currentSnapshot.get("USERPROFILE");

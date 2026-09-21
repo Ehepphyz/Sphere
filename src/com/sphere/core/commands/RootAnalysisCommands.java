@@ -452,4 +452,284 @@ public final class RootAnalysisCommands {
         Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + w[1] + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + w[1] + "\"); } RooWorkspace *ws = (RooWorkspace *)f->Get(\"" + w[2] + "\"); if (ws == nullptr) { return std::string(\"ERROR: no workspace called " + w[2] + "\"); } SphereBridge::Keep<RooWorkspace>(\"" + w[0] + "\", ws, \"RooWorkspace\"); return std::string(\"" + w[0] + " bound\"); }()");
     }
 
+    /** <name> <class> <size> */
+    public static void rootClonesNew(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root clones new"));
+        if (w.length < 3) {
+            Handlers.usage(":root clones new <name> <class> <size>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TClonesArray>(\"" + w[0] + "\", new TClonesArray(\"" + w[1] + "\", " + w[2] + "), \"TClonesArray\")");
+    }
+
+    /** <name> */
+    public static void rootClonesSize(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root clones size"));
+        if (w.length < 1) {
+            Handlers.usage(":root clones size <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TClonesArray>(\"" + w[0] + "\")->GetEntriesFast()");
+    }
+
+    /** <name> <index> */
+    public static void rootClonesAt(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root clones at"));
+        if (w.length < 2) {
+            Handlers.usage(":root clones at <name> <index>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TObject *o = SphereBridge::Held<TClonesArray>(\"" + w[0] + "\")->At(" + w[1] + "); if (o == nullptr) { return std::string(\"nothing at " + w[1] + "\"); } return std::string(o->ClassName()) + \"  \" + o->GetName(); }()");
+    }
+
+    /** <name> */
+    public static void rootClonesClear(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root clones clear"));
+        if (w.length < 1) {
+            Handlers.usage(":root clones clear <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Held<TClonesArray>(\"" + w[0] + "\")->Clear(\"C\"); return std::string(\"cleared\"); }()");
+    }
+
+    /** <name> <size> */
+    public static void rootClonesExpand(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root clones expand"));
+        if (w.length < 2) {
+            Handlers.usage(":root clones expand <name> <size>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Held<TClonesArray>(\"" + w[0] + "\")->ExpandCreate(" + w[1] + "); return SphereBridge::Held<TClonesArray>(\"" + w[0] + "\")->GetSize(); }()");
+    }
+
+    /** <name> */
+    public static void rootStatNew(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root stat new"));
+        if (w.length < 1) {
+            Handlers.usage(":root stat new <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TStatistic>(\"" + w[0] + "\", new TStatistic(\"" + w[0] + "\"), \"TStatistic\")");
+    }
+
+    /** <name> <value> [weight] */
+    public static void rootStatFill(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root stat fill"));
+        if (w.length < 2) {
+            Handlers.usage(":root stat fill <name> <value> [weight]");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Held<TStatistic>(\"" + w[0] + "\")->Fill(" + w[1] + ", " + (w.length > 2 ? w[2] : "1.0") + "); return SphereBridge::Held<TStatistic>(\"" + w[0] + "\")->GetN(); }()");
+    }
+
+    /** <name> */
+    public static void rootStatMean(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root stat mean"));
+        if (w.length < 1) {
+            Handlers.usage(":root stat mean <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TStatistic>(\"" + w[0] + "\")->GetMean()");
+    }
+
+    /** <name> */
+    public static void rootStatRms(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root stat rms"));
+        if (w.length < 1) {
+            Handlers.usage(":root stat rms <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TStatistic>(\"" + w[0] + "\")->GetRMS()");
+    }
+
+    /** <name> */
+    public static void rootStatSum(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root stat sum"));
+        if (w.length < 1) {
+            Handlers.usage(":root stat sum <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TStatistic>(\"" + w[0] + "\")->GetW()");
+    }
+
+    /** <name> */
+    public static void rootStatCount(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root stat count"));
+        if (w.length < 1) {
+            Handlers.usage(":root stat count <name>");
+            return;
+        }
+        Handlers.cling(c, "(long) SphereBridge::Held<TStatistic>(\"" + w[0] + "\")->GetN()");
+    }
+
+    /** <name> */
+    public static void rootStatPrint(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root stat print"));
+        if (w.length < 1) {
+            Handlers.usage(":root stat print <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TStatistic *s = SphereBridge::Held<TStatistic>(\"" + w[0] + "\"); return std::string(\"n \") + std::to_string((long long) s->GetN()) + \"  mean \" + std::to_string(s->GetMean()) + \" +- \" + std::to_string(s->GetMeanErr()) + \"  rms \" + std::to_string(s->GetRMS()) + \"  min \" + std::to_string(s->GetMin()) + \"  max \" + std::to_string(s->GetMax()); }()");
+    }
+
+    /** <data> <model1> <model2> [model3] */
+    public static void rootFitFractions(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root fit fractions"));
+        if (w.length < 3) {
+            Handlers.usage(":root fit fractions <data> <model1> <model2> [model3]");
+            return;
+        }
+        Handlers.cling(c, "[]{ TObjArray *models = new TObjArray(); models->Add(SphereBridge::Need<TH1>(\"" + w[1] + "\", \"TH1\")); models->Add(SphereBridge::Need<TH1>(\"" + w[2] + "\", \"TH1\")); TFractionFitter *fit = new TFractionFitter(SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"), models); const int status = fit->Fit(); if (status != 0) { return std::string(\"the fit did not converge, status \") + std::to_string(status); } std::string out; for (int i = 0; i < models->GetEntries(); ++i) { Double_t v = 0, e = 0; fit->GetResult(i, v, e); out += \"model \" + std::to_string(i) + \"  \" + std::to_string(v) + \" +- \" + std::to_string(e) + \"\\n\"; } return out; }()");
+    }
+
+    /** <hist> <function> <low> <high> */
+    public static void rootFitRange(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root fit range"));
+        if (w.length < 4) {
+            Handlers.usage(":root fit range <hist> <function> <low> <high>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->Fit(SphereBridge::Need<TF1>(\"" + w[1] + "\", \"TF1\"), \"R\", \"\", " + w[2] + ", " + w[3] + ")");
+    }
+
+    /** <hist> <function> */
+    public static void rootFitLikelihood(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root fit likelihood"));
+        if (w.length < 2) {
+            Handlers.usage(":root fit likelihood <hist> <function>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->Fit(SphereBridge::Need<TF1>(\"" + w[1] + "\", \"TF1\"), \"L\")");
+    }
+
+    /** <hist> <function> */
+    public static void rootFitWeighted(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root fit weighted"));
+        if (w.length < 2) {
+            Handlers.usage(":root fit weighted <hist> <function>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->Fit(SphereBridge::Need<TF1>(\"" + w[1] + "\", \"TF1\"), \"WL\")");
+    }
+
+    /** <function> */
+    public static void rootFitQuality(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root fit quality"));
+        if (w.length < 1) {
+            Handlers.usage(":root fit quality <function>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TF1 *f = SphereBridge::Need<TF1>(\"" + w[0] + "\", \"TF1\"); const double n = f->GetNDF(); const double c = f->GetChisquare(); return std::string(\"chi2 \") + std::to_string(c) + \"  ndf \" + std::to_string((long long) n) + \"  chi2/ndf \" + std::to_string(n > 0 ? c / n : 0.0) + \"  probability \" + std::to_string(f->GetProb()); }()");
+    }
+
+    /** <hist> <out> [level] */
+    public static void rootFitConfBand(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root fit confband"));
+        if (w.length < 2) {
+            Handlers.usage(":root fit confband <hist> <out> [level]");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TH1D *band = new TH1D(\"" + w[1] + "\", \"confidence band\", h->GetNbinsX(), h->GetXaxis()->GetXmin(), h->GetXaxis()->GetXmax()); TVirtualFitter *fitter = TVirtualFitter::GetFitter(); if (fitter == nullptr) { return std::string(\"fit something first\"); } fitter->GetConfidenceIntervals(band, " + (w.length > 2 ? w[2] : "0.683") + "); band->SetDirectory(gDirectory); return std::string(band->GetName()); }()");
+    }
+
+    /** <passed> <total> [level] */
+    public static void rootEffWilson(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root eff wilson"));
+        if (w.length < 2) {
+            Handlers.usage(":root eff wilson <passed> <total> [level]");
+            return;
+        }
+        Handlers.cling(c, "[]{ const double k = " + w[0] + ", n = " + w[1] + ", cl = " + (w.length > 2 ? w[2] : "0.683") + "; if (n <= 0.0) { return std::string(\"nothing was tried\"); } const double z = TMath::Sqrt(2.0) * TMath::ErfInverse(cl); const double p = k / n; const double d = 1.0 + z * z / n; const double center = (p + z * z / (2.0 * n)) / d; const double half = z * TMath::Sqrt(p * (1.0 - p) / n + z * z / (4.0 * n * n)) / d; return std::to_string(p) + \"  [\" + std::to_string(center - half) + \", \" + std::to_string(center + half) + \"]\"; }()");
+    }
+
+    /** <passed> <total> [level] */
+    public static void rootEffAgresti(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root eff agresti"));
+        if (w.length < 2) {
+            Handlers.usage(":root eff agresti <passed> <total> [level]");
+            return;
+        }
+        Handlers.cling(c, "[]{ const double k = " + w[0] + ", n = " + w[1] + ", cl = " + (w.length > 2 ? w[2] : "0.683") + "; if (n <= 0.0) { return std::string(\"nothing was tried\"); } const double z = TMath::Sqrt(2.0) * TMath::ErfInverse(cl); const double nt = n + z * z; const double pt = (k + z * z / 2.0) / nt; const double half = z * TMath::Sqrt(pt * (1.0 - pt) / nt); const double lo = pt - half, hi = pt + half; return std::to_string(k / n) + \"  [\" + std::to_string(lo < 0.0 ? 0.0 : lo) + \", \" + std::to_string(hi > 1.0 ? 1.0 : hi) + \"]\"; }()");
+    }
+
+    /** <passed> <total> [level] */
+    public static void rootEffNormal(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root eff normal"));
+        if (w.length < 2) {
+            Handlers.usage(":root eff normal <passed> <total> [level]");
+            return;
+        }
+        Handlers.cling(c, "[]{ const double k = " + w[0] + ", n = " + w[1] + ", cl = " + (w.length > 2 ? w[2] : "0.683") + "; if (n <= 0.0) { return std::string(\"nothing was tried\"); } const double z = TMath::Sqrt(2.0) * TMath::ErfInverse(cl); const double p = k / n; const double half = z * TMath::Sqrt(p * (1.0 - p) / n); return std::to_string(p) + \"  [\" + std::to_string(p - half) + \", \" + std::to_string(p + half) + \"]\"; }()");
+    }
+
+    /** <observed> [level] */
+    public static void rootEffPoisson(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root eff poisson"));
+        if (w.length < 1) {
+            Handlers.usage(":root eff poisson <observed> [level]");
+            return;
+        }
+        Handlers.cling(c, "[]{ const double n = " + w[0] + ", cl = " + (w.length > 1 ? w[1] : "0.683") + "; const double z = TMath::Sqrt(2.0) * TMath::ErfInverse(cl); const double lo = n <= 0.0 ? 0.0 : n - z * TMath::Sqrt(n); return std::to_string(n) + \"  [\" + std::to_string(lo < 0.0 ? 0.0 : lo) + \", \" + std::to_string(n + z * TMath::Sqrt(n > 0.0 ? n : 1.0)) + \"]\"; }()");
+    }
+
+    /** <out> <a> <b> */
+    public static void rootMatrixMultiply(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root matrix multiply"));
+        if (w.length < 3) {
+            Handlers.usage(":root matrix multiply <out> <a> <b>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TMatrixD>(\"" + w[0] + "\", new TMatrixD(*SphereBridge::Held<TMatrixD>(\"" + w[1] + "\"), TMatrixD::kMult, *SphereBridge::Held<TMatrixD>(\"" + w[2] + "\")), \"TMatrixD\")");
+    }
+
+    /** <out> <a> <b> */
+    public static void rootMatrixAdd(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root matrix add"));
+        if (w.length < 3) {
+            Handlers.usage(":root matrix add <out> <a> <b>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TMatrixD *sum = new TMatrixD(*SphereBridge::Held<TMatrixD>(\"" + w[1] + "\")); *sum += *SphereBridge::Held<TMatrixD>(\"" + w[2] + "\"); return SphereBridge::Keep<TMatrixD>(\"" + w[0] + "\", sum, \"TMatrixD\"); }()");
+    }
+
+    /** <name> */
+    public static void rootMatrixNorm(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root matrix norm"));
+        if (w.length < 1) {
+            Handlers.usage(":root matrix norm <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TMatrixD *m = SphereBridge::Held<TMatrixD>(\"" + w[0] + "\"); return std::string(\"one \") + std::to_string(m->Norm1()) + \"  infinity \" + std::to_string(m->NormInf()) + \"  euclidean \" + std::to_string(TMath::Sqrt(m->E2Norm())); }()");
+    }
+
+    /** <name> */
+    public static void rootMatrixEigen(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root matrix eigen"));
+        if (w.length < 1) {
+            Handlers.usage(":root matrix eigen <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TMatrixDSym s(*SphereBridge::Held<TMatrixD>(\"" + w[0] + "\")); TMatrixDSymEigen e(s); const TVectorD &v = e.GetEigenValues(); std::string out; for (int i = 0; i < v.GetNrows(); ++i) { out += std::to_string(v(i)); out += '\\n'; } return out; }()");
+    }
+
+    /** <out> <cov> <jacobian> */
+    public static void rootMatrixSimilarity(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root matrix similarity"));
+        if (w.length < 3) {
+            Handlers.usage(":root matrix similarity <out> <cov> <jacobian>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TMatrixDSym c(*SphereBridge::Held<TMatrixD>(\"" + w[1] + "\")); c.Similarity(*SphereBridge::Held<TMatrixD>(\"" + w[2] + "\")); return SphereBridge::Keep<TMatrixD>(\"" + w[0] + "\", new TMatrixD(c), \"TMatrixD\"); }()");
+    }
+
+    /** <name> */
+    public static void rootMatrixCondition(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root matrix condition"));
+        if (w.length < 1) {
+            Handlers.usage(":root matrix condition <name>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TMatrixD copy(*SphereBridge::Held<TMatrixD>(\"" + w[0] + "\")); TDecompSVD svd(copy); if (!svd.Decompose()) { return std::string(\"it would not decompose\"); } return std::string(\"condition \") + std::to_string(svd.Condition()); }()");
+    }
+
 }
