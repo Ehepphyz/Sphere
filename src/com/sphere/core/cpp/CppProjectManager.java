@@ -69,11 +69,27 @@ public final class CppProjectManager {
      * Evaluates security settings before returning execution structures.
      */
     public List<String> configure(String additionalArguments) {
+        return configure(additionalArguments == null || additionalArguments.isBlank()
+            ? List.of() : CppBackend.tokenizeArguments(additionalArguments.trim()));
+    }
+
+    /**
+     * The same, from arguments already separated.
+     *
+     * A caller that has the words of the command line must not glue them back
+     * together for this: -G "Unix Makefiles" is one word carrying a space, and
+     * a round trip through a single string loses the quotes that said so.
+     */
+    public List<String> configure(List<String> additionalArguments) {
         List<String> cmd = new ArrayList<>();
         ensureBuildDirectoryExists();
 
-        String resolvedArgs = (additionalArguments != null) ? additionalArguments.trim() : "";
-        if (!resolvedArgs.isEmpty() && !SecurityManager.isCommandSafe(resolvedArgs)) {
+        List<String> resolvedArgs = (additionalArguments == null) ? List.of() : additionalArguments;
+        // The same gate as before, on the line as a whole. It is not applied to
+        // each argument on its own: isCommandSafe reads the first token as a
+        // Python module name, which "Unix Makefiles" is not.
+        String asOneLine = String.join(" ", resolvedArgs).trim();
+        if (!asOneLine.isEmpty() && !SecurityManager.isCommandSafe(asOneLine)) {
             throw new SecurityException("Security Violation: Detected malicious parameter injections in project build config parameters.");
         }
 
@@ -85,10 +101,7 @@ public final class CppProjectManager {
                 cmd.add("-B");
                 cmd.add(buildDirectory.getAbsolutePath());  // Out-of-source binary object dump directory
                 
-                // Parse optional parameters if supplied (e.g., -G "Ninja" -DCMAKE_BUILD_TYPE=Release)
-                if (!resolvedArgs.isEmpty()) {
-                    cmd.addAll(Arrays.asList(resolvedArgs.split("\\s+")));
-                }
+                cmd.addAll(resolvedArgs);
                 break;
 
             case NINJA:
@@ -116,6 +129,11 @@ public final class CppProjectManager {
                     cmd.add("--target");
                     cmd.add(cleanTarget);
                 }
+                // One core is what cmake and make use when nobody says
+                // otherwise, which on an eight-core machine is a build eight
+                // times longer than it needs to be. ninja is already parallel.
+                cmd.add("--parallel");
+                cmd.add(String.valueOf(buildJobs()));
                 break;
 
             case NINJA:
@@ -131,6 +149,7 @@ public final class CppProjectManager {
                 cmd.add(resolveExecutablePath("CPP_MAKE_EXEC", "make"));
                 cmd.add("-C");
                 cmd.add(rootDirectory.getAbsolutePath());
+                cmd.add("-j" + buildJobs());
                 if (!cleanTarget.isEmpty()) {
                     cmd.add(cleanTarget);
                 }
@@ -168,6 +187,35 @@ public final class CppProjectManager {
                 break;
         }
         return cmd;
+    }
+
+    /**
+     * How many compilations run at once: CPP_BUILD_JOBS, or the core count.
+     */
+    public int buildJobs() {
+        String declared = settings.getProperty("CPP_BUILD_JOBS");
+        if (declared != null) {
+            try {
+                int asked = Integer.parseInt(declared.trim());
+                if (asked > 0) {
+                    return asked;
+                }
+            } catch (NumberFormatException notANumber) {
+                AppLogger.error("CPP_BUILD_JOBS is not a number: " + declared);
+            }
+        }
+        return Math.max(1, Runtime.getRuntime().availableProcessors());
+    }
+
+    /** True when the root carries the marker file of a real build system. */
+    public boolean hasBuildSystem() {
+        for (BuildSystem system : BuildSystem.values()) {
+            File marker = new File(rootDirectory, system.getMarkerFile());
+            if (marker.isFile()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void ensureBuildDirectoryExists() {

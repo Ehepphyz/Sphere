@@ -620,4 +620,4 @@ public class PythonBackend implements Backend {
         String getActiveVenvPath() { return activeVenvPath; }
         boolean isVenvActive() { return activeVenvPythonExecutable != null; }
     }
-}
+}

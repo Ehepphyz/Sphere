@@ -367,16 +367,22 @@ public class IconManager {
     }
 
     /**
-     * Puts the application icon on one window. Sphere only ever set it on two of
-     * its windows, so every dialog, terminal and editor showed the Java default.
+     * Puts the application icon on one window and on the windows that own it.
+     *
+     * The owner matters as much as the window: a dialog opened with no parent
+     * is owned by a hidden frame Swing shares between all of them, and the task
+     * bar takes its entry from that frame. It is never opened, so nothing that
+     * waits for a window to open ever reaches it.
      */
     public static void applyAppIcon(Window window) {
-        if (window == null) {
+        java.util.List<Image> images = getAppIconImages();
+        if (images.isEmpty()) {
             return;
         }
-        java.util.List<Image> images = getAppIconImages();
-        if (!images.isEmpty()) {
-            window.setIconImages(images);
+        for (Window w = window; w != null; w = w.getOwner()) {
+            if (w.getIconImages().size() != images.size()) {
+                w.setIconImages(images);
+            }
         }
     }
 
@@ -408,15 +414,27 @@ public class IconManager {
         for (Window window : Window.getWindows()) {
             applyAppIcon(window);
         }
+
+        // A window is given its icon while it is being built, not when it opens.
+        // Waiting for WINDOW_OPENED means the window is already on screen: the
+        // manager maps it bare, and the ones that read the icon once keep the
+        // bare version for the life of the window. Every JFrame and JDialog adds
+        // its root pane in its constructor, which is this container event, so the
+        // icon is in place before anyone can see the window.
         Toolkit.getDefaultToolkit().addAWTEventListener(event -> {
-            if (event.getID() == java.awt.event.WindowEvent.WINDOW_OPENED
-                    && event.getSource() instanceof Window window
-                    // Only real windows: heavyweight popups and tooltips are Windows
-                    // too, and giving them an icon serves nothing.
-                    && (window instanceof Frame || window instanceof Dialog)) {
-                applyAppIcon(window);
+            // Only real windows: heavyweight popups and tooltips are Windows too,
+            // and giving them an icon serves nothing.
+            if (!(event.getSource() instanceof Window window)
+                    || !(window instanceof Frame || window instanceof Dialog)) {
+                return;
             }
-        }, AWTEvent.WINDOW_EVENT_MASK);
+            switch (event.getID()) {
+                case java.awt.event.ContainerEvent.COMPONENT_ADDED,
+                     java.awt.event.WindowEvent.WINDOW_OPENED,
+                     java.awt.event.WindowEvent.WINDOW_ACTIVATED -> applyAppIcon(window);
+                default -> { }
+            }
+        }, AWTEvent.CONTAINER_EVENT_MASK | AWTEvent.WINDOW_EVENT_MASK);
     }
 
     private static BufferedImage toBufferedImage(Image image) {

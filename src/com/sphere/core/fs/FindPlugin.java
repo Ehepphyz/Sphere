@@ -102,19 +102,17 @@ public class FindPlugin implements CommandRouter.CommandPlugin {
             return;
         }
 
-        PathMatcher matcher = null;
+        java.util.regex.Pattern matcher = null;
         if (namePattern != null) {
-            String glob = nameIgnoreCase ? namePattern.toLowerCase(Locale.ROOT) : namePattern;
             try {
-                matcher = FileSystems.getDefault().getPathMatcher("glob:" + glob);
+                matcher = FsSupport.glob(namePattern, nameIgnoreCase);
             } catch (IllegalArgumentException bad) {
                 AppLogger.error("Invalid name pattern: " + namePattern);
                 return;
             }
         }
 
-        final PathMatcher finalMatcher = matcher;
-        final boolean finalIgnoreCase = nameIgnoreCase;
+        final java.util.regex.Pattern finalMatcher = matcher;
         final String finalKind = kind;
         final long finalMin = minSize, finalMax = maxSize;
         final long newerThan = newerDays < 0 ? -1
@@ -169,9 +167,7 @@ public class FindPlugin implements CommandRouter.CommandPlugin {
                 if (finalMatcher != null) {
                     Path name = path.getFileName();
                     if (name == null) return;
-                    Path probe = finalIgnoreCase
-                            ? Paths.get(name.toString().toLowerCase(Locale.ROOT)) : name;
-                    if (!finalMatcher.matches(probe)) return;
+                    if (!finalMatcher.matcher(name.toString()).matches()) return;
                 }
                 if (a.isRegularFile()) {
                     if (finalMin >= 0 && a.size() < finalMin) return;

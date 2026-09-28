@@ -157,6 +157,7 @@ public final class RootPdfSet {
             throw new IOException("No member files in " + folder
                 + " (expected " + name + "_0000.dat).");
         }
+        LhapdfCitation.used(name, set.info);
         return set;
     }
 

@@ -3,6 +3,8 @@ package com.sphere.components;
 import com.sphere.components.terminal.ShellInfo;
 import com.sphere.components.terminal.ShellSelector;
 import com.sphere.components.terminal.TerminalPanel;
+import com.sphere.components.terminal.TerminalWindow;
+import com.sphere.components.terminal.TerminalZoomWindow;
 import com.sphere.utils.IconManager;
 import com.sphere.theme.ThemeManager;
 import com.sphere.theme.ThemePalette;
@@ -112,10 +114,41 @@ public class TerminalManager {
                 newMenu.add(item);
             }
             menu.add(newMenu);
+
+            // A shell in a window of its own rather than in a tab, for a run
+            // meant to be watched beside Sphere instead of inside it.
+            JMenu windowMenu = createModernMenu("New Terminal in a Window");
+            for (ShellInfo shell : shells) {
+                JMenuItem item = createModernMenuItem(shell.name, ev -> {
+                    TerminalWindow window = new TerminalWindow(shell.command);
+                    window.setVisible(true);
+                });
+                item.setToolTipText(shell.command);
+                windowMenu.add(item);
+            }
+            menu.add(windowMenu);
         }
 
         attachPopupMenuWidthResizer(menu);
         menu.show(e.getComponent(), e.getX(), e.getY());
+    }
+
+    /**
+     * Opens a large window on a terminal that stays where it is.
+     *
+     * Detaching takes the terminal out of the tabs; this leaves it there and
+     * shows the same output in a window that can be resized and whose text can
+     * be made bigger, for watching a run that takes a while.
+     */
+    private void enlargeTerminal(TerminalPanel panel) {
+        TerminalZoomWindow window = new TerminalZoomWindow(panel, titleOf(panel));
+        window.setVisible(true);
+    }
+
+    /** The tab's name, or a plain one when the terminal is no longer in a tab. */
+    private String titleOf(TerminalPanel panel) {
+        int index = tabbedPane.indexOfComponent(panel);
+        return index < 0 ? "Terminal" : tabbedPane.getTitleAt(index);
     }
 
     /* ---------------------------
@@ -159,6 +192,7 @@ public class TerminalManager {
             }
         };
 
+        menu.add(createModernMenuItem("Enlarge in a Window", ev -> enlargeTerminal(panel)));
         menu.add(createModernMenuItem("Detach Terminal", ev -> detachTerminal(panel)));
         menu.add(createModernMenuItem("Close Terminal", ev -> {
             panel.disposeTerminal();

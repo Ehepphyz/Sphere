@@ -127,24 +127,9 @@ public class RemovePlugin implements CommandRouter.CommandPlugin {
             @Override
             protected String doInBackground() {
                 try {
-                    Files.walkFileTree(root, new SimpleFileVisitor<>() {
-                        @Override
-                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
-                                throws IOException {
-                            Files.delete(file);
-                            return FileVisitResult.CONTINUE;
-                        }
-
-                        @Override
-                        public FileVisitResult postVisitDirectory(Path dir, IOException e)
-                                throws IOException {
-                            Files.delete(dir);
-                            return FileVisitResult.CONTINUE;
-                        }
-                    });
-                    return "";
+                    return FsSupport.refusedSummary(FsSupport.deleteTree(root));
                 } catch (IOException e) {
-                    return e.getMessage();
+                    return String.valueOf(e.getMessage());
                 }
             }
 
@@ -155,6 +140,8 @@ public class RemovePlugin implements CommandRouter.CommandPlugin {
                 if (failure == null || failure.isEmpty()) {
                     AppLogger.success("Removed " + root + " -- " + count + " files, "
                                       + FsSupport.humanBytes(bytes) + " freed.");
+                } else if (Files.exists(root)) {
+                    AppLogger.error("Removed part of " + root + ": " + failure);
                 } else {
                     AppLogger.error("Could not remove " + root + ": " + failure);
                 }

@@ -114,15 +114,8 @@ public class QuickCodeEditor extends JPanel {
             Window parentWindow = SwingUtilities.getWindowAncestor(QuickCodeEditor.this);
             if (parentWindow instanceof JFrame frame) {
                 
-                // 1. Fetch the application branding asset using the unified caching engine
-                Icon logoIcon = IconManager.getIcon("cta_logo.png");
-                
-                // 2. Extract the underlying image instance to bypass standard Swing wrapper types
-                if (logoIcon instanceof ImageIcon) {
-                    Image appIconImage = ((ImageIcon) logoIcon).getImage();
-                    frame.setIconImage(appIconImage);
-                }
-                
+                IconManager.applyAppIcon(frame);
+
                 frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
                 frame.addWindowListener(new WindowAdapter() {
                     @Override

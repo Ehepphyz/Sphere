@@ -901,64 +901,64 @@ public final class RootTreeCommands {
         Handlers.cling(c, "[]{ auto s = " + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Stats(\"" + w[1] + "\"); return std::string(\"mean \") + std::to_string(s->GetMean()) + \"  rms \" + std::to_string(s->GetRMS()) + \"  entries \" + std::to_string(s->GetN()); }()");
     }
 
-    /** <tree> <expr> <selection> <option> */
-    public static void rootTreeDrawOpt(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root tree drawopt"));
-        if (w.length < 4) {
-            Handlers.usage(":root tree drawopt <tree> <expr> <selection> <option>");
-            return;
-        }
-        Handlers.cling(c, "(long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->Draw(\"" + w[1] + "\", \"" + w[2] + "\", \"" + Handlers.join(w, 3) + "\")");
+    /** <tree> <expr> <selection> <option> */
+    public static void rootTreeDrawOpt(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root tree drawopt"));
+        if (w.length < 4) {
+            Handlers.usage(":root tree drawopt <tree> <expr> <selection> <option>");
+            return;
+        }
+        Handlers.cling(c, "(long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->Draw(\"" + w[1] + "\", \"" + w[2] + "\", \"" + Handlers.join(w, 3) + "\")");
     }
 
-    /** <tree> <n> */
-    public static void rootTreeEstimate(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root tree estimate"));
-        if (w.length < 2) {
-            Handlers.usage(":root tree estimate <tree> <n>");
-            return;
-        }
-        Handlers.cling(c, "[]{ SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->SetEstimate(" + w[1] + "); return (long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->GetEstimate(); }()");
+    /** <tree> <n> */
+    public static void rootTreeEstimate(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root tree estimate"));
+        if (w.length < 2) {
+            Handlers.usage(":root tree estimate <tree> <n>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->SetEstimate(" + w[1] + "); return (long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->GetEstimate(); }()");
     }
 
-    /** <tree> */
-    public static void rootTreeAliasList(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root tree aliases"));
-        if (w.length < 1) {
-            Handlers.usage(":root tree aliases <tree>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TList *l = SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->GetListOfAliases(); if (l == nullptr) { return std::string(\"no aliases\"); } std::string out; TIter next(l); TObject *o = nullptr; while ((o = next()) != nullptr) { out += o->GetName(); out += \" -> \"; out += o->GetTitle(); out += '\\n'; } return out; }()");
+    /** <tree> */
+    public static void rootTreeAliasList(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root tree aliases"));
+        if (w.length < 1) {
+            Handlers.usage(":root tree aliases <tree>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TList *l = SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->GetListOfAliases(); if (l == nullptr) { return std::string(\"no aliases\"); } std::string out; TIter next(l); TObject *o = nullptr; while ((o = next()) != nullptr) { out += o->GetName(); out += \" -> \"; out += o->GetTitle(); out += '\\n'; } return out; }()");
     }
 
-    /** <tree> */
-    public static void rootTreeRefresh(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root tree refresh"));
-        if (w.length < 1) {
-            Handlers.usage(":root tree refresh <tree>");
-            return;
-        }
-        Handlers.cling(c, "(long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->Refresh()->GetEntries()");
+    /** <tree> */
+    public static void rootTreeRefresh(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root tree refresh"));
+        if (w.length < 1) {
+            Handlers.usage(":root tree refresh <tree>");
+            return;
+        }
+        Handlers.cling(c, "(long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->Refresh()->GetEntries()");
     }
 
-    /** <tree> <entry> <expression> */
-    public static void rootTreeFormula(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root tree formula"));
-        if (w.length < 3) {
-            Handlers.usage(":root tree formula <tree> <entry> <expression>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TTree *t = SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\"); TTreeFormula f(\"sphere_formula\", \"" + Handlers.join(w, 2) + "\", t); t->GetEntry(" + w[1] + "); f.GetNdata(); return f.EvalInstance(0); }()");
+    /** <tree> <entry> <expression> */
+    public static void rootTreeFormula(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root tree formula"));
+        if (w.length < 3) {
+            Handlers.usage(":root tree formula <tree> <entry> <expression>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TTree *t = SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\"); TTreeFormula f(\"sphere_formula\", \"" + Handlers.join(w, 2) + "\", t); t->GetEntry(" + w[1] + "); f.GetNdata(); return f.EvalInstance(0); }()");
     }
 
-    /** <tree> */
-    public static void rootTreeTotalSize(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root tree size"));
-        if (w.length < 1) {
-            Handlers.usage(":root tree size <tree>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TTree *t = SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\"); return std::string(\"zipped \") + std::to_string((long long) t->GetZipBytes()) + \"  unzipped \" + std::to_string((long long) t->GetTotBytes()) + \"  entries \" + std::to_string((long long) t->GetEntries()); }()");
+    /** <tree> */
+    public static void rootTreeTotalSize(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root tree size"));
+        if (w.length < 1) {
+            Handlers.usage(":root tree size <tree>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TTree *t = SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\"); return std::string(\"zipped \") + std::to_string((long long) t->GetZipBytes()) + \"  unzipped \" + std::to_string((long long) t->GetTotBytes()) + \"  entries \" + std::to_string((long long) t->GetEntries()); }()");
     }
 
 }

@@ -70,6 +70,18 @@ public class StatPlugin implements CommandRouter.CommandPlugin {
                 AppLogger.raw("  owner       not available on this platform");
             }
 
+            if (attributes.isRegularFile() && !FsSupport.looksBinary(path)) {
+                AppLogger.raw("  encoding    " + FsSupport.charsetOf(path));
+                try {
+                    FsSupport.LineEndings ends = FsSupport.lineEndings(path);
+                    AppLogger.raw("  line ends   " + ends.name()
+                                  + (ends.mixed() ? "   (mixed)" : "")
+                                  + (ends.finalNewline() ? "" : "   (no newline at end of file)"));
+                } catch (IOException unreadable) {
+                    AppLogger.raw("  line ends   not readable");
+                }
+            }
+
             if (Files.isSymbolicLink(path)) {
                 Path target = Files.readSymbolicLink(path);
                 AppLogger.raw("  link to     " + target);

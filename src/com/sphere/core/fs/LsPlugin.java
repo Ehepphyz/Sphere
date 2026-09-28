@@ -240,13 +240,9 @@ public class LsPlugin implements CommandRouter.CommandPlugin {
         // Stream directory and collect metadata safely (catching per-entry IO errors)
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path p : stream) {
-                try {
-                    if (!showAll && isHidden(p)) continue;
-                } catch (IOException e) {
-                    hadAccessError.set(true);
-                }
-
+                if (!showAll && isHidden(p)) continue;
                 Entry e = readEntryMetadata(p);
+                if (e.unreadable) hadAccessError.set(true);
                 entries.add(e);
             }
         } catch (AccessDeniedException ade) {
@@ -357,6 +353,7 @@ public class LsPlugin implements CommandRouter.CommandPlugin {
             e.group = "N/A";
             e.perms = "---------";
             e.links = "-";
+            e.unreadable = true;
         }
         // Symbolic link target
         if (e.isSymbolic) {
@@ -386,8 +383,10 @@ public class LsPlugin implements CommandRouter.CommandPlugin {
             name = name + "/";
         }
 
-        // Compose formatted line with consistent columns
-        return String.format("%-10s %4s %-16s %-16s %12s %s %s",
+        // The mode column is eleven wide, not ten: where the permissions are
+        // read rather than known they carry a trailing ~, as a real ls carries
+        // a + for an access list, and every column after it would shift.
+        return String.format("%-11s %4s %-16s %-16s %12s %s %s",
                 typeChar + perms,
                 links,
                 owner,
@@ -433,14 +432,8 @@ public class LsPlugin implements CommandRouter.CommandPlugin {
         return parts;
     }
 
-    private boolean isHidden(Path p) throws IOException {
-        try {
-            return Files.isHidden(p);
-        } catch (IOException e) {
-            // Fallback: on Unix, files starting with '.' are hidden
-            String name = p.getFileName() != null ? p.getFileName().toString() : "";
-            return name.startsWith(".");
-        }
+    private boolean isHidden(Path p) {
+        return FsSupport.isHidden(p);
     }
 
     private void printUsage() {
@@ -475,12 +468,7 @@ public class LsPlugin implements CommandRouter.CommandPlugin {
     }
 
     private String expandHome(String path) {
-        if (path == null || path.isEmpty()) return path;
-        if (path.equals("~")) return System.getProperty("user.home");
-        if (path.startsWith("~/") || path.startsWith("~\\")) {
-            return System.getProperty("user.home") + path.substring(1);
-        }
-        return path;
+        return FsSupport.expandHome(path);
     }
 
     // Small metadata holder for sorting and formatting
@@ -496,5 +484,7 @@ public class LsPlugin implements CommandRouter.CommandPlugin {
         String perms;
         String links;
         String linkTarget;
+        /** Its attributes could not be read at all. */
+        boolean unreadable;
     }
 }

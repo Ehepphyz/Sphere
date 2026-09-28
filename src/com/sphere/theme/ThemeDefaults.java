@@ -97,6 +97,9 @@ public final class ThemeDefaults {
         forcePut(d, "ScrollBarUI", "com.sphere.ui.SPScrollBarUI");
         forcePut(d, "TextFieldUI", "com.sphere.ui.SPTextFieldUI");
         forcePut(d, "TreeUI", "com.sphere.ui.SPTreeUI");
+        // Written in the same style as the four above and never named,
+        // so every checked menu item was drawn by the default look and feel.
+        forcePut(d, "CheckBoxMenuItemUI", "com.sphere.ui.SPCheckBoxMenuItemUI");
 
         // Neutralize Nimbus button painters to let SPButtonUI handle state rendering
         String[] buttonStates = {

@@ -419,324 +419,324 @@ public final class RootGraphicsCommands {
         Handlers.cling(c, "(gGeoManager->CloseGeometry(), std::string(\"closed\"))");
     }
 
-    /** <name> <expression> */
-    public static void rootCutNew(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root cut new"));
-        if (w.length < 2) {
-            Handlers.usage(":root cut new <name> <expression>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(\"" + w[0] + "\", \"" + Handlers.join(w, 1) + "\"), \"TCut\")");
+    /** <name> <expression> */
+    public static void rootCutNew(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root cut new"));
+        if (w.length < 2) {
+            Handlers.usage(":root cut new <name> <expression>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(\"" + w[0] + "\", \"" + Handlers.join(w, 1) + "\"), \"TCut\")");
     }
 
-    /** <out> <a> <b> */
-    public static void rootCutAnd(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root cut and"));
-        if (w.length < 3) {
-            Handlers.usage(":root cut and <out> <a> <b>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(*SphereBridge::Held<TCut>(\"" + w[1] + "\") && *SphereBridge::Held<TCut>(\"" + w[2] + "\")), \"TCut\")");
+    /** <out> <a> <b> */
+    public static void rootCutAnd(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root cut and"));
+        if (w.length < 3) {
+            Handlers.usage(":root cut and <out> <a> <b>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(*SphereBridge::Held<TCut>(\"" + w[1] + "\") && *SphereBridge::Held<TCut>(\"" + w[2] + "\")), \"TCut\")");
     }
 
-    /** <out> <a> <b> */
-    public static void rootCutOr(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root cut or"));
-        if (w.length < 3) {
-            Handlers.usage(":root cut or <out> <a> <b>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(*SphereBridge::Held<TCut>(\"" + w[1] + "\") || *SphereBridge::Held<TCut>(\"" + w[2] + "\")), \"TCut\")");
+    /** <out> <a> <b> */
+    public static void rootCutOr(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root cut or"));
+        if (w.length < 3) {
+            Handlers.usage(":root cut or <out> <a> <b>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(*SphereBridge::Held<TCut>(\"" + w[1] + "\") || *SphereBridge::Held<TCut>(\"" + w[2] + "\")), \"TCut\")");
     }
 
-    /** <out> <a> */
-    public static void rootCutNot(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root cut not"));
-        if (w.length < 2) {
-            Handlers.usage(":root cut not <out> <a>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(!(*SphereBridge::Held<TCut>(\"" + w[1] + "\"))), \"TCut\")");
+    /** <out> <a> */
+    public static void rootCutNot(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root cut not"));
+        if (w.length < 2) {
+            Handlers.usage(":root cut not <out> <a>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TCut>(\"" + w[0] + "\", new TCut(!(*SphereBridge::Held<TCut>(\"" + w[1] + "\"))), \"TCut\")");
     }
 
-    /** <name> */
-    public static void rootCutShow(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root cut show"));
-        if (w.length < 1) {
-            Handlers.usage(":root cut show <name>");
-            return;
-        }
-        Handlers.cling(c, "std::string(SphereBridge::Held<TCut>(\"" + w[0] + "\")->GetTitle())");
+    /** <name> */
+    public static void rootCutShow(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root cut show"));
+        if (w.length < 1) {
+            Handlers.usage(":root cut show <name>");
+            return;
+        }
+        Handlers.cling(c, "std::string(SphereBridge::Held<TCut>(\"" + w[0] + "\")->GetTitle())");
     }
 
-    /** <tree> <cut> <expr> */
-    public static void rootCutApply(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root cut apply"));
-        if (w.length < 3) {
-            Handlers.usage(":root cut apply <tree> <cut> <expr>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->Draw(\"" + Handlers.join(w, 2) + "\", SphereBridge::Held<TCut>(\"" + w[1] + "\")->GetTitle())");
+    /** <tree> <cut> <expr> */
+    public static void rootCutApply(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root cut apply"));
+        if (w.length < 3) {
+            Handlers.usage(":root cut apply <tree> <cut> <expr>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->Draw(\"" + Handlers.join(w, 2) + "\", SphereBridge::Held<TCut>(\"" + w[1] + "\")->GetTitle())");
     }
 
-    /** <tree> <cut> */
-    public static void rootCutCount(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root cut count"));
-        if (w.length < 2) {
-            Handlers.usage(":root cut count <tree> <cut>");
-            return;
-        }
-        Handlers.cling(c, "(long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->GetEntries(SphereBridge::Held<TCut>(\"" + w[1] + "\")->GetTitle())");
+    /** <tree> <cut> */
+    public static void rootCutCount(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root cut count"));
+        if (w.length < 2) {
+            Handlers.usage(":root cut count <tree> <cut>");
+            return;
+        }
+        Handlers.cling(c, "(long) SphereBridge::Need<TTree>(\"" + w[0] + "\", \"TTree\")->GetEntries(SphereBridge::Held<TCut>(\"" + w[1] + "\")->GetTitle())");
     }
 
-    /** <name> <points> */
-    public static void rootGraph2dNew(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d new"));
-        if (w.length < 2) {
-            Handlers.usage(":root graph2d new <name> <points>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Keep<TGraph2D>(\"" + w[0] + "\", new TGraph2D(" + w[1] + "), \"TGraph2D\")");
+    /** <name> <points> */
+    public static void rootGraph2dNew(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d new"));
+        if (w.length < 2) {
+            Handlers.usage(":root graph2d new <name> <points>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TGraph2D>(\"" + w[0] + "\", new TGraph2D(" + w[1] + "), \"TGraph2D\")");
     }
 
-    /** <name> <i> <x> <y> <z> */
-    public static void rootGraph2dSet(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d set"));
-        if (w.length < 5) {
-            Handlers.usage(":root graph2d set <name> <i> <x> <y> <z>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->SetPoint(" + w[1] + ", " + w[2] + ", " + w[3] + ", " + w[4] + ")");
+    /** <name> <i> <x> <y> <z> */
+    public static void rootGraph2dSet(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d set"));
+        if (w.length < 5) {
+            Handlers.usage(":root graph2d set <name> <i> <x> <y> <z>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->SetPoint(" + w[1] + ", " + w[2] + ", " + w[3] + ", " + w[4] + ")");
     }
 
-    /** <name> [surf1|tri|colz|p0] */
-    public static void rootGraph2dDraw(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d draw"));
-        if (w.length < 1) {
-            Handlers.usage(":root graph2d draw <name> [surf1|tri|colz|p0]");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->Draw(\"" + (w.length > 1 ? Handlers.join(w, 1) : "surf1") + "\")");
+    /** <name> [surf1|tri|colz|p0] */
+    public static void rootGraph2dDraw(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d draw"));
+        if (w.length < 1) {
+            Handlers.usage(":root graph2d draw <name> [surf1|tri|colz|p0]");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->Draw(\"" + (w.length > 1 ? Handlers.join(w, 1) : "surf1") + "\")");
     }
 
-    /** <name> <x> <y> */
-    public static void rootGraph2dInterp(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d interpolate"));
-        if (w.length < 3) {
-            Handlers.usage(":root graph2d interpolate <name> <x> <y>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->Interpolate(" + w[1] + ", " + w[2] + ")");
+    /** <name> <x> <y> */
+    public static void rootGraph2dInterp(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d interpolate"));
+        if (w.length < 3) {
+            Handlers.usage(":root graph2d interpolate <name> <x> <y>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->Interpolate(" + w[1] + ", " + w[2] + ")");
     }
 
-    /** <name> */
-    public static void rootGraph2dPoints(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d points"));
-        if (w.length < 1) {
-            Handlers.usage(":root graph2d points <name>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->GetN()");
+    /** <name> */
+    public static void rootGraph2dPoints(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d points"));
+        if (w.length < 1) {
+            Handlers.usage(":root graph2d points <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->GetN()");
     }
 
-    /** <name> */
-    public static void rootGraph2dHist(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d hist"));
-        if (w.length < 1) {
-            Handlers.usage(":root graph2d hist <name>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->GetHistogram()->GetName()");
+    /** <name> */
+    public static void rootGraph2dHist(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root graph2d hist"));
+        if (w.length < 1) {
+            Handlers.usage(":root graph2d hist <name>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Held<TGraph2D>(\"" + w[0] + "\")->GetHistogram()->GetName()");
     }
 
-    /** <hist> <x|y> [format] */
-    public static void rootAxisTime(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root axis time"));
-        if (w.length < 2) {
-            Handlers.usage(":root axis time <hist> <x|y> [format]");
-            return;
-        }
-        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetTimeDisplay(1); a->SetTimeFormat(\"" + (w.length > 2 ? Handlers.join(w, 2) : "%d/%m/%y") + "\"); return std::string(a->GetTimeFormat()); }()");
+    /** <hist> <x|y> [format] */
+    public static void rootAxisTime(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root axis time"));
+        if (w.length < 2) {
+            Handlers.usage(":root axis time <hist> <x|y> [format]");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetTimeDisplay(1); a->SetTimeFormat(\"" + (w.length > 2 ? Handlers.join(w, 2) : "%d/%m/%y") + "\"); return std::string(a->GetTimeFormat()); }()");
     }
 
-    /** <hist> <bin> <text> */
-    public static void rootAxisLabel(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root axis label"));
-        if (w.length < 3) {
-            Handlers.usage(":root axis label <hist> <bin> <text>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); h->GetXaxis()->SetBinLabel(" + w[1] + ", \"" + Handlers.join(w, 2) + "\"); return std::string(h->GetXaxis()->GetBinLabel(" + w[1] + ")); }()");
+    /** <hist> <bin> <text> */
+    public static void rootAxisLabel(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root axis label"));
+        if (w.length < 3) {
+            Handlers.usage(":root axis label <hist> <bin> <text>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); h->GetXaxis()->SetBinLabel(" + w[1] + ", \"" + Handlers.join(w, 2) + "\"); return std::string(h->GetXaxis()->GetBinLabel(" + w[1] + ")); }()");
     }
 
-    /** <hist> */
-    public static void rootAxisDeflate(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root axis deflate"));
-        if (w.length < 1) {
-            Handlers.usage(":root axis deflate <hist>");
-            return;
-        }
-        Handlers.cling(c, "[]{ SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->LabelsDeflate(\"X\"); return std::string(\"deflated\"); }()");
+    /** <hist> */
+    public static void rootAxisDeflate(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root axis deflate"));
+        if (w.length < 1) {
+            Handlers.usage(":root axis deflate <hist>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\")->LabelsDeflate(\"X\"); return std::string(\"deflated\"); }()");
     }
 
-    /** <hist> <x|y> <n> */
-    public static void rootAxisDivisions(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root axis divisions"));
-        if (w.length < 3) {
-            Handlers.usage(":root axis divisions <hist> <x|y> <n>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetNdivisions(" + w[2] + "); return a->GetNdivisions(); }()");
+    /** <hist> <x|y> <n> */
+    public static void rootAxisDivisions(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root axis divisions"));
+        if (w.length < 3) {
+            Handlers.usage(":root axis divisions <hist> <x|y> <n>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetNdivisions(" + w[2] + "); return a->GetNdivisions(); }()");
     }
 
-    /** <hist> <x|y> */
-    public static void rootAxisMoreLog(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root axis moreloglabels"));
-        if (w.length < 2) {
-            Handlers.usage(":root axis moreloglabels <hist> <x|y>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetMoreLogLabels(); a->SetNoExponent(); return std::string(\"more labels on the log axis\"); }()");
+    /** <hist> <x|y> */
+    public static void rootAxisMoreLog(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root axis moreloglabels"));
+        if (w.length < 2) {
+            Handlers.usage(":root axis moreloglabels <hist> <x|y>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetMoreLogLabels(); a->SetNoExponent(); return std::string(\"more labels on the log axis\"); }()");
     }
 
-    /** <hist> <x|y> <value> */
-    public static void rootAxisTitleOffset(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root axis titleoffset"));
-        if (w.length < 3) {
-            Handlers.usage(":root axis titleoffset <hist> <x|y> <value>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetTitleOffset(" + w[2] + "); return a->GetTitleOffset(); }()");
+    /** <hist> <x|y> <value> */
+    public static void rootAxisTitleOffset(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root axis titleoffset"));
+        if (w.length < 3) {
+            Handlers.usage(":root axis titleoffset <hist> <x|y> <value>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TH1 *h = SphereBridge::Need<TH1>(\"" + w[0] + "\", \"TH1\"); TAxis *a = std::string(\"" + w[1] + "\") == \"y\" ? h->GetYaxis() : h->GetXaxis(); a->SetTitleOffset(" + w[2] + "); return a->GetTitleOffset(); }()");
     }
 
-    /** <x1> <y1> <x2> <y2> <wmin> <wmax> <ndiv> [options] */
-    public static void rootAxisNew(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root axis new"));
-        if (w.length < 7) {
-            Handlers.usage(":root axis new <x1> <y1> <x2> <y2> <wmin> <wmax> <ndiv> [options]");
-            return;
-        }
-        Handlers.cling(c, "[]{ TGaxis *a = new TGaxis(" + w[0] + ", " + w[1] + ", " + w[2] + ", " + w[3] + ", " + w[4] + ", " + w[5] + ", " + w[6] + ", \"" + (w.length > 7 ? Handlers.join(w, 7) : "") + "\"); a->Draw(); return std::string(\"axis drawn\"); }()");
+    /** <x1> <y1> <x2> <y2> <wmin> <wmax> <ndiv> [options] */
+    public static void rootAxisNew(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root axis new"));
+        if (w.length < 7) {
+            Handlers.usage(":root axis new <x1> <y1> <x2> <y2> <wmin> <wmax> <ndiv> [options]");
+            return;
+        }
+        Handlers.cling(c, "[]{ TGaxis *a = new TGaxis(" + w[0] + ", " + w[1] + ", " + w[2] + ", " + w[3] + ", " + w[4] + ", " + w[5] + ", " + w[6] + ", \"" + (w.length > 7 ? Handlers.join(w, 7) : "") + "\"); a->Draw(); return std::string(\"axis drawn\"); }()");
     }
 
-    /** <index> <r> <g> <b> */
-    public static void rootColorNew(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root color new"));
-        if (w.length < 4) {
-            Handlers.usage(":root color new <index> <r> <g> <b>");
-            return;
-        }
-        Handlers.cling(c, "[]{ new TColor(" + w[0] + ", " + w[1] + ", " + w[2] + ", " + w[3] + "); return std::string(\"color " + w[0] + " defined\"); }()");
+    /** <index> <r> <g> <b> */
+    public static void rootColorNew(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root color new"));
+        if (w.length < 4) {
+            Handlers.usage(":root color new <index> <r> <g> <b>");
+            return;
+        }
+        Handlers.cling(c, "[]{ new TColor(" + w[0] + ", " + w[1] + ", " + w[2] + ", " + w[3] + "); return std::string(\"color " + w[0] + " defined\"); }()");
     }
 
-    /** <r> <g> <b> */
-    public static void rootColorFind(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root color find"));
-        if (w.length < 3) {
-            Handlers.usage(":root color find <r> <g> <b>");
-            return;
-        }
-        Handlers.cling(c, "TColor::GetColor((Float_t) " + w[0] + ", (Float_t) " + w[1] + ", (Float_t) " + w[2] + ")");
+    /** <r> <g> <b> */
+    public static void rootColorFind(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root color find"));
+        if (w.length < 3) {
+            Handlers.usage(":root color find <r> <g> <b>");
+            return;
+        }
+        Handlers.cling(c, "TColor::GetColor((Float_t) " + w[0] + ", (Float_t) " + w[1] + ", (Float_t) " + w[2] + ")");
     }
 
-    /** <index> */
-    public static void rootColorShow(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root color show"));
-        if (w.length < 1) {
-            Handlers.usage(":root color show <index>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TColor *c = gROOT->GetColor(" + w[0] + "); if (c == nullptr) { return std::string(\"no color " + w[0] + "\"); } return std::string(c->GetName()) + \"  r \" + std::to_string(c->GetRed()) + \"  g \" + std::to_string(c->GetGreen()) + \"  b \" + std::to_string(c->GetBlue()); }()");
+    /** <index> */
+    public static void rootColorShow(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root color show"));
+        if (w.length < 1) {
+            Handlers.usage(":root color show <index>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TColor *c = gROOT->GetColor(" + w[0] + "); if (c == nullptr) { return std::string(\"no color " + w[0] + "\"); } return std::string(c->GetName()) + \"  r \" + std::to_string(c->GetRed()) + \"  g \" + std::to_string(c->GetGreen()) + \"  b \" + std::to_string(c->GetBlue()); }()");
     }
 
-    /** <index> <alpha> */
-    public static void rootColorTransparent(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root color transparent"));
-        if (w.length < 2) {
-            Handlers.usage(":root color transparent <index> <alpha>");
-            return;
-        }
-        Handlers.cling(c, "TColor::GetColorTransparent(" + w[0] + ", " + w[1] + ")");
+    /** <index> <alpha> */
+    public static void rootColorTransparent(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root color transparent"));
+        if (w.length < 2) {
+            Handlers.usage(":root color transparent <index> <alpha>");
+            return;
+        }
+        Handlers.cling(c, "TColor::GetColorTransparent(" + w[0] + ", " + w[1] + ")");
     }
 
-    /** <index> */
-    public static void rootColorBright(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root color bright"));
-        if (w.length < 1) {
-            Handlers.usage(":root color bright <index>");
-            return;
-        }
-        Handlers.cling(c, "TColor::GetColorBright(" + w[0] + ")");
+    /** <index> */
+    public static void rootColorBright(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root color bright"));
+        if (w.length < 1) {
+            Handlers.usage(":root color bright <index>");
+            return;
+        }
+        Handlers.cling(c, "TColor::GetColorBright(" + w[0] + ")");
     }
 
-    /** <index> */
-    public static void rootColorDark(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root color dark"));
-        if (w.length < 1) {
-            Handlers.usage(":root color dark <index>");
-            return;
-        }
-        Handlers.cling(c, "TColor::GetColorDark(" + w[0] + ")");
+    /** <index> */
+    public static void rootColorDark(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root color dark"));
+        if (w.length < 1) {
+            Handlers.usage(":root color dark <index>");
+            return;
+        }
+        Handlers.cling(c, "TColor::GetColorDark(" + w[0] + ")");
     }
 
-    /** <h> <l> <s> */
-    public static void rootColorHls(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root color hls"));
-        if (w.length < 3) {
-            Handlers.usage(":root color hls <h> <l> <s>");
-            return;
-        }
-        Handlers.cling(c, "[]{ Float_t r = 0, g = 0, b = 0; TColor::HLS2RGB((Float_t) " + w[0] + ", (Float_t) " + w[1] + ", (Float_t) " + w[2] + ", r, g, b); return TColor::GetColor(r, g, b); }()");
+    /** <h> <l> <s> */
+    public static void rootColorHls(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root color hls"));
+        if (w.length < 3) {
+            Handlers.usage(":root color hls <h> <l> <s>");
+            return;
+        }
+        Handlers.cling(c, "[]{ Float_t r = 0, g = 0, b = 0; TColor::HLS2RGB((Float_t) " + w[0] + ", (Float_t) " + w[1] + ", (Float_t) " + w[2] + ", r, g, b); return TColor::GetColor(r, g, b); }()");
     }
 
-    /** <name> <top> <bottom> */
-    public static void rootRatioNew(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root ratio new"));
-        if (w.length < 3) {
-            Handlers.usage(":root ratio new <name> <top> <bottom>");
-            return;
-        }
-        Handlers.cling(c, "SphereBridge::Keep<TRatioPlot>(\"" + w[0] + "\", new TRatioPlot(SphereBridge::Need<TH1>(\"" + w[1] + "\", \"TH1\"), SphereBridge::Need<TH1>(\"" + w[2] + "\", \"TH1\")), \"TRatioPlot\")");
+    /** <name> <top> <bottom> */
+    public static void rootRatioNew(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root ratio new"));
+        if (w.length < 3) {
+            Handlers.usage(":root ratio new <name> <top> <bottom>");
+            return;
+        }
+        Handlers.cling(c, "SphereBridge::Keep<TRatioPlot>(\"" + w[0] + "\", new TRatioPlot(SphereBridge::Need<TH1>(\"" + w[1] + "\", \"TH1\"), SphereBridge::Need<TH1>(\"" + w[2] + "\", \"TH1\")), \"TRatioPlot\")");
     }
 
-    /** <name> [divsym|errprop|confint] */
-    public static void rootRatioDraw(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root ratio draw"));
-        if (w.length < 1) {
-            Handlers.usage(":root ratio draw <name> [divsym|errprop|confint]");
-            return;
-        }
-        Handlers.cling(c, "[]{ SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\")->Draw(\"" + (w.length > 1 ? Handlers.join(w, 1) : "") + "\"); if (gPad != nullptr) { gPad->Update(); } return std::string(\"drawn\"); }()");
+    /** <name> [divsym|errprop|confint] */
+    public static void rootRatioDraw(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root ratio draw"));
+        if (w.length < 1) {
+            Handlers.usage(":root ratio draw <name> [divsym|errprop|confint]");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\")->Draw(\"" + (w.length > 1 ? Handlers.join(w, 1) : "") + "\"); if (gPad != nullptr) { gPad->Update(); } return std::string(\"drawn\"); }()");
     }
 
-    /** <name> <low> <high> */
-    public static void rootRatioRange(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root ratio range"));
-        if (w.length < 3) {
-            Handlers.usage(":root ratio range <name> <low> <high>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TRatioPlot *r = SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\"); r->GetLowerRefGraph()->SetMinimum(" + w[1] + "); r->GetLowerRefGraph()->SetMaximum(" + w[2] + "); return std::string(\"lower panel set\"); }()");
+    /** <name> <low> <high> */
+    public static void rootRatioRange(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root ratio range"));
+        if (w.length < 3) {
+            Handlers.usage(":root ratio range <name> <low> <high>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TRatioPlot *r = SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\"); r->GetLowerRefGraph()->SetMinimum(" + w[1] + "); r->GetLowerRefGraph()->SetMaximum(" + w[2] + "); return std::string(\"lower panel set\"); }()");
     }
 
-    /** <name> <values...> */
-    public static void rootRatioGrid(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root ratio grid"));
-        if (w.length < 2) {
-            Handlers.usage(":root ratio grid <name> <values...>");
-            return;
-        }
-        Handlers.cling(c, "[]{ std::vector<double> at = { " + Handlers.csv(Handlers.join(w, 1)) + " }; SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\")->SetGridlines(at); return std::string(\"gridlines set\"); }()");
+    /** <name> <values...> */
+    public static void rootRatioGrid(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root ratio grid"));
+        if (w.length < 2) {
+            Handlers.usage(":root ratio grid <name> <values...>");
+            return;
+        }
+        Handlers.cling(c, "[]{ std::vector<double> at = { " + Handlers.csv(Handlers.join(w, 1)) + " }; SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\")->SetGridlines(at); return std::string(\"gridlines set\"); }()");
     }
 
-    /** <name> <fraction> */
-    public static void rootRatioMargin(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root ratio margin"));
-        if (w.length < 2) {
-            Handlers.usage(":root ratio margin <name> <fraction>");
-            return;
-        }
-        Handlers.cling(c, "[]{ SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\")->SetSeparationMargin(" + w[1] + "); return std::string(\"margin set\"); }()");
+    /** <name> <fraction> */
+    public static void rootRatioMargin(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root ratio margin"));
+        if (w.length < 2) {
+            Handlers.usage(":root ratio margin <name> <fraction>");
+            return;
+        }
+        Handlers.cling(c, "[]{ SphereBridge::Held<TRatioPlot>(\"" + w[0] + "\")->SetSeparationMargin(" + w[1] + "); return std::string(\"margin set\"); }()");
     }
 
 }

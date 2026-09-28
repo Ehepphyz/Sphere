@@ -150,14 +150,9 @@ public class MdTexEditor extends JPanel {
         updateMetadataMetrics();
         UndoRedoUtility.setupUndoRedo(this.editor);
 
-        Icon appIcon = IconManager.getIcon("cta_logo.png");
-
         addHierarchyListener(e -> {
             if (e.getID() == HierarchyEvent.HIERARCHY_CHANGED) {
-                Window w = SwingUtilities.getWindowAncestor(this);
-                if (w instanceof Frame f && appIcon instanceof ImageIcon img) {
-                    f.setIconImage(img.getImage());
-                }
+                IconManager.applyAppIcon(SwingUtilities.getWindowAncestor(this));
             }
         });
     }

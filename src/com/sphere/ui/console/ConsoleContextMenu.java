@@ -3,8 +3,11 @@ package com.sphere.ui.console;
 import com.sphere.core.cpp.CppDiagnosticsEngine;
 import com.sphere.core.cpp.CppDiagnosticsParser.Diagnostic;
 import com.sphere.core.cpp.CppIntellisenseBackend;
+import com.sphere.core.fastjet.Citations;
+import com.sphere.core.rootbackend.LhapdfCitation;
 import com.sphere.core.rootbackend.RootBackend;
 import com.sphere.core.rootbackend.RootBridgeCompiler;
+import com.sphere.core.rootbackend.RootCitation;
 import com.sphere.ui.ConsoleUI.LogLevel;
 import com.sphere.utils.SettingsManager;
 
@@ -23,8 +26,8 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * The console context menu. Frequent actions stay one click away; the ROOT, LSP
- * and settings families sit in their own submenus.
+ * The console context menu. Frequent actions stay one click away; the ROOT, LSP,
+ * citations and settings families sit in their own submenus.
  *
  * Every entry's state is recomputed when the menu opens rather than fixed at
  * construction: a menu built once could only ever describe the application as it
@@ -78,6 +81,13 @@ public final class ConsoleContextMenu {
     private final JMenuItem rootRebuild   = ConsoleMenuFactory.item("Rebuild ROOT Bridge");
     private final JMenuItem rootEnv       = ConsoleMenuFactory.item("Print ROOT Environment");
 
+    // The references ROOT, FastJet and LHAPDF ask for, shown on demand rather
+    // than printed as banners into the output.
+    private final JMenu citationsMenu     = ConsoleMenuFactory.submenu("Citations");
+    private final JMenuItem citeRoot      = ConsoleMenuFactory.item("Citation ROOT");
+    private final JMenuItem citeFastJet   = ConsoleMenuFactory.item("Citation FastJet");
+    private final JMenuItem citeLhapdf    = ConsoleMenuFactory.item("Citation LHAPDF");
+
     public ConsoleContextMenu(Host host,
                               SettingsManager settings,
                               CppDiagnosticsEngine diagnostics,
@@ -89,6 +99,7 @@ public final class ConsoleContextMenu {
 
         buildLspMenu();
         buildRootMenu();
+        buildCitationsMenu();
         assemble();
         wire();
     }
@@ -134,6 +145,12 @@ public final class ConsoleContextMenu {
         rootMenu.add(rootEnv);
     }
 
+    private void buildCitationsMenu() {
+        citationsMenu.add(citeRoot);
+        citationsMenu.add(citeFastJet);
+        citationsMenu.add(citeLhapdf);
+    }
+
     private void assemble() {
         JMenuItem copy = ConsoleMenuFactory.item("Copy Selection");
         JMenuItem copyLog = ConsoleMenuFactory.item("Copy Full Log");
@@ -173,6 +190,7 @@ public final class ConsoleContextMenu {
         popup.add(ConsoleMenuFactory.separator());
         popup.add(lspMenu);
         popup.add(rootMenu);
+        popup.add(citationsMenu);
         popup.add(settingsMenu);
 
         popup.addPopupMenuListener(new PopupMenuListener() {
@@ -182,6 +200,7 @@ public final class ConsoleContextMenu {
                 ConsoleMenuFactory.fitWidth(popup);
                 ConsoleMenuFactory.fitWidth(lspMenu.getPopupMenu());
                 ConsoleMenuFactory.fitWidth(rootMenu.getPopupMenu());
+                ConsoleMenuFactory.fitWidth(citationsMenu.getPopupMenu());
                 ConsoleMenuFactory.fitWidth(settingsMenu.getPopupMenu());
             }
 
@@ -230,6 +249,30 @@ public final class ConsoleContextMenu {
                     host.log(LogLevel.ERROR, "ROOT backend did not start: " + ex.getMessage());
                 }
                 return null;
+            }
+        }.execute());
+
+        citeFastJet.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation FastJet", Citations.fastjetText()));
+        citeLhapdf.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation LHAPDF", LhapdfCitation.text()));
+        // The release comes from root-config, which is a process: not on the EDT.
+        citeRoot.addActionListener(e -> new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                return availability.rootConfigured().usable()
+                    ? RootBridgeCompiler.getRootConfigOutput("--version", settings) : null;
+            }
+
+            @Override
+            protected void done() {
+                String release = null;
+                try {
+                    release = get();
+                } catch (Exception ignored) {
+                    // the citation stands without the release
+                }
+                CitationDialog.show(popup.getInvoker(), "Citation ROOT", RootCitation.text(release));
             }
         }.execute());
 
@@ -329,6 +372,7 @@ public final class ConsoleContextMenu {
         setState(rootRebuild, root.usable(), root.reason());
         setState(rootEnv, root.usable(), root.reason());
         setState(rootMenu, true, null);
+        setState(citationsMenu, true, null);
     }
 
     private static void setState(JMenuItem item, boolean enabled, String reasonWhenDisabled) {

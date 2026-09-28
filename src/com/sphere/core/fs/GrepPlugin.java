@@ -107,10 +107,12 @@ public class GrepPlugin implements CommandRouter.CommandPlugin {
             return;
         }
 
-        PathMatcher matcher = null;
+        java.util.regex.Pattern matcher = null;
         if (include != null && !include.isBlank()) {
             try {
-                matcher = FileSystems.getDefault().getPathMatcher("glob:" + include);
+                // -i is the pattern's flag, not the file name's, which is how
+                // grep reads it; --include stays case-sensitive everywhere.
+                matcher = FsSupport.glob(include, false);
             } catch (IllegalArgumentException bad) {
                 AppLogger.error("Invalid --include pattern: " + include);
                 return;
@@ -118,7 +120,7 @@ public class GrepPlugin implements CommandRouter.CommandPlugin {
         }
 
         final Pattern finalPattern = pattern;
-        final PathMatcher finalMatcher = matcher;
+        final java.util.regex.Pattern finalMatcher = matcher;
         final Path finalRoot = root;
         final boolean finalNumbers = showNumbers;
         final boolean finalNames = namesOnly;
@@ -139,7 +141,8 @@ public class GrepPlugin implements CommandRouter.CommandPlugin {
                             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                                 if (hits >= finalMax) return FileVisitResult.TERMINATE;
                                 if (finalMatcher != null
-                                        && !finalMatcher.matches(file.getFileName())) {
+                                        && !finalMatcher.matcher(
+                                               String.valueOf(file.getFileName())).matches()) {
                                     return FileVisitResult.CONTINUE;
                                 }
                                 search(file);

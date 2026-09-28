@@ -114,8 +114,7 @@ public class TreePlugin implements CommandRouter.CommandPlugin {
                 List<Path> entries = new ArrayList<>();
                 try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
                     for (Path p : stream) {
-                        String name = p.getFileName().toString();
-                        if (!finalHidden && (name.startsWith(".") || isHidden(p))) continue;
+                        if (!finalHidden && isHidden(p)) continue;
                         if (finalDirsOnly && !Files.isDirectory(p)) continue;
                         entries.add(p);
                     }
@@ -162,7 +161,7 @@ public class TreePlugin implements CommandRouter.CommandPlugin {
             }
 
             private boolean isHidden(Path p) {
-                try { return Files.isHidden(p); } catch (IOException e) { return false; }
+                return FsSupport.isHidden(p);
             }
 
             @Override

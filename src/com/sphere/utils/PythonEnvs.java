@@ -106,6 +106,19 @@ public class PythonEnvs {
             }
         }
 
+        // --- Tier 3a: Active venv (VIRTUAL_ENV), which Tier 1 only saw when the
+        // folder happened to be named "venv" beside the launcher ---
+        if (pythonBinary == null) {
+            String virtualEnv = System.getenv("VIRTUAL_ENV");
+            if (virtualEnv != null && !virtualEnv.isBlank()) {
+                File venvActive = isWin ? new File(virtualEnv, "Scripts/python.exe")
+                                        : new File(virtualEnv, "bin/python");
+                if (venvActive.exists() && venvActive.canExecute()) {
+                    pythonBinary = venvActive.getAbsolutePath();
+                }
+            }
+        }
+
         // --- Tier 3: Active Shell Conda Context (Inherited environment variable) ---
         if (pythonBinary == null) {
             String condaPrefix = System.getenv("CONDA_PREFIX");

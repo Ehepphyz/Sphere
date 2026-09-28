@@ -34,6 +34,9 @@ public class CppBackend implements Backend {
     // Step 1: Integrated Metrics Hub
     private final CppBackendMetrics metrics = new CppBackendMetrics();
     private final CppIntellisenseBackend intellisenseBackend;
+    /** One builder per project root, so its cache lives as long as the session. */
+    private final java.util.Map<java.nio.file.Path, CppIncrementalBuilder> builders =
+        new java.util.concurrent.ConcurrentHashMap<>();
     
     private CppToolchain activeToolchain;
     private Process currentProcess;
@@ -851,6 +854,65 @@ public class CppBackend implements Backend {
     }
 
     /**
+     * The incremental builder for one project root, made once and kept.
+     *
+     * Kept because its cache is what makes the second build fast: a builder
+     * made fresh on every command would read its index from disk each time,
+     * which works, but the point of the cache is to already know.
+     */
+    public CppIncrementalBuilder builderFor(java.nio.file.Path root) {
+        java.nio.file.Path key = root.toAbsolutePath().normalize();
+        return builders.computeIfAbsent(key, here -> new CppIncrementalBuilder(this, here));
+    }
+
+    /** Forgets a root, so the next build reads its index from disk again. */
+    public void forgetBuilder(java.nio.file.Path root) {
+        builders.remove(root.toAbsolutePath().normalize());
+    }
+
+    /** The toolchain the next compilation will use. */
+    public CppToolchain getActiveToolchain() {
+        return this.activeToolchain;
+    }
+
+    /**
+     * Runs one command through the same path a compilation takes.
+     *
+     * The incremental builder assembles its own command lines and needs them
+     * run the way every other step is: wrapped for WSL where the toolchain is
+     * a WSL one, with the MSVC environment where it is MSVC, counted in the
+     * metrics, and cancellable with the rest. The exit code is what comes back:
+     * the process runner is private, so its result type cannot be named from
+     * outside, and the output already reaches the caller through the listener.
+     */
+    public int runToolCommand(java.util.List<String> command,
+                              boolean logCommand,
+                              CppOutputListener listener,
+                              boolean isCompileStep) {
+        if (command == null || command.isEmpty()) {
+            return -1;
+        }
+        return processRunner.run(command, logCommand, listener, activeToolchain, isCompileStep)
+                            .getExitCode();
+    }
+
+    /**
+     * Splits a command line the way a shell does, quotes respected.
+     *
+     * The parser is private, and CppProjectManager was splitting on whitespace
+     * alone, which turned -G "Unix Makefiles" into three arguments and made
+     * CMake refuse the generator.
+     */
+    public static java.util.List<String> tokenizeArguments(String line) {
+        return line == null ? new java.util.ArrayList<>() : CppCommandParser.tokenize(line);
+    }
+
+    /** A path as the active toolchain must be given it, which WSL spells its own way. */
+    public String toolchainPath(String path) {
+        return normalizePathForToolchain(path, activeToolchain != null && activeToolchain.isWsl());
+    }
+
+    /**
      * Retrieves the persistent Intellisense LSP backend instance managed by this core service layer.
      * Prevents duplicate process allocations across disparate UI views
      */
@@ -882,4 +944,4 @@ public class CppBackend implements Backend {
         void onStderrLine(String line);
         void onProcessComplete(int exitCode, boolean timedOut);
     }
-}
+}

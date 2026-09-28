@@ -93,6 +93,164 @@ public class CommandRouter {
         "SPHERE_VARS"
     );
 
+    /**
+     * What a virtual environment and a physics toolchain need to still exist.
+     *
+     * Sphere started from an activated conda or venv shell saw 180 variables
+     * and handed 3 of them on, so a ROOT built inside that environment came
+     * back with "error while loading shared libraries": LD_LIBRARY_PATH had
+     * been removed on the way out. These are the ones without which an
+     * environment is not one.
+     */
+    private static final Set<String> PRESERVED_ENV_KEYS_TOOLCHAIN = Set.of(
+        // The environment itself
+        "VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT",
+        // Where the loader looks, which is the whole question on Unix
+        "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
+        "LIBRARY_PATH", "SHLIB_PATH", "LIBPATH",
+        // Python, which PyROOT is reached through
+        "PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE", "PYTHONSTARTUP",
+        // Where a compiler and a build system look
+        "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH",
+        "PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH",
+        "CC", "CXX", "FC", "CFLAGS", "CXXFLAGS", "LDFLAGS", "CPPFLAGS",
+        // The temporary folder a build writes into
+        "TMPDIR", "TEMP", "TMP"
+    );
+
+    /**
+     * Families kept whole, because naming their members one by one is a losing
+     * game: conda alone sets a dozen CONDA_ variables, and every physics
+     * package on the machine names its data directory after itself.
+     */
+    private static final List<String> PRESERVED_ENV_PREFIXES = List.of(
+        "CONDA_", "MAMBA_", "MICROMAMBA",
+        "ROOT",                      // ROOTSYS, ROOT_INCLUDE_PATH, ROOTIGNOREPREFIX
+        "G4", "GEANT4",
+        "LHAPDF", "PYTHIA8", "HERWIG", "THEPEG", "MG5", "MADGRAPH",
+        "FASTJET", "HEPMC", "GSL", "XROOTD", "CLHEP",
+        "SPHERE_"
+    );
+
+    /**
+     * Puts the toolchain Sphere knows about into a command's environment.
+     *
+     * Two cases. Sphere started from an activated conda or venv already has
+     * these, and they are simply passed along. Sphere started from an icon has
+     * none of them, and then ROOT_DIR in settings.conf is the only thing that
+     * says where ROOT is: without this, root-config was found through that
+     * setting but the binary it built came back with "error while loading
+     * shared libraries", because nothing put its lib folder on the loader path.
+     */
+    private static void addToolchainToEnvironment(Map<String, String> env) {
+        try {
+            com.sphere.core.rootbackend.RootToolchain.environment(any -> null)
+                .forEach((key, value) -> mergePath(env, key, value));
+        } catch (RuntimeException unavailable) {
+            // No ROOT to describe. The command runs without it, as before.
+        }
+        try {
+            final String declared =
+                new com.sphere.utils.SettingsManager().getProperty("ROOT_DIR");
+            if (declared == null || declared.isBlank()) {
+                return;
+            }
+            final java.nio.file.Path prefix = java.nio.file.Path.of(declared.trim());
+            if (!Files.isDirectory(prefix)) {
+                return;
+            }
+            env.putIfAbsent("ROOTSYS", prefix.toString());
+            mergePath(env, "PATH", prefix.resolve("bin").toString());
+            final String lib = prefix.resolve("lib").toString();
+            mergePath(env, "LD_LIBRARY_PATH", lib);
+            mergePath(env, "DYLD_LIBRARY_PATH", lib);
+            mergePath(env, "PYTHONPATH", lib);
+        } catch (RuntimeException unusable) {
+            // A setting that names nothing usable is not a reason to refuse the
+            // command: it runs with whatever the machine already provides.
+        }
+    }
+
+    /** Puts one entry in front of a path variable, without repeating it. */
+    private static void mergePath(Map<String, String> env, String key, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        final String existing = env.get(key);
+        if (existing == null || existing.isBlank()) {
+            env.put(key, value);
+            return;
+        }
+        for (String part : existing.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+            if (part.equals(value)) {
+                return;
+            }
+        }
+        env.put(key, value + File.pathSeparator + existing);
+    }
+
+    /**
+     * The Python a ":py" line should run.
+     *
+     * An activated environment first, then the project's own, then whatever is
+     * on the path. The folder was looked for as the plain name "venv", which
+     * the platform resolves against the folder Sphere was launched from rather
+     * than the one the user is in: a venv beside the launcher was used from
+     * anywhere, and a venv in the project was never seen at all.
+     */
+    private String pythonExecutable(boolean isWin) {
+        final String[] activated = {
+            System.getenv("VIRTUAL_ENV"), System.getenv("CONDA_PREFIX")
+        };
+        for (String prefix : activated) {
+            final Path found = pythonUnder(prefix == null ? null : Path.of(prefix), isWin);
+            if (found != null) {
+                return found.toString();
+            }
+        }
+        for (String folder : new String[]{"venv", ".venv", "env"}) {
+            final Path found = pythonUnder(currentDirectory.resolve(folder), isWin);
+            if (found != null) {
+                return found.toString();
+            }
+        }
+        return isWin ? "python" : "python3";
+    }
+
+    /** The interpreter inside an environment folder, or null when there is none. */
+    private static Path pythonUnder(Path prefix, boolean isWin) {
+        if (prefix == null) {
+            return null;
+        }
+        final Path candidate = isWin ? prefix.resolve("Scripts").resolve("python.exe")
+                                     : prefix.resolve("bin").resolve("python");
+        return Files.isExecutable(candidate) ? candidate.toAbsolutePath().normalize() : null;
+    }
+
+    /** Whether a variable reaches the commands Sphere starts. */
+    private static boolean keepsEnvironmentKey(String key) {
+        if (key == null || key.isEmpty()) {
+            return false;
+        }
+        for (String kept : PRESERVED_ENV_KEYS) {
+            if (kept.equalsIgnoreCase(key)) {
+                return true;
+            }
+        }
+        for (String kept : PRESERVED_ENV_KEYS_TOOLCHAIN) {
+            if (kept.equalsIgnoreCase(key)) {
+                return true;
+            }
+        }
+        final String upper = key.toUpperCase(Locale.ROOT);
+        for (String prefix : PRESERVED_ENV_PREFIXES) {
+            if (upper.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Highly optimized object mapping to preserve token context and execution sequence
     public static class ParsedCommand {
         public enum RootType { MACRO, COMMAND }
@@ -400,7 +558,17 @@ public class CommandRouter {
             return;
         }
 
-        String command = history.expandMacros(input.trim());
+        final String typed = input.trim();
+        String command = history.expandMacros(typed);
+        if (command.equals(typed) && typed.startsWith("!") && !typed.startsWith("!=")) {
+            // The macro matched nothing. It used to be carried on as a command,
+            // so "!9" reached the host shell and was stored in the history as
+            // though it were one, which the next "!!" would then repeat.
+            AppLogger.error("Nothing in the history answers " + typed
+                            + ". !! repeats the last command, !<n> the nth,"
+                            + " !?<text> the last one containing that text.");
+            return;
+        }
         // Passing null here skipped SnippetResolver's third lookup, so a snippet
         // living under WorkSpace/<project>/snippets/ never resolved to a path.
         command = com.sphere.core.snippets.TagInterpreter.resolve(command, ctx.getActiveProject());
@@ -453,7 +621,21 @@ public class CommandRouter {
         for (CommandPlugin plugin : plugins) {
             if (isInternalSystemCommand(command)) break;
             if (plugin.supports(command)) {
-                plugin.execute(command);
+                // A tool that fails on a name the platform will not accept --
+                // a wildcard on Windows, a character it reserves -- threw out
+                // of here and ended the command with a stack trace. The tool
+                // is told apart from the console, so it says so and the
+                // console carries on.
+                try {
+                    plugin.execute(command);
+                } catch (java.nio.file.InvalidPathException badName) {
+                    AppLogger.error(plugin.getName() + ": \"" + badName.getInput()
+                        + "\" is not a usable name here: " + badName.getReason());
+                } catch (RuntimeException failed) {
+                    AppLogger.error(plugin.getName() + " stopped: "
+                        + (failed.getMessage() == null
+                           ? failed.getClass().getSimpleName() : failed.getMessage()));
+                }
                 return;
             }
         }
@@ -469,20 +651,36 @@ public class CommandRouter {
         executeHybridAsync(command);
     }
 
-    private boolean isInternalSystemCommand(String cmd) {
-        String clean = cmd.trim();
-        while (clean.startsWith(":")) {
-            clean = clean.substring(1).trim();
+    /** The name a running command answers to: its program, without its path. */
+    private static String shellToken(String executable) {
+        String name = executable;
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        if (slash >= 0) {
+            name = name.substring(slash + 1);
         }
-        return clean.equals("pwd")
-            || clean.equals("popd")
-            || clean.startsWith("popd ")
-            || clean.equals("cd")
-            || clean.startsWith("cd ")
-            || clean.equals("pushd")
-            || clean.startsWith("pushd ")
-            || clean.equals("dirs")
-            || clean.startsWith("dirs ");
+        int dot = name.lastIndexOf('.');
+        if (dot > 0) {
+            name = name.substring(0, dot);
+        }
+        return name.isBlank() ? "shell" : name;
+    }
+
+    /** The commands running right now, by the name :kill takes. */
+    public java.util.Map<String, Process> runningCommands() {
+        return ctx == null ? java.util.Map.of() : ctx.getActiveProcesses();
+    }
+
+    /** Stops a running command by name. */
+    public boolean stopCommand(String name) {
+        return ctx != null && ctx.killProcess(name);
+    }
+
+    private boolean isInternalSystemCommand(String cmd) {
+        return "".equals(shellWordArgument(cmd, "pwd"))
+            || shellWordArgument(cmd, "popd") != null
+            || shellWordArgument(cmd, "cd") != null
+            || shellWordArgument(cmd, "pushd") != null
+            || shellWordArgument(cmd, "dirs") != null;
     }
 
     /**
@@ -717,10 +915,7 @@ public class CommandRouter {
                 // Ensure both explicit commands (:) and macros (::) route through environment initialization
                 if (pc.languageOrApp != null && ("py".equalsIgnoreCase(pc.languageOrApp) || "js".equalsIgnoreCase(pc.languageOrApp))) {
                     if ("py".equalsIgnoreCase(pc.languageOrApp)) {
-                        File venvPython = isWin ? new File("venv/Scripts/python.exe")
-                                                : new File("venv/bin/python");
-                        if (venvPython.exists()) cmd.add(venvPython.getAbsolutePath());
-                        else cmd.add(isWin ? "python" : "python3");
+                        cmd.add(pythonExecutable(isWin));
                     } else if ("js".equalsIgnoreCase(pc.languageOrApp)) {
                         cmd.add("node");
                     }
@@ -786,13 +981,15 @@ public class CommandRouter {
                 Map<String, String> env = pb.environment();
                 Map<String, String> currentSnapshot = new HashMap<>(env);
 
-                env.keySet().removeIf(key -> !PRESERVED_ENV_KEYS.stream().anyMatch(k -> k.equalsIgnoreCase(key)));
+                env.keySet().removeIf(key -> !keepsEnvironmentKey(key));
 
                 currentSnapshot.forEach((key, value) -> {
-                    if (PRESERVED_ENV_KEYS.stream().anyMatch(k -> k.equalsIgnoreCase(key))) {
+                    if (keepsEnvironmentKey(key)) {
                         env.put(key, value);
                     }
                 });
+
+                addToolchainToEnvironment(env);
 
                 if ("py".equalsIgnoreCase(pc.languageOrApp)) {
                     String existingPythonPath = currentSnapshot.get("PYTHONPATH");
@@ -898,17 +1095,26 @@ public class CommandRouter {
 
                 final long started = System.nanoTime();
                 Process process = pb.start();
+                // Named while it runs, so ":kill <name>" can reach it. Nothing
+                // registered a process before, so the registry the context keeps
+                // was always empty and ":kill" could only ever take a number.
+                final String token = cmd.isEmpty() ? "shell" : shellToken(cmd.get(0));
+                ctx.registerProcess(token, process);
                 com.sphere.core.telemetry.ProcessMemory.Watcher memory =
                     com.sphere.core.telemetry.ProcessMemory.watch(process);
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        publish(line);
+                final int status;
+                try {
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(process.getInputStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            publish(line);
+                        }
                     }
+                    status = process.waitFor();
+                } finally {
+                    ctx.unregisterProcess(token);
                 }
-
-                final int status = process.waitFor();
                 memory.close();
                 // What a script cost, kept beside the compilations so that both can
                 // be read on the same page.
@@ -1088,29 +1294,32 @@ public class CommandRouter {
         return name.equals("python") || name.matches("python\\d(\\.\\d+)?");
     }
 
-    private boolean handleCd(String cmd) {
+    /**
+     * The argument of a shell word, or null when the line is not that word.
+     *
+     * The five directory commands each matched their own way: cd, pushd and
+     * dirs on the exact word, pwd and popd on any case, so "PWD" was answered
+     * here and "CD .." went to the host shell, where changing directory changes
+     * nothing that outlives the subprocess. One rule for all five: the leading
+     * colon is optional, the word is the lower-case one and nothing else, and
+     * what follows it is the argument.
+     */
+    private static String shellWordArgument(String cmd, String word) {
         String clean = cmd.trim();
-        if (clean.startsWith("::")) return false;
+        if (clean.startsWith("::")) return null;
         if (clean.startsWith(":")) clean = clean.substring(1).trim();
+        if (!clean.startsWith(word)) return null;
+        if (clean.length() == word.length()) return "";
+        char after = clean.charAt(word.length());
+        if (after != ' ' && after != '\t') return null;
+        return clean.substring(word.length() + 1).trim();
+    }
 
-        if (!clean.equals("cd") && !clean.startsWith("cd ")) return false;
-
-        String path = clean.length() == 2 ? "" : clean.substring(3).trim();
+    private boolean handleCd(String cmd) {
+        String path = shellWordArgument(cmd, "cd");
+        if (path == null) return false;
         if (path.isEmpty()) {
-            Path target = Paths.get(System.getProperty("user.home"));
-            try {
-                target = target.toRealPath();
-                if (Files.isDirectory(target)) {
-                    previousDirectory = currentDirectory;
-                    currentDirectory = target;
-                    setWorkingDirectory();
-                    updateStatus();
-                } else {
-                    AppLogger.error("Invalid directory.");
-                }
-            } catch (IOException e) {
-                AppLogger.error("Access error: " + e.getMessage());
-            }
+            moveTo(Paths.get(System.getProperty("user.home")).toAbsolutePath().normalize());
             return true;
         }
 
@@ -1127,44 +1336,46 @@ public class CommandRouter {
             return true;
         }
 
-        Path target = resolveUserPath(path);
+        moveTo(resolveUserPath(path));
+        return true;
+    }
 
-        try {
-            target = target.toRealPath();
-            if (Files.isDirectory(target)) {
-                previousDirectory = currentDirectory;
-                currentDirectory = target;
-                setWorkingDirectory();
-                updateStatus();
-            } else {
-                AppLogger.error("Invalid directory.");
-            }
-        } catch (IOException e) {
-            AppLogger.error("Access error: " + e.getMessage());
+    /**
+     * Moves to a directory, keeping the path as it was typed.
+     *
+     * cd used to move to toRealPath, which follows the symbolic links, so a
+     * directory reached through a link was then printed by pwd under its real
+     * name while pushd printed the name the user typed. Shells keep the typed
+     * path on both, and so does this.
+     */
+    private boolean moveTo(Path target) {
+        if (!Files.isDirectory(target)) {
+            AppLogger.error(Files.exists(target) ? "Not a directory: " + target
+                                                 : "Directory not found: " + target);
+            return false;
         }
+        if (!Files.isReadable(target)) {
+            AppLogger.error("Directory not readable: " + target);
+            return false;
+        }
+        previousDirectory = currentDirectory;
+        currentDirectory = target;
+        setWorkingDirectory();
+        updateStatus();
         return true;
     }
 
     private boolean handlePwd(String cmd) {
-        String clean = cmd.trim();
-        if (clean.startsWith("::")) return false;
-        if (clean.startsWith(":")) clean = clean.substring(1).trim();
-
-        if (!clean.equalsIgnoreCase("pwd")) return false;
+        // pwd takes no argument, so "pwd something" is left to the shell.
+        if (!"".equals(shellWordArgument(cmd, "pwd"))) return false;
         AppLogger.raw(currentDirectory.toString());
         updateStatus();
         return true;
     }
 
     private boolean handlePushd(String cmd) {
-        String clean = cmd.trim();
-        if (clean.startsWith("::")) return false;
-        if (clean.startsWith(":")) clean = clean.substring(1).trim();
-
-        // Exact match only: "pushdfoo" used to be accepted as "pushd foo"
-        if (!clean.equals("pushd") && !clean.startsWith("pushd ")) return false;
-
-        String arg = clean.length() > 5 ? clean.substring(5).trim() : "";
+        String arg = shellWordArgument(cmd, "pushd");
+        if (arg == null) return false;
 
         // Bare pushd swaps the top of the stack with the current directory
         if (arg.isEmpty()) {
@@ -1182,30 +1393,17 @@ public class CommandRouter {
             return true;
         }
 
-        Path target = resolveUserPath(arg);
-        if (Files.isDirectory(target)) {
-            dirStack.push(currentDirectory);
-            previousDirectory = currentDirectory;
-            currentDirectory = target;
-            setWorkingDirectory();
-            updateStatus();
+        Path from = currentDirectory;
+        if (moveTo(resolveUserPath(arg))) {
+            dirStack.push(from);
             printStack();
-        } else {
-            AppLogger.error("Directory not found: " + target);
         }
         return true;
     }
 
     private boolean handlePopd(String cmd) {
-        String clean = cmd.trim();
-        if (clean.startsWith("::")) return false;
-        if (clean.startsWith(":")) clean = clean.substring(1).trim();
-
-        if (!clean.equalsIgnoreCase("popd") && !clean.toLowerCase(Locale.ROOT).startsWith("popd ")) {
-            return false;
-        }
-
-        String arg = clean.length() > 4 ? clean.substring(4).trim() : "";
+        String arg = shellWordArgument(cmd, "popd");
+        if (arg == null) return false;
 
         if (dirStack.isEmpty()) {
             AppLogger.error("Directory stack empty.");
@@ -1251,13 +1449,8 @@ public class CommandRouter {
      * which answers about its own stack -- or, under cmd.exe, not at all.
      */
     private boolean handleDirs(String cmd) {
-        String clean = cmd.trim();
-        if (clean.startsWith("::")) return false;
-        if (clean.startsWith(":")) clean = clean.substring(1).trim();
-
-        if (!clean.equals("dirs") && !clean.startsWith("dirs ")) return false;
-
-        String arg = clean.length() > 4 ? clean.substring(4).trim() : "";
+        String arg = shellWordArgument(cmd, "dirs");
+        if (arg == null) return false;
         switch (arg) {
             case "":
                 printStack();
@@ -1312,15 +1505,14 @@ public class CommandRouter {
             cleaned = cleaned.substring(1, cleaned.length() - 1);
         }
 
-        Path target;
-        if (cleaned.equals("~")) {
-            target = Paths.get(System.getProperty("user.home"));
-        } else if (cleaned.startsWith("~/") || cleaned.startsWith("~\\")) {
-            target = Paths.get(System.getProperty("user.home")).resolve(cleaned.substring(2));
-        } else {
-            Path p = Paths.get(cleaned);
-            target = p.isAbsolute() ? p : currentDirectory.resolve(p);
+        final Path typed;
+        try {
+            typed = Paths.get(com.sphere.core.fs.FsSupport.expandHome(cleaned));
+        } catch (java.nio.file.InvalidPathException notAPath) {
+            AppLogger.error("Not a path on this system: " + cleaned);
+            return currentDirectory;
         }
+        Path target = typed.isAbsolute() ? typed : currentDirectory.resolve(typed);
         return target.toAbsolutePath().normalize();
     }
 
@@ -1339,26 +1531,60 @@ public class CommandRouter {
             .orElse("");
     }
 
+    /**
+     * Completes a path being typed.
+     *
+     * Both separators count on every system: a Windows user types ~\\ and a
+     * WSL user types ~/ against the same tree, and only the second used to be
+     * expanded. A name that cannot be a path -- a glob still being typed, a
+     * quote -- is returned untouched rather than throwing.
+     */
     private String autoCompletePath(String prefix) {
-        if (prefix.startsWith("~")) {
-            String home = System.getProperty("user.home");
-            if (prefix.equals("~")) {
-                prefix = home;
-            } else if (prefix.startsWith("~/")) {
-                prefix = home + prefix.substring(1);
+        final boolean onDirectory = prefix.endsWith("/") || prefix.endsWith("\\");
+        String typedText = com.sphere.core.fs.FsSupport.expandHome(prefix);
+
+        final Path typed;
+        try {
+            typed = Paths.get(typedText);
+        } catch (java.nio.file.InvalidPathException notAPath) {
+            return prefix;
+        }
+
+        final Path base;
+        final String lastPart;
+        if (onDirectory) {
+            base = typed.isAbsolute() ? typed : currentDirectory.resolve(typed);
+            lastPart = "";
+        } else {
+            base = typed.isAbsolute() ? typed.getParent()
+                                      : currentDirectory.resolve(typed).getParent();
+            lastPart = typed.getFileName() != null ? typed.getFileName().toString() : "";
+        }
+        if (base == null || !Files.isDirectory(base)) return prefix;
+
+        String[] names = base.toFile().list();
+        if (names == null) return prefix;
+        java.util.Arrays.sort(names);
+
+        String chosen = firstStartingWith(names, lastPart, false);
+        if (chosen == null) {
+            // Nothing matched as typed. A case-insensitive filesystem would
+            // have matched, so the second pass keeps the two behaving alike.
+            chosen = firstStartingWith(names, lastPart, true);
+        }
+        if (chosen == null) return prefix;
+
+        Path completed = base.resolve(chosen);
+        return Files.isDirectory(completed) ? completed + File.separator : completed.toString();
+    }
+
+    private static String firstStartingWith(String[] names, String part, boolean ignoringCase) {
+        for (String name : names) {
+            if (name.regionMatches(ignoringCase, 0, part, 0, part.length())) {
+                return name;
             }
         }
-        Path typed = Paths.get(prefix);
-        Path base = typed.isAbsolute()
-            ? typed.getParent()
-            : currentDirectory.resolve(typed).getParent();
-        if (base == null || !Files.exists(base)) return prefix;
-
-        String lastPart = typed.getFileName() != null ? typed.getFileName().toString() : "";
-        File[] matches = base.toFile().listFiles(f -> f.getName().startsWith(lastPart));
-        return (matches != null && matches.length > 0)
-            ? base.resolve(matches[0].getName()).toString()
-            : prefix;
+        return null;
     }
 
     public void registerPlugin(CommandPlugin plugin) {

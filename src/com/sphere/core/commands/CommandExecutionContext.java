@@ -38,20 +38,22 @@ public class CommandExecutionContext {
             return new String[0];
         }
 
-        // Determine how many tokens belong to the command prefix signature itself
+        // How many tokens the command name itself takes.
+        //
+        // The longest registered name wins. Two words were tried first and the
+        // third only when the pair matched nothing, so ":root profile threshold
+        // 5" -- whose ":root profile" is a command in its own right -- handed
+        // the handler ["threshold", "5"] and the threshold was read as the word
+        // "threshold". Eight commands were affected.
         int prefixTokenCount = 1;
         String firstToken = cachedTokens.get(0);
-        
-        // Match multi-token commands registered in CommandDefinitions (e.g., ":project open")
         if (cachedTokens.size() > 1) {
             String combinedTwo = firstToken + " " + cachedTokens.get(1);
-            if (CommandDefinitions.all().containsKey(combinedTwo)) {
+            if (cachedTokens.size() > 2
+                    && CommandDefinitions.all().containsKey(combinedTwo + " " + cachedTokens.get(2))) {
+                prefixTokenCount = 3;
+            } else if (CommandDefinitions.all().containsKey(combinedTwo)) {
                 prefixTokenCount = 2;
-            } else if (cachedTokens.size() > 2) {
-                String combinedThree = combinedTwo + " " + cachedTokens.get(2);
-                if (CommandDefinitions.all().containsKey(combinedThree)) {
-                    prefixTokenCount = 3;
-                }
             }
         }
 

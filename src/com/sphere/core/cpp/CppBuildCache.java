@@ -1,8 +1,12 @@
 package com.sphere.core.cpp;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -45,14 +49,19 @@ public final class CppBuildCache {
         if (source == null || object == null) return;
 
         try {
+            // An object that is not on disk yet has no timestamp to record, and
+            // inventing one made isValid compare the object against a clock
+            // reading, so an entry written that way was stale on the next build
+            // and its object never reused. Nothing to record, no entry.
+            if (!Files.exists(object)) {
+                entries.remove(normalizePath(source));
+                return;
+            }
             long sourceTs = Files.getLastModifiedTime(source).toMillis();
-            // Object file may not have finished writing instantly; capture current system footprint safely
-            long objectTs = Files.exists(object) ? Files.getLastModifiedTime(object).toMillis() : System.currentTimeMillis();
-
-            String key = normalizePath(source);
-            entries.put(key, new CacheEntry(source, object, sourceTs, objectTs));
-        } catch (Exception ignored) {
-            // Drop tracking if files suffer high-contention filesystem locking errors
+            long objectTs = Files.getLastModifiedTime(object).toMillis();
+            entries.put(normalizePath(source), new CacheEntry(source, object, sourceTs, objectTs));
+        } catch (Exception unreadable) {
+            entries.remove(normalizePath(source));
         }
     }
 
@@ -111,5 +120,60 @@ public final class CppBuildCache {
      */
     public void clear() {
         entries.clear();
+    }
+
+    /** How many source files the cache is tracking. */
+    public int size() {
+        return entries.size();
+    }
+
+    /**
+     * Writes the index beside the objects it describes.
+     *
+     * The map alone lives as long as the process, so every restart of Sphere
+     * began by rebuilding a tree whose objects were all still on disk and all
+     * still valid. One line per entry: the two stamps, then the two paths.
+     */
+    public void save(Path index) {
+        if (index == null) return;
+        List<String> lines = new ArrayList<>(entries.size());
+        for (CacheEntry entry : entries.values()) {
+            lines.add(entry.getSourceTimestamp() + "\t" + entry.getObjectTimestamp()
+                      + "\t" + entry.getSourceFile() + "\t" + entry.getObjectFile());
+        }
+        try {
+            if (index.getParent() != null) {
+                Files.createDirectories(index.getParent());
+            }
+            Files.write(index, lines, StandardCharsets.UTF_8);
+        } catch (IOException notWritten) {
+            // The index is an optimization: losing it costs a full build, not
+            // correctness, so a read-only build directory is not an error.
+        }
+    }
+
+    /**
+     * Reads an index back. Entries whose files no longer match are dropped by
+     * isValid the moment they are asked about, so nothing is checked here.
+     */
+    public void load(Path index) {
+        if (index == null || !Files.isReadable(index)) return;
+        try {
+            for (String line : Files.readAllLines(index, StandardCharsets.UTF_8)) {
+                String[] parts = line.split("\t", 4);
+                if (parts.length != 4) continue;
+                try {
+                    Path source = Paths.get(parts[2]);
+                    entries.put(normalizePath(source), new CacheEntry(
+                        source, Paths.get(parts[3]),
+                        Long.parseLong(parts[0]), Long.parseLong(parts[1])));
+                } catch (NumberFormatException | java.nio.file.InvalidPathException skip) {
+                    // A line written by another version, or a path this system
+                    // cannot name. The file it describes is simply rebuilt.
+                }
+            }
+        } catch (IOException notReadable) {
+            entries.clear();
+        }
     }
 }

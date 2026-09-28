@@ -64,6 +64,28 @@ public final class CppBuildGraph {
             return false;
         }
 
+        /**
+         * The file in this subtree that is actually newer, or null.
+         *
+         * isDirty answers yes or no, which made a report name the header that
+         * was included rather than the one that was edited: touching units.h
+         * was reported against geometry.h, because geometry.h is what the
+         * source includes. This walks down to the file that moved.
+         */
+        public Node firstChanged(long binaryTimestamp, Set<Node> evaluated) {
+            if (!evaluated.add(this)) return null;
+            if (!file.exists() || file.lastModified() > binaryTimestamp) {
+                return this;
+            }
+            for (Node dependency : dependencies) {
+                Node changed = dependency.firstChanged(binaryTimestamp, evaluated);
+                if (changed != null) {
+                    return changed;
+                }
+            }
+            return null;
+        }
+
         public void synchronizedTimestamp() {
             if (file.exists()) {
                 this.lastKnownModified = file.lastModified();
@@ -134,14 +156,19 @@ public final class CppBuildGraph {
     }
 
     /**
-     * Orders compiled items safely to prevent missing references.
-     * Throws an explicit runtime exception if cyclic code conditions occur.
+     * Dependencies before the files that include them.
+     *
+     * A cycle here is not an error to report but a shape to walk around: two
+     * headers that include each other behind their include guards are ordinary
+     * C++, and refusing to order them refused the whole project. The cycle is
+     * simply cut at the edge that closes it, and cyclesFound() says how often.
      */
     public synchronized List<Node> topologicalOrder() {
         List<Node> result = new ArrayList<>();
         Set<Node> visited = new HashSet<>();
-        Set<Node> callStack = new HashSet<>();
-        
+        Set<Node> callStack = new LinkedHashSet<>();
+        cycles = 0;
+
         for (Node n : nodes.values()) {
             if (!visited.contains(n)) {
                 dfs(n, visited, callStack, result);
@@ -150,11 +177,18 @@ public final class CppBuildGraph {
         return result;
     }
 
+    /** How many edges the last ordering had to cut. */
+    public synchronized int cyclesFound() {
+        return cycles;
+    }
+
+    private int cycles = 0;
+
     private void dfs(Node n, Set<Node> visited, Set<Node> callStack, List<Node> result) {
         if (callStack.contains(n)) {
-            throw new IllegalStateException("Circular Dependency Detected within C++ Build Pipeline Mapping: Found unresolvable loop back to node [" + n.getName() + "]");
+            cycles++;
+            return;
         }
-
         callStack.add(n);
         for (Node dep : n.getDependencies()) {
             if (!visited.contains(dep)) {

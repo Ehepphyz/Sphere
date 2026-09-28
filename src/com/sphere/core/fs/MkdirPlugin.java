@@ -163,12 +163,7 @@ public class MkdirPlugin implements CommandRouter.CommandPlugin {
     }
 
     private String expandHome(String path) {
-        if (path == null || path.isEmpty()) return path;
-        if (path.equals("~")) return System.getProperty("user.home");
-        if (path.startsWith("~/") || path.startsWith("~\\")) {
-            return System.getProperty("user.home") + path.substring(1);
-        }
-        return path;
+        return FsSupport.expandHome(path);
     }
 
     private boolean isWindows() {
@@ -199,11 +194,18 @@ public class MkdirPlugin implements CommandRouter.CommandPlugin {
 
         // Windows critical base directories with precise boundary matching
         if (isWindows()) {
-            if (p.matches("^[a-z]:\\\\windows(\\\\|$)") 
-                || p.matches("^[a-z]:\\\\program files(\\\\|$)")
-                || p.matches("^[a-z]:\\\\program files \\(x86\\)(\\\\|$)") 
-                || p.matches("^[a-z]:\\\\system32(\\\\|$)")) {
-                return true;
+            // matches() anchors the whole string, so these caught c:\windows
+            // and nothing under it: C:\Windows\System32\drivers passed the
+            // guard, where the Unix branch above refuses /etc/foo/bar through
+            // startsWith. Compared on the separator instead, so a directory
+            // inside one of these is refused with it.
+            final String slashed = p.replace('\\', '/');
+            for (String win : new String[]{"windows", "program files",
+                                           "program files (x86)", "programdata",
+                                           "system32"}) {
+                if (slashed.matches("^[a-z]:/" + java.util.regex.Pattern.quote(win) + "(/.*)?$")) {
+                    return true;
+                }
             }
         }
 

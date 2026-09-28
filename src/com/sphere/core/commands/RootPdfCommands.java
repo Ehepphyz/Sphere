@@ -943,4 +943,14 @@ public final class RootPdfCommands {
     public static RootPdfSet opened(String name) {
         return OPEN.get(name);
     }
+
+    /** Makes a set opened elsewhere (the :lpdf commands) known here under a name. */
+    static void adopt(String name, RootPdfSet set) {
+        OPEN.put(name, set);
+    }
+
+    /** Forgets a name, as :root pdf close does. */
+    static void forget(String name) {
+        OPEN.remove(name);
+    }
 }

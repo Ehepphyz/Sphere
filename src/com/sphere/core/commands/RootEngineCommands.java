@@ -1475,52 +1475,52 @@ public final class RootEngineCommands {
         Handlers.cling(c, "[]{ TString s(\"" + Handlers.join(w, 0) + "\"); return (long)s.Hash(); }()");
     }
 
-    /** No arguments. */
-    public static void rootTimeNow(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root time now"));
-        if (w.length < 0) {
-            return;
-        }
-        Handlers.cling(c, "[]{ TDatime d; return std::string(d.AsString()); }()");
+    /** No arguments. */
+    public static void rootTimeNow(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time now"));
+        if (w.length < 0) {
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime d; return std::string(d.AsString()); }()");
     }
 
-    /** <seconds> */
-    public static void rootTimeConvert(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root time convert"));
-        if (w.length < 1) {
-            Handlers.usage(":root time convert <seconds>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TDatime d((UInt_t) " + w[0] + "); return std::string(d.AsString()); }()");
+    /** <seconds> */
+    public static void rootTimeConvert(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time convert"));
+        if (w.length < 1) {
+            Handlers.usage(":root time convert <seconds>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime d((UInt_t) " + w[0] + "); return std::string(d.AsString()); }()");
     }
 
-    /** The date to convert. */
-    public static void rootTimeUnix(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root time unix"));
-        if (w.length < 1) {
-            Handlers.usage(":root time unix <YYYY-MM-DD HH:MM:SS>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TDatime d(\"" + Handlers.join(w, 0) + "\"); return (long) d.Convert(); }()");
+    /** The date to convert. */
+    public static void rootTimeUnix(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time unix"));
+        if (w.length < 1) {
+            Handlers.usage(":root time unix <YYYY-MM-DD HH:MM:SS>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime d(\"" + Handlers.join(w, 0) + "\"); return (long) d.Convert(); }()");
     }
 
-    /** <a> <b> */
-    public static void rootTimeDiff(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root time diff"));
-        if (w.length < 2) {
-            Handlers.usage(":root time diff <a> <b>");
-            return;
-        }
-        Handlers.cling(c, "[]{ TDatime a((UInt_t) " + w[0] + "); TDatime b((UInt_t) " + w[1] + "); return (long) b.Convert() - (long) a.Convert(); }()");
+    /** <a> <b> */
+    public static void rootTimeDiff(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time diff"));
+        if (w.length < 2) {
+            Handlers.usage(":root time diff <a> <b>");
+            return;
+        }
+        Handlers.cling(c, "[]{ TDatime a((UInt_t) " + w[0] + "); TDatime b((UInt_t) " + w[1] + "); return (long) b.Convert() - (long) a.Convert(); }()");
     }
 
-    /** No arguments. */
-    public static void rootTimeStamp(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root time stamp"));
-        if (w.length < 0) {
-            return;
-        }
-        Handlers.cling(c, "[]{ TTimeStamp t; return std::string(t.AsString(\"l\")); }()");
+    /** No arguments. */
+    public static void rootTimeStamp(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root time stamp"));
+        if (w.length < 0) {
+            return;
+        }
+        Handlers.cling(c, "[]{ TTimeStamp t; return std::string(t.AsString(\"l\")); }()");
     }
 
 }

@@ -13,7 +13,12 @@ public class Handlers {
 
     // --- Core Commands ---
     /**
-     * ":help" lists every command by category, ":help <category>" only that one.
+     * ":help" names the categories, ":help <category>" opens one of them.
+     *
+     * Bare ":help" used to print all 826 commands, which scrolls the answer off
+     * the screen and tells the reader nothing about where to look. It now says
+     * what to type and lists the words that can go there; ":help all" is still
+     * the whole thing for whoever wants it.
      *
      * A word that names no category is looked for inside the names and the
      * descriptions, so ":help histogram" finds what it should even though no
@@ -25,11 +30,53 @@ public class Handlers {
         final String wanted = (args == null || args.length == 0)
             ? "" : String.join(" ", args).trim();
 
-        if (wanted.isEmpty() || "all".equalsIgnoreCase(wanted)) {
+        if (wanted.isEmpty()) {
+            helpCategories();
+        } else if ("all".equalsIgnoreCase(wanted)) {
             helpEverything(commands);
         } else {
             helpCategory(commands, wanted);
         }
+    }
+
+    /** How many columns the category list is laid out in. */
+    private static final int CATEGORY_COLUMNS = 4;
+
+    /**
+     * The categories and how many commands each holds.
+     *
+     * Laid out down the columns rather than across them, because that is how a
+     * list of names is read when looking for one.
+     */
+    static void helpCategories() {
+        AppLogger.info("Usage: :help <category>");
+        java.util.List<String> names =
+            new java.util.ArrayList<>(CommandDefinitions.sections().keySet());
+        java.util.Map<String, java.util.List<String>> sections = CommandDefinitions.sections();
+        names.sort(String.CASE_INSENSITIVE_ORDER);
+
+        int widest = 0;
+        for (String name : names) {
+            widest = Math.max(widest, name.length());
+        }
+        final int rows = (names.size() + CATEGORY_COLUMNS - 1) / CATEGORY_COLUMNS;
+        AppLogger.raw("");
+        for (int row = 0; row < rows; row++) {
+            StringBuilder line = new StringBuilder("  ");
+            for (int column = 0; column < CATEGORY_COLUMNS; column++) {
+                int index = column * rows + row;
+                if (index >= names.size()) {
+                    break;
+                }
+                String name = names.get(index);
+                line.append(String.format("%-" + (widest + 2) + "s%4d   ",
+                                          name, sections.get(name).size()));
+            }
+            AppLogger.raw(line.toString().stripTrailing());
+        }
+        AppLogger.raw("");
+        AppLogger.raw("  The number is how many commands the category holds.");
+        AppLogger.raw("  ':help all' prints them all, ':help <word>' searches for one.");
     }
 
     /** Every command, under the heading of its category. */
@@ -41,6 +88,10 @@ public class Handlers {
             AppLogger.raw("  [" + entry.getKey() + "]");
             for (String name : entry.getValue()) {
                 AppLogger.raw("    " + name + " - " + commands.getOrDefault(name, ""));
+                final String usage = CommandDefinitions.usageOf(name);
+                if (!usage.isEmpty()) {
+                    AppLogger.raw("        " + usage);
+                }
             }
         }
     }
@@ -90,8 +141,11 @@ public class Handlers {
     static String helpCategoryFor(String query) {
         return switch (query) {
             case "core", "sphere", "general" -> "system";
-            case "file", "fs" -> "files";
-            case "dir", "directory", "directories" -> "dirs";
+            // The shell-like commands all live in system, which is where
+            // someone looking for cd, ls or cp goes first. These are the
+            // other words they might type for the same thing.
+            case "file", "files", "fs", "dir", "dirs", "directory", "directories",
+                 "unix", "linux", "shell", "posix" -> "system";
             case "python" -> "py";
             case "fortran" -> "fort";
             case "javascript" -> "js";
@@ -105,12 +159,22 @@ public class Handlers {
         };
     }
 
-    /** Prints the commands asked for, with what each one does. */
+    /**
+     * Prints the commands asked for, with what each one does and how it is typed.
+     *
+     * The usage goes on its own line under the description rather than beside
+     * it, because the filesystem tools take enough options that the two on one
+     * line wrap and stop being readable.
+     */
     static void list(Map<String, String> commands,
                              java.util.Collection<String> names, String what) {
         AppLogger.info("[" + what + "]");
         for (String name : names) {
             AppLogger.raw("  " + name + " - " + commands.getOrDefault(name, ""));
+            final String usage = CommandDefinitions.usageOf(name);
+            if (!usage.isEmpty()) {
+                AppLogger.raw("      " + usage);
+            }
         }
     }
 
@@ -630,7 +694,21 @@ public class Handlers {
         String target = input.replaceFirst("^:kill", "").trim();
 
         if (target.isEmpty()) {
-            AppLogger.warn("Task termination aborted: Missing target PID. Usage: :kill <PID>");
+            AppLogger.warn("Nothing named. Usage: :kill <name>, or :kill <PID>."
+                           + " ':tasks' lists what is running.");
+            return;
+        }
+
+        // A name first, which is what the command says it takes and what the
+        // user has in front of them: the number is the fallback, not the rule.
+        if (!target.chars().allMatch(Character::isDigit)
+                && ctx != null && ctx.ctx != null) {
+            if (ctx.ctx.killProcess(target)) {
+                AppLogger.success("Stopped '" + target + "'.");
+            } else {
+                AppLogger.error("Nothing running is named '" + target
+                                + "'. ':tasks' lists what is.");
+            }
             return;
         }
 
@@ -664,6 +742,22 @@ public class Handlers {
      * to list active running tasks across Linux, macOS, and Windows seamlessly.
      */
     public static void listActiveTasks(String input, CommandExecutionContext ctx) {
+        // What Sphere itself started comes first, because those are the ones
+        // ":kill <name>" can stop. The host's process table follows.
+        if (ctx != null && ctx.ctx != null) {
+            java.util.Map<String, Process> mine = ctx.ctx.getActiveProcesses();
+            if (mine.isEmpty()) {
+                AppLogger.info("No command started from Sphere is running.");
+            } else {
+                AppLogger.info("Started from Sphere, stoppable with ':kill <name>':");
+                for (java.util.Map.Entry<String, Process> one : mine.entrySet()) {
+                    AppLogger.raw(String.format("  %-20s pid %-10s %s", one.getKey(),
+                        one.getValue().pid(),
+                        one.getValue().isAlive() ? "running" : "finishing"));
+                }
+            }
+        }
+
         AppLogger.info("Querying host supervisor for active process contexts...");
         
         AppLogger.separator();
@@ -734,12 +828,239 @@ public class Handlers {
         switchMode(c, null, ""); 
     }
 
+    /**
+     * ROOT line by line, until ":root exit".
+     *
+     * Cling reads one statement at a time, so a ROOT mode does not collect the
+     * lines the way the compiled languages do: each one is sent to the engine
+     * as it is typed, and what it declares is still there for the next.
+     */
+    public static void rootMode(String input, CommandExecutionContext c) {
+        switchMode(c, "root", "[root]");
+    }
+
+    public static void rootExit(String input, CommandExecutionContext c) {
+        switchMode(c, null, "");
+    }
+
     public static void cppVars(String input, CommandExecutionContext c) {
         askAndReport("cpp");
     }
 
     public static void cppDiag(String input, CommandExecutionContext c) {
         reportTool("cpp", "GPP_DIR", "g++", "--version");
+    }
+
+    /* --- Incremental C++ build --- */
+
+    /** The builder for the directory the user is in, or null with the reason said. */
+    private static com.sphere.core.cpp.CppIncrementalBuilder builder(CommandExecutionContext c) {
+        if (c == null || c.ctx == null || c.ctx.router == null) {
+            AppLogger.error("No working directory.");
+            return null;
+        }
+        Object backend = c.ctx.router.getCppBackend();
+        if (!(backend instanceof com.sphere.core.cpp.CppBackend cpp)) {
+            AppLogger.error("The C++ backend is not loaded.");
+            return null;
+        }
+        java.nio.file.Path here = c.ctx.router.getCurrentDirectory();
+        com.sphere.core.cpp.CppIncrementalBuilder made = cpp.builderFor(here);
+        // A project says where its headers are in one file, one path per line.
+        if (made.getIncludeDirectories().isEmpty()) {
+            made.readIncludeFile(here.resolve("sphere-includes.txt"));
+            for (String usual : new String[]{"include", "inc", "headers"}) {
+                java.nio.file.Path directory = here.resolve(usual);
+                if (java.nio.file.Files.isDirectory(directory)) {
+                    made.getIncludeDirectories().add(directory);
+                }
+            }
+        }
+        return made;
+    }
+
+    /** The name the executable takes: the directory's own. */
+    private static String binaryName(CommandExecutionContext c) {
+        java.nio.file.Path here = c.ctx.router.getCurrentDirectory();
+        java.nio.file.Path name = here.getFileName();
+        return name == null ? "a" : name.toString();
+    }
+
+    public static void cppPlan(String input, CommandExecutionContext c) {
+        com.sphere.core.cpp.CppIncrementalBuilder made = builder(c);
+        if (made == null) return;
+        java.util.List<com.sphere.core.cpp.CppIncrementalBuilder.Unit> units = made.plan();
+        if (units.isEmpty()) {
+            AppLogger.error("No C++ source under " + made.getRoot());
+            return;
+        }
+        int stale = 0;
+        AppLogger.info("What a build would do, under " + made.getRoot());
+        for (com.sphere.core.cpp.CppIncrementalBuilder.Unit unit : units) {
+            if (unit.stale()) stale++;
+            AppLogger.raw(String.format("  %-40s %s",
+                made.getRoot().relativize(unit.source()),
+                unit.stale() ? "compile   (" + unit.reason() + ")" : "reuse"));
+        }
+        AppLogger.raw("  " + stale + " to compile, " + (units.size() - stale) + " reused.");
+        com.sphere.core.cpp.CppProjectManager owner = project(c);
+        if (owner != null && owner.hasBuildSystem()) {
+            AppLogger.raw("  This project also carries a " + owner.getBuildSystem().getMarkerFile()
+                          + "; ':cpp project build' uses it instead.");
+        }
+    }
+
+    public static void cppBuild(String input, CommandExecutionContext c) {
+        runBuild(c, false);
+    }
+
+    public static void cppRebuild(String input, CommandExecutionContext c) {
+        runBuild(c, true);
+    }
+
+    private static void runBuild(CommandExecutionContext c, boolean everything) {
+        final com.sphere.core.cpp.CppIncrementalBuilder made = builder(c);
+        if (made == null) return;
+        final String name = binaryName(c);
+        // Compiling is minutes of work on a real tree, so it does not happen on
+        // the thread that draws the window.
+        Thread worker = new Thread(() -> {
+            com.sphere.core.cpp.CppIncrementalBuilder.Outcome outcome =
+                made.build(name, everything, new com.sphere.core.cpp.CppBackend.CppOutputListener() {
+                    @Override public void onStdoutLine(String line) { AppLogger.raw("  " + line); }
+                    @Override public void onStderrLine(String line) { AppLogger.error(line); }
+                    @Override public void onProcessComplete(int code, boolean timedOut) { }
+                });
+            if (!outcome.ok()) {
+                AppLogger.error(outcome.failure());
+                return;
+            }
+            AppLogger.success(outcome.compiled() + " compiled, " + outcome.reused()
+                + " reused, " + (outcome.linked() ? "linked" : "link not needed")
+                + ", " + outcome.millis() + " ms -> " + outcome.binary());
+        }, "sphere-cpp-build");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    public static void cppClean(String input, CommandExecutionContext c) {
+        com.sphere.core.cpp.CppIncrementalBuilder made = builder(c);
+        if (made == null) return;
+        int removed = made.clean();
+        AppLogger.success(removed + (removed == 1 ? " file" : " files")
+                          + " removed from " + made.getBuildDirectory());
+    }
+
+    /* --- CMake, Ninja and Make, the project's own build system --- */
+
+    /** The project manager for the current directory, or null with the reason said. */
+    private static com.sphere.core.cpp.CppProjectManager project(CommandExecutionContext c) {
+        if (c == null || c.ctx == null || c.ctx.router == null) {
+            AppLogger.error("No working directory.");
+            return null;
+        }
+        return new com.sphere.core.cpp.CppProjectManager(
+            c.ctx.router.getCurrentDirectory().toFile());
+    }
+
+    private static com.sphere.core.cpp.CppBackend cppBackend(CommandExecutionContext c) {
+        Object backend = (c == null || c.ctx == null || c.ctx.router == null)
+            ? null : c.ctx.router.getCppBackend();
+        if (backend instanceof com.sphere.core.cpp.CppBackend cpp) {
+            return cpp;
+        }
+        AppLogger.error("The C++ backend is not loaded.");
+        return null;
+    }
+
+    public static void cppProject(String input, CommandExecutionContext c) {
+        com.sphere.core.cpp.CppProjectManager made = project(c);
+        if (made == null) return;
+        AppLogger.info("Project at " + made.getRootDirectory());
+        AppLogger.raw("  build system  " + made.getBuildSystem()
+                      + (made.hasBuildSystem() ? "   (" + made.getBuildSystem().getMarkerFile()
+                                                 + " is there)" : "   (assumed, no marker file)"));
+        AppLogger.raw("  build folder  " + made.getBuildDirectory());
+        AppLogger.raw("  parallel jobs " + made.buildJobs()
+                      + "   (CPP_BUILD_JOBS in settings.conf sets it)");
+        AppLogger.raw("  configure     " + line(made.configure("")));
+        AppLogger.raw("  build         " + line(made.build("")));
+        AppLogger.raw("  clean         " + line(made.clean()));
+    }
+
+    private static String line(java.util.List<String> command) {
+        return command.isEmpty() ? "(this build system needs no such step)"
+                                 : String.join(" ", command);
+    }
+
+    public static void cppProjectConfigure(String input, CommandExecutionContext c) {
+        com.sphere.core.cpp.CppProjectManager made = project(c);
+        if (made == null) return;
+        final java.util.List<String> command;
+        try {
+            // The words as the user separated them, not glued back together:
+            // -G "Unix Makefiles" must stay one argument.
+            command = made.configure(java.util.List.of(c.getArgs()));
+        } catch (SecurityException refused) {
+            AppLogger.error(refused.getMessage());
+            return;
+        }
+        runProjectStep(c, command, "configure");
+    }
+
+    public static void cppProjectBuild(String input, CommandExecutionContext c) {
+        com.sphere.core.cpp.CppProjectManager made = project(c);
+        if (made == null) return;
+        // CMake answers an unconfigured tree with "could not load cache", which
+        // says nothing about what to do next.
+        if (made.getBuildSystem() == com.sphere.core.cpp.CppProjectManager.BuildSystem.CMAKE
+                && !new java.io.File(made.getBuildDirectory(), "CMakeCache.txt").isFile()) {
+            AppLogger.error("This project is not configured yet. Run ':cpp project configure' first.");
+            return;
+        }
+        runProjectStep(c, made.build(String.join(" ", c.getArgs())), "build");
+    }
+
+    public static void cppProjectClean(String input, CommandExecutionContext c) {
+        com.sphere.core.cpp.CppProjectManager made = project(c);
+        if (made == null) return;
+        runProjectStep(c, made.clean(), "clean");
+    }
+
+    /**
+     * Runs one step of the project's own build system.
+     *
+     * Off the drawing thread, because configuring and building a real project
+     * is minutes of work, and the output is streamed as it arrives rather than
+     * held until the end.
+     */
+    private static void runProjectStep(CommandExecutionContext c,
+                                       java.util.List<String> command, String step) {
+        if (command.isEmpty()) {
+            AppLogger.info("This build system has no " + step + " step of its own.");
+            return;
+        }
+        final com.sphere.core.cpp.CppBackend backend = cppBackend(c);
+        if (backend == null) return;
+
+        AppLogger.info(String.join(" ", command));
+        Thread worker = new Thread(() -> {
+            final long started = System.currentTimeMillis();
+            int code = backend.runToolCommand(command, false,
+                new com.sphere.core.cpp.CppBackend.CppOutputListener() {
+                    @Override public void onStdoutLine(String text) { AppLogger.raw("  " + text); }
+                    @Override public void onStderrLine(String text) { AppLogger.error(text); }
+                    @Override public void onProcessComplete(int exit, boolean timedOut) { }
+                }, true);
+            long millis = System.currentTimeMillis() - started;
+            if (code == 0) {
+                AppLogger.success(step + " finished in " + millis + " ms");
+            } else {
+                AppLogger.error(step + " failed, exit code " + code + ", after " + millis + " ms");
+            }
+        }, "sphere-cpp-project-" + step);
+        worker.setDaemon(true);
+        worker.start();
     }
 
     // --- JS Engine ---
@@ -1529,8 +1850,10 @@ public class Handlers {
     static String collectingMode(CommandExecutionContext c) {
         final String mode = (c == null || c.ctx == null) ? null : c.ctx.currentMode;
         if (!com.sphere.core.exec.CodeBuffer.collects(mode)) {
-            AppLogger.error("No permanent mode is active. Enter one with \":py mode\","
-                            + " \":cpp mode\", \":julia mode\" or \":fort mode\".");
+            AppLogger.error("No mode that collects lines is active. Enter one with"
+                            + " \":py mode\", \":cpp mode\", \":julia mode\" or"
+                            + " \":fort mode\". \":root mode\" runs each line at once,"
+                            + " so it keeps nothing for :exec.");
             return null;
         }
         return mode;

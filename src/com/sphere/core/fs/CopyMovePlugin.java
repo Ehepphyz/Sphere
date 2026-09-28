@@ -180,20 +180,10 @@ public class CopyMovePlugin implements CommandRouter.CommandPlugin {
     }
 
     private void deleteTree(Path root) throws IOException {
-        Files.walkFileTree(root, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
-                    throws IOException {
-                Files.delete(file);
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public FileVisitResult postVisitDirectory(Path dir, IOException e) throws IOException {
-                Files.delete(dir);
-                return FileVisitResult.CONTINUE;
-            }
-        });
+        java.util.List<Path> refused = FsSupport.deleteTree(root);
+        if (!refused.isEmpty()) {
+            throw new IOException(FsSupport.refusedSummary(refused));
+        }
     }
 
     private void usage(String name, boolean moving) {

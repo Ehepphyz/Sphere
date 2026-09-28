@@ -93,4 +93,4 @@ public class QuickCodeEditorFrame extends JFrame {
     public QuickCodeEditor getEditor() {
         return editor;
     }
-}
+}

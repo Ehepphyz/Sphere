@@ -161,12 +161,7 @@ public class SymlinkPlugin implements CommandRouter.CommandPlugin {
     }
 
     private String expandHome(String path) {
-        if (path == null || path.isEmpty()) return path;
-        if (path.equals("~")) return System.getProperty("user.home");
-        if (path.startsWith("~/") || path.startsWith("~\\")) {
-            return System.getProperty("user.home") + path.substring(1);
-        }
-        return path;
+        return FsSupport.expandHome(path);
     }
 
     private boolean isWindows() {

@@ -644,4 +644,4 @@ public class ConsoleUI extends JPanel {
             add(buttonPanel, BorderLayout.SOUTH);
         }
     }
-}
+}

@@ -136,11 +136,40 @@ public class DiffPlugin implements CommandRouter.CommandPlugin {
 
             @Override
             protected void done() {
-                if (identical) {
+                if (!identical) return;
+                // The lines match. Whether the bytes do is a separate question:
+                // a reader drops the terminators, so a file written on Windows
+                // and the same text written on Linux read alike.
+                String aside = invisibleDifference(finalLeft, finalRight);
+                if (aside.isEmpty()) {
                     AppLogger.success("The two files are identical.");
+                } else {
+                    AppLogger.info("Same lines, different bytes: " + aside);
                 }
             }
         }.execute();
+    }
+
+    /** What separates two files whose lines are equal, or nothing. */
+    private static String invisibleDifference(Path left, Path right) {
+        final FsSupport.LineEndings a;
+        final FsSupport.LineEndings b;
+        try {
+            a = FsSupport.lineEndings(left);
+            b = FsSupport.lineEndings(right);
+        } catch (IOException unreadable) {
+            return "";
+        }
+        List<String> parts = new ArrayList<>(2);
+        if (!a.name().equals(b.name())) {
+            parts.add(left.getFileName() + " ends its lines with " + a.name()
+                      + ", " + right.getFileName() + " with " + b.name());
+        }
+        if (a.finalNewline() != b.finalNewline()) {
+            parts.add((a.finalNewline() ? right : left).getFileName()
+                      + " has no newline at the end of the file");
+        }
+        return String.join("; ", parts);
     }
 
     private static List<String> readLines(Path file) throws IOException {

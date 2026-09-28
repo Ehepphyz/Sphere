@@ -76,7 +76,17 @@ public class CommandDefinitions {
         register(":cpp vars", "Inspect registered C++ memory variables and structures", Handlers::cppVars);
         register(":cpp diag", "Run toolchain and compiler diagnostics for the C++ backend", Handlers::cppDiag);
         register(":cpp mode", "Enter the interactive C++ interpreter shell mode", Handlers::cppMode);
+        register(":root mode", "Send every line to ROOT until ':root exit'. Usage: :root mode", Handlers::rootMode);
+        register(":root exit", "Leave ROOT mode. Usage: :root exit", Handlers::rootExit);
         register(":cpp exit", "Exit interactive C++ mode", Handlers::cppExit);
+        register(":cpp plan", "Say what a build would compile and what it would reuse. Usage: :cpp plan", Handlers::cppPlan);
+        register(":cpp build", "Compile only what changed, then link. Usage: :cpp build", Handlers::cppBuild);
+        register(":cpp rebuild", "Compile everything, ignoring the cache. Usage: :cpp rebuild", Handlers::cppRebuild);
+        register(":cpp clean", "Remove the objects, the index and the binary. Usage: :cpp clean", Handlers::cppClean);
+        register(":cpp project", "Report the build system found and the commands it would run. Usage: :cpp project", Handlers::cppProject);
+        register(":cpp project configure", "Configure the project with CMake. Usage: :cpp project configure [cmake arguments]", Handlers::cppProjectConfigure);
+        register(":cpp project build", "Build with CMake, Ninja or Make. Usage: :cpp project build [target]", Handlers::cppProjectBuild);
+        register(":cpp project clean", "Clean through the project's own build system. Usage: :cpp project clean", Handlers::cppProjectClean);
         register(":js env", "Display JavaScript engine runtime parameters", Handlers::jsEnv);
         register(":js diag", "Run diagnostics on the ECMAScript interpreter engine", Handlers::jsDiag);
 
@@ -88,7 +98,7 @@ public class CommandDefinitions {
         register(":tools list", "List available binary tool executables", Handlers::toolsList);
         register(":tools update", "Update metadata and version registries for external tools", Handlers::toolsUpdate);
         register(":clear", "Clear the active console user interface screen output buffer", Handlers::clearConsole);
-        register(":kill", "Terminate an active long-running process by name", Handlers::terminateProcess);
+        register(":kill", "Stop a running command by name, or by PID. Usage: :kill <name|PID>", Handlers::terminateProcess);
         register(":tasks", "List all active background threads and process tasks", Handlers::listActiveTasks);
 
         // --- ROOT Framework Bridge — Files & Directories ---
@@ -235,107 +245,111 @@ public class CommandDefinitions {
         register(":root env detect", "What ROOT and what PDF folders Sphere is using, and which programs would find them", RootPdfCommands::rootEnvDetect);
         register(":root env write", "Write what MadGraph, Herwig, Rivet or a Geant4 build needs to find them. Usage: :root env write <folder>", RootPdfCommands::rootEnvWrite);
         register(":root env show", "The environment variables themselves, for a script that sets them its own way", RootPdfCommands::rootEnvShow);
-        register(":root cut new", "Name a selection so it can be reused and combined", RootGraphicsCommands::rootCutNew);
-        register(":root cut and", "Both selections at once. Usage: :root cut and <out> <a> <b>", RootGraphicsCommands::rootCutAnd);
-        register(":root cut or", "Either selection. Usage: :root cut or <out> <a> <b>", RootGraphicsCommands::rootCutOr);
-        register(":root cut not", "The entries a selection rejects. Usage: :root cut not <out> <a>", RootGraphicsCommands::rootCutNot);
-        register(":root cut show", "What a named selection says. Usage: :root cut show <name>", RootGraphicsCommands::rootCutShow);
-        register(":root cut apply", "Draw an expression under a named selection. Usage: :root cut apply <tree> <cut> <expr>", RootGraphicsCommands::rootCutApply);
-        register(":root cut count", "How many entries a named selection keeps. Usage: :root cut count <tree> <cut>", RootGraphicsCommands::rootCutCount);
-        register(":root xrootd open", "Open a file over the network. Usage: :root xrootd open <name> <url>", RootFileCommands::rootXrootdOpen);
-        register(":root xrootd ls", "List a remote directory. Usage: :root xrootd ls <url>", RootFileCommands::rootXrootdLs);
-        register(":root xrootd copy", "Copy a file to or from the network. Usage: :root xrootd copy <from> <to>", RootFileCommands::rootXrootdCopy);
-        register(":root xrootd exists", "Whether a remote path is there. Usage: :root xrootd exists <url>", RootFileCommands::rootXrootdExists);
-        register(":root xrootd stat", "Size and date of a remote path. Usage: :root xrootd stat <url>", RootFileCommands::rootXrootdStat);
-        register(":root xrootd redirector", "Set the XRootD redirector. Usage: :root xrootd redirector <host>", RootFileCommands::rootXrootdRedirector);
-        register(":root graph2d new", "Create a two-dimensional graph. Usage: :root graph2d new <name> <points>", RootGraphicsCommands::rootGraph2dNew);
-        register(":root graph2d set", "Place one point. Usage: :root graph2d set <name> <i> <x> <y> <z>", RootGraphicsCommands::rootGraph2dSet);
-        register(":root graph2d draw", "Draw it. Usage: :root graph2d draw <name> [option]", RootGraphicsCommands::rootGraph2dDraw);
-        register(":root graph2d interpolate", "Read the surface between its points. Usage: :root graph2d interpolate <name> <x> <y>", RootGraphicsCommands::rootGraph2dInterp);
-        register(":root graph2d points", "How many points it holds. Usage: :root graph2d points <name>", RootGraphicsCommands::rootGraph2dPoints);
-        register(":root graph2d hist", "The histogram it interpolates onto. Usage: :root graph2d hist <name>", RootGraphicsCommands::rootGraph2dHist);
-        register(":root axis time", "Show an axis as dates. Usage: :root axis time <hist> <x|y> [format]", RootGraphicsCommands::rootAxisTime);
-        register(":root axis label", "Put a word on one bin. Usage: :root axis label <hist> <bin> <text>", RootGraphicsCommands::rootAxisLabel);
-        register(":root axis deflate", "Drop the empty labeled bins. Usage: :root axis deflate <hist>", RootGraphicsCommands::rootAxisDeflate);
-        register(":root axis divisions", "How many ticks an axis shows. Usage: :root axis divisions <hist> <x|y> <n>", RootGraphicsCommands::rootAxisDivisions);
-        register(":root axis moreloglabels", "Label the decades in between on a log axis. Usage: :root axis moreloglabels <hist> <x|y>", RootGraphicsCommands::rootAxisMoreLog);
-        register(":root axis titleoffset", "Move an axis title away from it. Usage: :root axis titleoffset <hist> <x|y> <value>", RootGraphicsCommands::rootAxisTitleOffset);
-        register(":root axis new", "Draw an axis of your own. Usage: :root axis new <x1> <y1> <x2> <y2> <wmin> <wmax> <ndiv> [options]", RootGraphicsCommands::rootAxisNew);
-        register(":root color new", "Define a color. Usage: :root color new <index> <r> <g> <b>  (0 to 1)", RootGraphicsCommands::rootColorNew);
-        register(":root color find", "The index nearest a color. Usage: :root color find <r> <g> <b>  (0 to 1)", RootGraphicsCommands::rootColorFind);
-        register(":root color show", "What a color index holds. Usage: :root color show <index>", RootGraphicsCommands::rootColorShow);
-        register(":root color transparent", "A color you can see through. Usage: :root color transparent <index> <alpha>", RootGraphicsCommands::rootColorTransparent);
-        register(":root color bright", "A lighter shade of a color. Usage: :root color bright <index>", RootGraphicsCommands::rootColorBright);
-        register(":root color dark", "A darker shade of a color. Usage: :root color dark <index>", RootGraphicsCommands::rootColorDark);
-        register(":root color hls", "A color from hue, light and saturation. Usage: :root color hls <h> <l> <s>", RootGraphicsCommands::rootColorHls);
-        register(":root ratio new", "Data over simulation, one above the other. Usage: :root ratio new <name> <top> <bottom>", RootGraphicsCommands::rootRatioNew);
-        register(":root ratio draw", "Draw the pair. Usage: :root ratio draw <name> [option]", RootGraphicsCommands::rootRatioDraw);
-        register(":root ratio range", "What the lower panel shows. Usage: :root ratio range <name> <low> <high>", RootGraphicsCommands::rootRatioRange);
-        register(":root ratio grid", "Lines across the lower panel. Usage: :root ratio grid <name> <values...>", RootGraphicsCommands::rootRatioGrid);
-        register(":root ratio margin", "How much room the lower panel takes. Usage: :root ratio margin <name> <fraction>", RootGraphicsCommands::rootRatioMargin);
-        register(":root clones new", "An array of one class, reused rather than reallocated. Usage: :root clones new <name> <class> <size>", RootAnalysisCommands::rootClonesNew);
-        register(":root clones size", "How many it holds. Usage: :root clones size <name>", RootAnalysisCommands::rootClonesSize);
-        register(":root clones at", "What sits at one place. Usage: :root clones at <name> <index>", RootAnalysisCommands::rootClonesAt);
-        register(":root clones clear", "Empty it without giving the memory back. Usage: :root clones clear <name>", RootAnalysisCommands::rootClonesClear);
-        register(":root clones expand", "Make room for more. Usage: :root clones expand <name> <size>", RootAnalysisCommands::rootClonesExpand);
-        register(":root stat new", "Keep a running mean and spread. Usage: :root stat new <name>", RootAnalysisCommands::rootStatNew);
-        register(":root stat fill", "Add a value. Usage: :root stat fill <name> <value> [weight]", RootAnalysisCommands::rootStatFill);
-        register(":root stat mean", "Its mean so far. Usage: :root stat mean <name>", RootAnalysisCommands::rootStatMean);
-        register(":root stat rms", "Its spread so far. Usage: :root stat rms <name>", RootAnalysisCommands::rootStatRms);
-        register(":root stat sum", "The total it has added. Usage: :root stat sum <name>", RootAnalysisCommands::rootStatSum);
-        register(":root stat count", "How many values went in. Usage: :root stat count <name>", RootAnalysisCommands::rootStatCount);
-        register(":root stat print", "Everything it knows. Usage: :root stat print <name>", RootAnalysisCommands::rootStatPrint);
-        register(":root time now", "The moment it is now", RootEngineCommands::rootTimeNow);
-        register(":root time convert", "A unix second as a date. Usage: :root time convert <seconds>", RootEngineCommands::rootTimeConvert);
-        register(":root time unix", "A date as unix seconds. Usage: :root time unix <\"YYYY-MM-DD HH:MM:SS\">", RootEngineCommands::rootTimeUnix);
-        register(":root time diff", "Seconds between two unix times. Usage: :root time diff <a> <b>", RootEngineCommands::rootTimeDiff);
-        register(":root time stamp", "Now, to the nanosecond", RootEngineCommands::rootTimeStamp);
-        register(":root hist chi2test", "Whether two histograms agree. Usage: :root hist chi2test <a> <b> [UU|UW|WW|P|CHI2/NDF]", RootHistCommands::rootHistChi2Test);
-        register(":root hist sumw2", "Keep the sum of squared weights, so the errors stay right. Usage: :root hist sumw2 <name>", RootHistCommands::rootHistSumw2);
-        register(":root hist quantiles", "Where a fraction of the entries lies below. Usage: :root hist quantiles <name> <fraction>", RootHistCommands::rootHistQuantiles);
-        register(":root hist interpolate", "Read between the bins. Usage: :root hist interpolate <name> <x>", RootHistCommands::rootHistInterpolate);
-        register(":root hist cumulative", "The running total, bin by bin. Usage: :root hist cumulative <name> <out>", RootHistCommands::rootHistCumulative);
-        register(":root hist getrandom", "Draw a value the histogram would give. Usage: :root hist getrandom <name>", RootHistCommands::rootHistGetRandom);
-        register(":root hist fillrandom", "Fill it from a function. Usage: :root hist fillrandom <name> <function> <entries>", RootHistCommands::rootHistFillRandom);
-        register(":root hist dividebinomial", "Divide as an efficiency, with binomial errors. Usage: :root hist dividebinomial <out> <passed> <total>", RootHistCommands::rootHistDivideBinomial);
-        register(":root hist residuals", "What a fit left behind, bin by bin. Usage: :root hist residuals <hist> <function> <out>", RootHistCommands::rootHistResiduals);
-        register(":root hist pulls", "The same in units of the error, which is what to look at. Usage: :root hist pulls <hist> <function> <out>", RootHistCommands::rootHistPulls);
-        register(":root hist underflow", "What fell off the low end. Usage: :root hist underflow <name>", RootHistCommands::rootHistUnderflow);
-        register(":root hist overflow", "What fell off the high end. Usage: :root hist overflow <name>", RootHistCommands::rootHistOverflow);
-        register(":root hist maxbin", "Which bin holds the most. Usage: :root hist maxbin <name>", RootHistCommands::rootHistMaximumBin);
-        register(":root hist binwidth", "How wide a bin is. Usage: :root hist binwidth <name> <bin>", RootHistCommands::rootHistBinWidth);
-        register(":root hist effective", "Entries a weighted histogram is worth. Usage: :root hist effective <name>", RootHistCommands::rootHistEffectiveEntries);
-        register(":root fit fractions", "How much of the data each model accounts for. Usage: :root fit fractions <data> <model1> <model2> [model3]", RootAnalysisCommands::rootFitFractions);
-        register(":root fit range", "Fit only part of it. Usage: :root fit range <hist> <function> <low> <high>", RootAnalysisCommands::rootFitRange);
-        register(":root fit likelihood", "Fit by likelihood, which is right when the bins are thin. Usage: :root fit likelihood <hist> <function>", RootAnalysisCommands::rootFitLikelihood);
-        register(":root fit weighted", "Likelihood fit of a weighted histogram. Usage: :root fit weighted <hist> <function>", RootAnalysisCommands::rootFitWeighted);
-        register(":root fit quality", "Whether a fit is any good. Usage: :root fit quality <function>", RootAnalysisCommands::rootFitQuality);
-        register(":root fit confband", "The band a fit is confident within. Usage: :root fit confband <hist> <out> [level]", RootAnalysisCommands::rootFitConfBand);
-        register(":root eff wilson", "Efficiency with the Wilson interval, which stays right at the ends. Usage: :root eff wilson <passed> <total> [level]", RootAnalysisCommands::rootEffWilson);
-        register(":root eff agresti", "The Agresti-Coull interval, the simple one that also behaves. Usage: :root eff agresti <passed> <total> [level]", RootAnalysisCommands::rootEffAgresti);
-        register(":root eff normal", "The plain interval, which is wrong near zero and one. Usage: :root eff normal <passed> <total> [level]", RootAnalysisCommands::rootEffNormal);
-        register(":root eff poisson", "The interval on a count, for a rate rather than a fraction. Usage: :root eff poisson <observed> [level]", RootAnalysisCommands::rootEffPoisson);
-        register(":root func derivative", "How fast a function climbs. Usage: :root func derivative <name> <x>", RootHistCommands::rootFuncDerivative);
-        register(":root func second", "How fast its slope changes. Usage: :root func second <name> <x>", RootHistCommands::rootFuncSecond);
-        register(":root func integralerror", "What the fit uncertainty does to an integral. Usage: :root func integralerror <name> <low> <high>", RootHistCommands::rootFuncIntegralError);
-        register(":root func random", "Draw a value distributed as the function. Usage: :root func random <name>", RootHistCommands::rootFuncRandom);
-        register(":root func normalized", "Make it integrate to one over its range. Usage: :root func normalized <name> <0|1>", RootHistCommands::rootFuncNormalized);
-        register(":root func fwhm", "How wide a peak is at half its height. Usage: :root func fwhm <name> <low> <high>", RootHistCommands::rootFuncFwhm);
-        register(":root tree drawopt", "Draw with a selection and an option. Usage: :root tree drawopt <tree> <expr> <selection> <option>", RootTreeCommands::rootTreeDrawOpt);
-        register(":root tree estimate", "How many entries Draw may hold at once. Usage: :root tree estimate <tree> <n>", RootTreeCommands::rootTreeEstimate);
-        register(":root tree aliases", "The short names this tree answers to. Usage: :root tree aliases <tree>", RootTreeCommands::rootTreeAliasList);
-        register(":root tree refresh", "Pick up what has been written since. Usage: :root tree refresh <tree>", RootTreeCommands::rootTreeRefresh);
-        register(":root tree formula", "Evaluate an expression on one entry. Usage: :root tree formula <tree> <entry> <expression>", RootTreeCommands::rootTreeFormula);
-        register(":root tree size", "What the tree costs on disk and in memory. Usage: :root tree size <tree>", RootTreeCommands::rootTreeTotalSize);
-        register(":root file recover", "Read what is left of a file that was not closed. Usage: :root file recover <name>", RootFileCommands::rootFileRecover);
-        register(":root file compression", "How much the compression saved. Usage: :root file compression <name>", RootFileCommands::rootFileCompressionInfo);
-        register(":root file trees", "The trees a file holds, and how big they are. Usage: :root file trees <name>", RootFileCommands::rootFileTreeList);
-        register(":root file free", "Room a file has left over inside itself. Usage: :root file free <name>", RootFileCommands::rootFileFree);
-        register(":root matrix multiply", "One matrix times another. Usage: :root matrix multiply <out> <a> <b>", RootAnalysisCommands::rootMatrixMultiply);
-        register(":root matrix add", "One matrix plus another. Usage: :root matrix add <out> <a> <b>", RootAnalysisCommands::rootMatrixAdd);
-        register(":root matrix norm", "How large a matrix is. Usage: :root matrix norm <name>", RootAnalysisCommands::rootMatrixNorm);
-        register(":root matrix eigen", "What a symmetric matrix stretches, and by how much. Usage: :root matrix eigen <name>", RootAnalysisCommands::rootMatrixEigen);
-        register(":root matrix similarity", "How an error matrix looks after a change of variables. Usage: :root matrix similarity <out> <cov> <jacobian>", RootAnalysisCommands::rootMatrixSimilarity);
+
+        // --- Jets (Sphere's Java FastJet) and parton distributions (LHAPDF-style) ---
+        FastJetCommands.register();
+        LhapdfCommands.register();
+        register(":root cut new", "Name a selection so it can be reused and combined", RootGraphicsCommands::rootCutNew);
+        register(":root cut and", "Both selections at once. Usage: :root cut and <out> <a> <b>", RootGraphicsCommands::rootCutAnd);
+        register(":root cut or", "Either selection. Usage: :root cut or <out> <a> <b>", RootGraphicsCommands::rootCutOr);
+        register(":root cut not", "The entries a selection rejects. Usage: :root cut not <out> <a>", RootGraphicsCommands::rootCutNot);
+        register(":root cut show", "What a named selection says. Usage: :root cut show <name>", RootGraphicsCommands::rootCutShow);
+        register(":root cut apply", "Draw an expression under a named selection. Usage: :root cut apply <tree> <cut> <expr>", RootGraphicsCommands::rootCutApply);
+        register(":root cut count", "How many entries a named selection keeps. Usage: :root cut count <tree> <cut>", RootGraphicsCommands::rootCutCount);
+        register(":root xrootd open", "Open a file over the network. Usage: :root xrootd open <name> <url>", RootFileCommands::rootXrootdOpen);
+        register(":root xrootd ls", "List a remote directory. Usage: :root xrootd ls <url>", RootFileCommands::rootXrootdLs);
+        register(":root xrootd copy", "Copy a file to or from the network. Usage: :root xrootd copy <from> <to>", RootFileCommands::rootXrootdCopy);
+        register(":root xrootd exists", "Whether a remote path is there. Usage: :root xrootd exists <url>", RootFileCommands::rootXrootdExists);
+        register(":root xrootd stat", "Size and date of a remote path. Usage: :root xrootd stat <url>", RootFileCommands::rootXrootdStat);
+        register(":root xrootd redirector", "Set the XRootD redirector. Usage: :root xrootd redirector <host>", RootFileCommands::rootXrootdRedirector);
+        register(":root graph2d new", "Create a two-dimensional graph. Usage: :root graph2d new <name> <points>", RootGraphicsCommands::rootGraph2dNew);
+        register(":root graph2d set", "Place one point. Usage: :root graph2d set <name> <i> <x> <y> <z>", RootGraphicsCommands::rootGraph2dSet);
+        register(":root graph2d draw", "Draw it. Usage: :root graph2d draw <name> [option]", RootGraphicsCommands::rootGraph2dDraw);
+        register(":root graph2d interpolate", "Read the surface between its points. Usage: :root graph2d interpolate <name> <x> <y>", RootGraphicsCommands::rootGraph2dInterp);
+        register(":root graph2d points", "How many points it holds. Usage: :root graph2d points <name>", RootGraphicsCommands::rootGraph2dPoints);
+        register(":root graph2d hist", "The histogram it interpolates onto. Usage: :root graph2d hist <name>", RootGraphicsCommands::rootGraph2dHist);
+        register(":root axis time", "Show an axis as dates. Usage: :root axis time <hist> <x|y> [format]", RootGraphicsCommands::rootAxisTime);
+        register(":root axis label", "Put a word on one bin. Usage: :root axis label <hist> <bin> <text>", RootGraphicsCommands::rootAxisLabel);
+        register(":root axis deflate", "Drop the empty labeled bins. Usage: :root axis deflate <hist>", RootGraphicsCommands::rootAxisDeflate);
+        register(":root axis divisions", "How many ticks an axis shows. Usage: :root axis divisions <hist> <x|y> <n>", RootGraphicsCommands::rootAxisDivisions);
+        register(":root axis moreloglabels", "Label the decades in between on a log axis. Usage: :root axis moreloglabels <hist> <x|y>", RootGraphicsCommands::rootAxisMoreLog);
+        register(":root axis titleoffset", "Move an axis title away from it. Usage: :root axis titleoffset <hist> <x|y> <value>", RootGraphicsCommands::rootAxisTitleOffset);
+        register(":root axis new", "Draw an axis of your own. Usage: :root axis new <x1> <y1> <x2> <y2> <wmin> <wmax> <ndiv> [options]", RootGraphicsCommands::rootAxisNew);
+        register(":root color new", "Define a color. Usage: :root color new <index> <r> <g> <b>  (0 to 1)", RootGraphicsCommands::rootColorNew);
+        register(":root color find", "The index nearest a color. Usage: :root color find <r> <g> <b>  (0 to 1)", RootGraphicsCommands::rootColorFind);
+        register(":root color show", "What a color index holds. Usage: :root color show <index>", RootGraphicsCommands::rootColorShow);
+        register(":root color transparent", "A color you can see through. Usage: :root color transparent <index> <alpha>", RootGraphicsCommands::rootColorTransparent);
+        register(":root color bright", "A lighter shade of a color. Usage: :root color bright <index>", RootGraphicsCommands::rootColorBright);
+        register(":root color dark", "A darker shade of a color. Usage: :root color dark <index>", RootGraphicsCommands::rootColorDark);
+        register(":root color hls", "A color from hue, light and saturation. Usage: :root color hls <h> <l> <s>", RootGraphicsCommands::rootColorHls);
+        register(":root ratio new", "Data over simulation, one above the other. Usage: :root ratio new <name> <top> <bottom>", RootGraphicsCommands::rootRatioNew);
+        register(":root ratio draw", "Draw the pair. Usage: :root ratio draw <name> [option]", RootGraphicsCommands::rootRatioDraw);
+        register(":root ratio range", "What the lower panel shows. Usage: :root ratio range <name> <low> <high>", RootGraphicsCommands::rootRatioRange);
+        register(":root ratio grid", "Lines across the lower panel. Usage: :root ratio grid <name> <values...>", RootGraphicsCommands::rootRatioGrid);
+        register(":root ratio margin", "How much room the lower panel takes. Usage: :root ratio margin <name> <fraction>", RootGraphicsCommands::rootRatioMargin);
+        register(":root clones new", "An array of one class, reused rather than reallocated. Usage: :root clones new <name> <class> <size>", RootAnalysisCommands::rootClonesNew);
+        register(":root clones size", "How many it holds. Usage: :root clones size <name>", RootAnalysisCommands::rootClonesSize);
+        register(":root clones at", "What sits at one place. Usage: :root clones at <name> <index>", RootAnalysisCommands::rootClonesAt);
+        register(":root clones clear", "Empty it without giving the memory back. Usage: :root clones clear <name>", RootAnalysisCommands::rootClonesClear);
+        register(":root clones expand", "Make room for more. Usage: :root clones expand <name> <size>", RootAnalysisCommands::rootClonesExpand);
+        register(":root stat new", "Keep a running mean and spread. Usage: :root stat new <name>", RootAnalysisCommands::rootStatNew);
+        register(":root stat fill", "Add a value. Usage: :root stat fill <name> <value> [weight]", RootAnalysisCommands::rootStatFill);
+        register(":root stat mean", "Its mean so far. Usage: :root stat mean <name>", RootAnalysisCommands::rootStatMean);
+        register(":root stat rms", "Its spread so far. Usage: :root stat rms <name>", RootAnalysisCommands::rootStatRms);
+        register(":root stat sum", "The total it has added. Usage: :root stat sum <name>", RootAnalysisCommands::rootStatSum);
+        register(":root stat count", "How many values went in. Usage: :root stat count <name>", RootAnalysisCommands::rootStatCount);
+        register(":root stat print", "Everything it knows. Usage: :root stat print <name>", RootAnalysisCommands::rootStatPrint);
+        register(":root time now", "The moment it is now", RootEngineCommands::rootTimeNow);
+        register(":root time convert", "A unix second as a date. Usage: :root time convert <seconds>", RootEngineCommands::rootTimeConvert);
+        register(":root time unix", "A date as unix seconds. Usage: :root time unix <\"YYYY-MM-DD HH:MM:SS\">", RootEngineCommands::rootTimeUnix);
+        register(":root time diff", "Seconds between two unix times. Usage: :root time diff <a> <b>", RootEngineCommands::rootTimeDiff);
+        register(":root time stamp", "Now, to the nanosecond", RootEngineCommands::rootTimeStamp);
+        register(":root hist chi2test", "Whether two histograms agree. Usage: :root hist chi2test <a> <b> [UU|UW|WW|P|CHI2/NDF]", RootHistCommands::rootHistChi2Test);
+        register(":root hist sumw2", "Keep the sum of squared weights, so the errors stay right. Usage: :root hist sumw2 <name>", RootHistCommands::rootHistSumw2);
+        register(":root hist quantiles", "Where a fraction of the entries lies below. Usage: :root hist quantiles <name> <fraction>", RootHistCommands::rootHistQuantiles);
+        register(":root hist interpolate", "Read between the bins. Usage: :root hist interpolate <name> <x>", RootHistCommands::rootHistInterpolate);
+        register(":root hist cumulative", "The running total, bin by bin. Usage: :root hist cumulative <name> <out>", RootHistCommands::rootHistCumulative);
+        register(":root hist getrandom", "Draw a value the histogram would give. Usage: :root hist getrandom <name>", RootHistCommands::rootHistGetRandom);
+        register(":root hist fillrandom", "Fill it from a function. Usage: :root hist fillrandom <name> <function> <entries>", RootHistCommands::rootHistFillRandom);
+        register(":root hist dividebinomial", "Divide as an efficiency, with binomial errors. Usage: :root hist dividebinomial <out> <passed> <total>", RootHistCommands::rootHistDivideBinomial);
+        register(":root hist residuals", "What a fit left behind, bin by bin. Usage: :root hist residuals <hist> <function> <out>", RootHistCommands::rootHistResiduals);
+        register(":root hist pulls", "The same in units of the error, which is what to look at. Usage: :root hist pulls <hist> <function> <out>", RootHistCommands::rootHistPulls);
+        register(":root hist underflow", "What fell off the low end. Usage: :root hist underflow <name>", RootHistCommands::rootHistUnderflow);
+        register(":root hist overflow", "What fell off the high end. Usage: :root hist overflow <name>", RootHistCommands::rootHistOverflow);
+        register(":root hist maxbin", "Which bin holds the most. Usage: :root hist maxbin <name>", RootHistCommands::rootHistMaximumBin);
+        register(":root hist binwidth", "How wide a bin is. Usage: :root hist binwidth <name> <bin>", RootHistCommands::rootHistBinWidth);
+        register(":root hist effective", "Entries a weighted histogram is worth. Usage: :root hist effective <name>", RootHistCommands::rootHistEffectiveEntries);
+        register(":root fit fractions", "How much of the data each model accounts for. Usage: :root fit fractions <data> <model1> <model2> [model3]", RootAnalysisCommands::rootFitFractions);
+        register(":root fit range", "Fit only part of it. Usage: :root fit range <hist> <function> <low> <high>", RootAnalysisCommands::rootFitRange);
+        register(":root fit likelihood", "Fit by likelihood, which is right when the bins are thin. Usage: :root fit likelihood <hist> <function>", RootAnalysisCommands::rootFitLikelihood);
+        register(":root fit weighted", "Likelihood fit of a weighted histogram. Usage: :root fit weighted <hist> <function>", RootAnalysisCommands::rootFitWeighted);
+        register(":root fit quality", "Whether a fit is any good. Usage: :root fit quality <function>", RootAnalysisCommands::rootFitQuality);
+        register(":root fit confband", "The band a fit is confident within. Usage: :root fit confband <hist> <out> [level]", RootAnalysisCommands::rootFitConfBand);
+        register(":root eff wilson", "Efficiency with the Wilson interval, which stays right at the ends. Usage: :root eff wilson <passed> <total> [level]", RootAnalysisCommands::rootEffWilson);
+        register(":root eff agresti", "The Agresti-Coull interval, the simple one that also behaves. Usage: :root eff agresti <passed> <total> [level]", RootAnalysisCommands::rootEffAgresti);
+        register(":root eff normal", "The plain interval, which is wrong near zero and one. Usage: :root eff normal <passed> <total> [level]", RootAnalysisCommands::rootEffNormal);
+        register(":root eff poisson", "The interval on a count, for a rate rather than a fraction. Usage: :root eff poisson <observed> [level]", RootAnalysisCommands::rootEffPoisson);
+        register(":root func derivative", "How fast a function climbs. Usage: :root func derivative <name> <x>", RootHistCommands::rootFuncDerivative);
+        register(":root func second", "How fast its slope changes. Usage: :root func second <name> <x>", RootHistCommands::rootFuncSecond);
+        register(":root func integralerror", "What the fit uncertainty does to an integral. Usage: :root func integralerror <name> <low> <high>", RootHistCommands::rootFuncIntegralError);
+        register(":root func random", "Draw a value distributed as the function. Usage: :root func random <name>", RootHistCommands::rootFuncRandom);
+        register(":root func normalized", "Make it integrate to one over its range. Usage: :root func normalized <name> <0|1>", RootHistCommands::rootFuncNormalized);
+        register(":root func fwhm", "How wide a peak is at half its height. Usage: :root func fwhm <name> <low> <high>", RootHistCommands::rootFuncFwhm);
+        register(":root tree drawopt", "Draw with a selection and an option. Usage: :root tree drawopt <tree> <expr> <selection> <option>", RootTreeCommands::rootTreeDrawOpt);
+        register(":root tree estimate", "How many entries Draw may hold at once. Usage: :root tree estimate <tree> <n>", RootTreeCommands::rootTreeEstimate);
+        register(":root tree aliases", "The short names this tree answers to. Usage: :root tree aliases <tree>", RootTreeCommands::rootTreeAliasList);
+        register(":root tree refresh", "Pick up what has been written since. Usage: :root tree refresh <tree>", RootTreeCommands::rootTreeRefresh);
+        register(":root tree formula", "Evaluate an expression on one entry. Usage: :root tree formula <tree> <entry> <expression>", RootTreeCommands::rootTreeFormula);
+        register(":root tree size", "What the tree costs on disk and in memory. Usage: :root tree size <tree>", RootTreeCommands::rootTreeTotalSize);
+        register(":root file recover", "Read what is left of a file that was not closed. Usage: :root file recover <name>", RootFileCommands::rootFileRecover);
+        register(":root file compression", "How much the compression saved. Usage: :root file compression <name>", RootFileCommands::rootFileCompressionInfo);
+        register(":root file trees", "The trees a file holds, and how big they are. Usage: :root file trees <name>", RootFileCommands::rootFileTreeList);
+        register(":root file free", "Room a file has left over inside itself. Usage: :root file free <name>", RootFileCommands::rootFileFree);
+        register(":root matrix multiply", "One matrix times another. Usage: :root matrix multiply <out> <a> <b>", RootAnalysisCommands::rootMatrixMultiply);
+        register(":root matrix add", "One matrix plus another. Usage: :root matrix add <out> <a> <b>", RootAnalysisCommands::rootMatrixAdd);
+        register(":root matrix norm", "How large a matrix is. Usage: :root matrix norm <name>", RootAnalysisCommands::rootMatrixNorm);
+        register(":root matrix eigen", "What a symmetric matrix stretches, and by how much. Usage: :root matrix eigen <name>", RootAnalysisCommands::rootMatrixEigen);
+        register(":root matrix similarity", "How an error matrix looks after a change of variables. Usage: :root matrix similarity <out> <cov> <jacobian>", RootAnalysisCommands::rootMatrixSimilarity);
         register(":root matrix condition", "Whether inverting it will mean anything. Usage: :root matrix condition <name>", RootAnalysisCommands::rootMatrixCondition);
         register(":root chain list", "The analysis chains saved in user_scripts/, both layers", RootEngineCommands::rootChainList);
         register(":root chain show", "What a chain would run, both ways. Usage: :root chain show <name>", RootEngineCommands::rootChainShow);
@@ -956,41 +970,67 @@ public class CommandDefinitions {
      */
     private static final Map<String, String[]> EXTERNAL_COMMANDS = new LinkedHashMap<>();
 
+    /**
+     * Documents a command something other than a handler answers.
+     *
+     * The filesystem tools are plugins, so they are dispatched before the
+     * internal table is consulted. Registering them here would intercept them;
+     * this names them for the help instead, and the usage is the one the tool
+     * itself prints, so the two cannot drift apart without the tool's own
+     * message drifting with it.
+     */
     private static void registerExternal(String name, String section, String description) {
-        EXTERNAL_COMMANDS.put(name, new String[] {section, description});
+        registerExternal(name, section, description, "");
+    }
+
+    /** The same, with the usage line the tool prints when it is misused. */
+    private static void registerExternal(String name, String section,
+                                         String description, String usage) {
+        EXTERNAL_COMMANDS.put(name, new String[] {section, description, usage});
+    }
+
+    /** The usage line of a command, or empty when it takes no arguments. */
+    public static String usageOf(String name) {
+        final String[] one = EXTERNAL_COMMANDS.get(name);
+        return (one == null || one.length < 3) ? "" : one[2];
     }
 
     static {
-        registerExternal(":ls", "files", "List what the current directory holds");
-        registerExternal(":cat", "files", "Print a file");
-        registerExternal(":head", "files", "First lines of a file");
-        registerExternal(":tail", "files", "Last lines of a file, -f to follow it");
-        registerExternal(":tail-stop", "files", "Stop following a file");
-        registerExternal(":wc", "files", "Count lines, words and bytes");
-        registerExternal(":grep", "files", "Search a pattern inside files");
-        registerExternal(":find", "files", "Find files by name");
-        registerExternal(":diff", "files", "What differs between two files");
-        registerExternal(":cp", "files", "Copy a file or a directory");
-        registerExternal(":mv", "files", "Move or rename");
-        registerExternal(":rm", "files", "Remove a file or a directory");
-        registerExternal(":mkdir", "files", "Create a directory");
-        registerExternal(":touch", "files", "Create an empty file, or update its date");
-        registerExternal(":symlink", "files", "Create a symbolic link");
-        registerExternal(":stat", "files", "Size, dates and permissions of a file");
-        registerExternal(":tree", "files", "The directory tree");
-        registerExternal(":du", "files", "What a directory weighs");
-        registerExternal(":df", "files", "Free space on the filesystems");
-        registerExternal(":sha256", "files", "SHA-256 of a file");
-        registerExternal(":md5", "files", "MD5 of a file");
-        registerExternal(":which", "files", "Where a program is found");
-        registerExternal(":watch", "files", "Report every change under a directory");
-        registerExternal(":watch-stop", "files", "Stop watching");
-
-        registerExternal(":cd", "dirs", "Change the current directory");
-        registerExternal(":pwd", "dirs", "Print the current directory");
-        registerExternal(":pushd", "dirs", "Change directory, keeping the previous one");
-        registerExternal(":popd", "dirs", "Return to the directory pushd kept");
-        registerExternal(":dirs", "dirs", "The directory stack");
+        registerExternal(":ls", "system", "List what the current directory holds", ":ls [-l] [-a] [-h] [-t] [-S] [-r] [--all] [path]");
+        registerExternal(":cat", "system", "Print a file", ":cat [--head N] [--tail N] <file>");
+        registerExternal(":head", "system", "First lines of a file", ":head [-n N] <file>");
+        registerExternal(":tail", "system", "Last lines of a file, -f to follow it", ":tail [-n N] [-f] <file>");
+        registerExternal(":tail-stop", "system", "Stop following a file", ":tail-stop");
+        registerExternal(":wc", "system", "Count lines, words and bytes", ":wc [-l] [-w] [-c] <file> [file...]");
+        registerExternal(":grep", "system", "Search a pattern inside files", ":grep [-i] [-n] [-r] [-w] [-v] [-c] [--include=GLOB] <pattern> [path]");
+        registerExternal(":find", "system", "Find files by name", ":find [path] [-name GLOB] [-iname GLOB] [-type f|d] [-size N] [-newer FILE] [-maxdepth N]");
+        registerExternal(":diff", "system", "What differs between two files", ":diff [-U N] [-w] [-q] <file1> <file2>");
+        registerExternal(":cp", "system", "Copy a file or a directory", ":cp [-r] [-f] <source> <destination>");
+        registerExternal(":mv", "system", "Move or rename", ":mv [-f] <source> <destination>");
+        registerExternal(":rm", "system", "Remove a file or a directory", ":rm [-r] [--confirm] <path> [path...]");
+        registerExternal(":mkdir", "system", "Create a directory", ":mkdir <directory>");
+        registerExternal(":touch", "system", "Create an empty file, or update its date", ":touch [-c] <file> [file...]");
+        registerExternal(":symlink", "system", "Create a symbolic link", ":symlink <target> <link-name>");
+        registerExternal(":stat", "system", "Size, dates and permissions of a file", ":stat <path>");
+        registerExternal(":tree", "system", "The directory tree", ":tree [-L N] [-a] [-d] [-s] [--all] [path]");
+        registerExternal(":du", "system", "What a directory weighs", ":du [-d N] [--top N] [--name] [path]");
+        registerExternal(":df", "system", "Free space on the filesystems", ":df [path]");
+        registerExternal(":sha256", "system", "SHA-256 of a file", ":sha256 [--check DIGEST] <file> [file...]");
+        registerExternal(":md5", "system", "MD5 of a file", ":md5 [--check DIGEST] <file> [file...]");
+        registerExternal(":which", "system", "Where a program is found", ":which [-a] [tool...]");
+        registerExternal(":env", "system", "What an environment variable holds", ":env [name]");
+        registerExternal(":watch", "system", "Report every change under a directory", ":watch [-n SECONDS] <path>");
+        registerExternal(":watch-stop", "system", "Stop watching", ":watch-stop");
+        registerExternal(":cd", "system", "Change the current directory", ":cd [directory]   (cd also works)");
+        registerExternal(":pwd", "system", "Print the current directory", ":pwd   (pwd also works)");
+        registerExternal(":pushd", "system", "Change directory, keeping the previous one", ":pushd <directory>   (pushd also works)");
+        registerExternal(":popd", "system", "Return to the directory pushd kept", ":popd [+N]   (popd also works)");
+        registerExternal(":dirs", "system", "The directory stack", ":dirs [-v | -c]   (dirs also works)");
+        registerExternal("cd", "system", "Change the current directory, as a shell does", "cd [directory]");
+        registerExternal("pwd", "system", "Print the current directory", "pwd");
+        registerExternal("pushd", "system", "Change directory, keeping the previous one on a stack", "pushd <directory>");
+        registerExternal("popd", "system", "Return to the directory pushd kept", "popd [+N]");
+        registerExternal("dirs", "system", "The directory stack", "dirs [-v | -c]");
     }
 
     /** Name and one-line description of every command a user can type. */
@@ -1047,4 +1087,4 @@ public class CommandDefinitions {
     public static Map<String, CommandInfo> all() {
         return Collections.unmodifiableMap(INTERNAL_COMMANDS);
     }
-}
+}
