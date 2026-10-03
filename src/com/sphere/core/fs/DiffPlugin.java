@@ -144,7 +144,7 @@ public class DiffPlugin implements CommandRouter.CommandPlugin {
                 if (aside.isEmpty()) {
                     AppLogger.success("The two files are identical.");
                 } else {
-                    AppLogger.info("Same lines, different bytes: " + aside);
+                    AppLogger.result("Same lines, different bytes: " + aside);
                 }
             }
         }.execute();

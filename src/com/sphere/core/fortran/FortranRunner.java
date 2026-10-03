@@ -45,7 +45,9 @@ public final class FortranRunner {
         }
 
         File binary = binaryFor(source);
-        if (!build(compiler, source, compileFlags, binary, workingDirectory)) {
+        final List<String> flags = new ArrayList<>(compileFlags);
+        flags.addAll(FortranBridge.flagsFor(source, compiler));
+        if (!build(compiler, source, flags, binary, workingDirectory)) {
             return;
         }
         execute(binary, arguments, workingDirectory);
@@ -66,6 +68,8 @@ public final class FortranRunner {
         List<String> command = new ArrayList<>();
         command.add(compiler);
         command.add("-fsyntax-only");
+        // A program that uses the bridge module needs its .mod to be checked.
+        command.addAll(FortranBridge.includeFlags(source, compiler));
         command.add(source.getAbsolutePath());
         try {
             ProcessBuilder builder = new ProcessBuilder(command);
@@ -172,6 +176,7 @@ public final class FortranRunner {
             if (variables != null) {
                 builder.environment().put(PythonProbe.FOLDER_VARIABLE, variables);
             }
+            com.sphere.core.bridge.Bridge.environment(builder.environment());
             Process process = builder.start();
             com.sphere.core.telemetry.ProcessMemory.Watcher memory =
                 com.sphere.core.telemetry.ProcessMemory.watch(process);

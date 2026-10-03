@@ -82,7 +82,7 @@ public class WatchPlugin implements CommandRouter.CommandPlugin {
         }
 
         stop(false);
-        AppLogger.info("Watching  " + command + "  every " + seconds
+        AppLogger.result("Watching  " + command + "  every " + seconds
                        + "s. Type  :watch-stop  to stop.");
 
         final int interval = seconds;
@@ -114,7 +114,7 @@ public class WatchPlugin implements CommandRouter.CommandPlugin {
             thread.interrupt();
             if (announce) AppLogger.success("Stopped watching.");
         } else if (announce) {
-            AppLogger.info("Nothing is being watched.");
+            AppLogger.result("Nothing is being watched.");
         }
     }
 }

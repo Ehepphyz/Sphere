@@ -4,6 +4,7 @@ import com.sphere.core.cpp.CppDiagnosticsEngine;
 import com.sphere.core.cpp.CppDiagnosticsParser.Diagnostic;
 import com.sphere.core.cpp.CppIntellisenseBackend;
 import com.sphere.core.fastjet.Citations;
+import com.sphere.core.fjcontrib.ContribCitations;
 import com.sphere.core.rootbackend.LhapdfCitation;
 import com.sphere.core.rootbackend.RootBackend;
 import com.sphere.core.rootbackend.RootBridgeCompiler;
@@ -81,11 +82,12 @@ public final class ConsoleContextMenu {
     private final JMenuItem rootRebuild   = ConsoleMenuFactory.item("Rebuild ROOT Bridge");
     private final JMenuItem rootEnv       = ConsoleMenuFactory.item("Print ROOT Environment");
 
-    // The references ROOT, FastJet and LHAPDF ask for, shown on demand rather
-    // than printed as banners into the output.
+    // The references ROOT, FastJet, fjcontrib and LHAPDF ask for, shown on
+    // demand rather than printed as banners into the output.
     private final JMenu citationsMenu     = ConsoleMenuFactory.submenu("Citations");
     private final JMenuItem citeRoot      = ConsoleMenuFactory.item("Citation ROOT");
     private final JMenuItem citeFastJet   = ConsoleMenuFactory.item("Citation FastJet");
+    private final JMenuItem citeContrib   = ConsoleMenuFactory.item("Citation fjcontrib");
     private final JMenuItem citeLhapdf    = ConsoleMenuFactory.item("Citation LHAPDF");
 
     public ConsoleContextMenu(Host host,
@@ -148,6 +150,7 @@ public final class ConsoleContextMenu {
     private void buildCitationsMenu() {
         citationsMenu.add(citeRoot);
         citationsMenu.add(citeFastJet);
+        citationsMenu.add(citeContrib);
         citationsMenu.add(citeLhapdf);
     }
 
@@ -160,8 +163,8 @@ public final class ConsoleContextMenu {
         clearLog.addActionListener(e -> host.clearLogView());
 
         JMenu settingsMenu = ConsoleMenuFactory.submenu("Settings");
-        JMenuItem editSettings = ConsoleMenuFactory.item("settings.conf");
-        JMenuItem editSessions = ConsoleMenuFactory.item("Sessions");
+        JMenuItem editSettings = ConsoleMenuFactory.item("Edit settings.conf");
+        JMenuItem editSessions = ConsoleMenuFactory.item("Sessions Manager");
         JMenuItem editWhitelist = ConsoleMenuFactory.item("Python Modules Whitelist");
         JMenuItem editTrusted = ConsoleMenuFactory.item("Trusted Commands");
         editSettings.addActionListener(e -> host.openSettingsFile());
@@ -172,6 +175,7 @@ public final class ConsoleContextMenu {
             host.openConfigFile("Edit Trusted Commands", "config/trusted_commands.src"));
         settingsMenu.add(editSettings);
         settingsMenu.add(editSessions);
+        settingsMenu.add(ConsoleMenuFactory.separator());
         settingsMenu.add(editWhitelist);
         settingsMenu.add(editTrusted);
 
@@ -190,8 +194,10 @@ public final class ConsoleContextMenu {
         popup.add(ConsoleMenuFactory.separator());
         popup.add(lspMenu);
         popup.add(rootMenu);
-        popup.add(citationsMenu);
+        popup.add(ConsoleMenuFactory.separator());      
         popup.add(settingsMenu);
+        popup.add(ConsoleMenuFactory.separator());
+        popup.add(citationsMenu);
 
         popup.addPopupMenuListener(new PopupMenuListener() {
             @Override
@@ -254,6 +260,8 @@ public final class ConsoleContextMenu {
 
         citeFastJet.addActionListener(e ->
             CitationDialog.show(popup.getInvoker(), "Citation FastJet", Citations.fastjetText()));
+        citeContrib.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation fjcontrib", ContribCitations.text()));
         citeLhapdf.addActionListener(e ->
             CitationDialog.show(popup.getInvoker(), "Citation LHAPDF", LhapdfCitation.text()));
         // The release comes from root-config, which is a process: not on the EDT.
@@ -300,7 +308,7 @@ public final class ConsoleContextMenu {
 
             private void report(String label, String flag) {
                 String value = RootBridgeCompiler.getRootConfigOutput(flag, settings);
-                host.log(value == null || value.isBlank() ? LogLevel.WARN : LogLevel.INFO,
+                host.log(value == null || value.isBlank() ? LogLevel.WARN : LogLevel.PLAIN,
                          "ROOT " + label + ": "
                          + (value == null || value.isBlank() ? "unavailable" : value.trim()));
             }

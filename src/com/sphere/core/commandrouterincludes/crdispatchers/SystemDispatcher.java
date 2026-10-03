@@ -35,7 +35,7 @@ public class SystemDispatcher implements CommandDispatcher {
             if (tokens.size() > 1) {
                 String processToken = tokens.get(1);
                 if (ctx.killProcess(processToken)) {
-                    AppLogger.info("Process '" + processToken + "' was successfully terminated by user request.");
+                    AppLogger.result("Process '" + processToken + "' was successfully terminated by user request.");
                 } else {
                     AppLogger.error("No active running process found registered under token: " + processToken);
                 }

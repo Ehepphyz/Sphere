@@ -49,7 +49,7 @@ public class Handlers {
      * list of names is read when looking for one.
      */
     static void helpCategories() {
-        AppLogger.info("Usage: :help <category>");
+        AppLogger.result("Usage: :help <category>");
         java.util.List<String> names =
             new java.util.ArrayList<>(CommandDefinitions.sections().keySet());
         java.util.Map<String, java.util.List<String>> sections = CommandDefinitions.sections();
@@ -81,7 +81,7 @@ public class Handlers {
 
     /** Every command, under the heading of its category. */
     static void helpEverything(Map<String, String> commands) {
-        AppLogger.info("Commands by category. ':help <category>' shows one of them.");
+        AppLogger.result("Commands by category. ':help <category>' shows one of them.");
         java.util.Map<String, java.util.List<String>> categories = CommandDefinitions.sections();
         for (java.util.Map.Entry<String, java.util.List<String>> entry : categories.entrySet()) {
             AppLogger.raw("");
@@ -147,6 +147,8 @@ public class Handlers {
             case "file", "files", "fs", "dir", "dirs", "directory", "directories",
                  "unix", "linux", "shell", "posix" -> "system";
             case "python" -> "py";
+            case "fjcontrib", "contrib", "contribs", "fastjet-contrib" -> "fjco";
+            case "fastjet", "jets" -> "fjet";
             case "fortran" -> "fort";
             case "javascript" -> "js";
             case "c++", "cxx" -> "cpp";
@@ -168,7 +170,7 @@ public class Handlers {
      */
     static void list(Map<String, String> commands,
                              java.util.Collection<String> names, String what) {
-        AppLogger.info("[" + what + "]");
+        AppLogger.result("[" + what + "]");
         for (String name : names) {
             AppLogger.raw("  " + name + " - " + commands.getOrDefault(name, ""));
             final String usage = CommandDefinitions.usageOf(name);
@@ -179,7 +181,7 @@ public class Handlers {
     }
 
     public static void version(String input, CommandExecutionContext c) {
-        AppLogger.info("Sphere version 2026.1.0.0");
+        AppLogger.result("Sphere version 2026.1.0.0");
     }
 
     public static void quit(String input, CommandExecutionContext c) {
@@ -511,19 +513,19 @@ public class Handlers {
 
     // --- Environment Commands ---
     public static void envList(String input, CommandExecutionContext c) {
-        AppLogger.info("[env] List available environments (placeholder)");
+        AppLogger.result("[env] List available environments (placeholder)");
     }
 
     public static void envActivate(String input, CommandExecutionContext c) {
-        AppLogger.info("[env] Activate environment (placeholder)");
+        AppLogger.result("[env] Activate environment (placeholder)");
     }
 
     public static void envDeactivate(String input, CommandExecutionContext c) {
-        AppLogger.info("[env] Deactivate current environment (placeholder)");
+        AppLogger.result("[env] Deactivate current environment (placeholder)");
     }
 
     public static void envInfo(String input, CommandExecutionContext c) {
-        AppLogger.info("[env] Display current environment info (placeholder)");
+        AppLogger.result("[env] Display current environment info (placeholder)");
     }
 
     // --- Backend Commands ---
@@ -534,6 +536,10 @@ public class Handlers {
         }
         c.ctx.backends.forEach((name, backend) -> AppLogger.raw(String.format("  %-10s %s",
             name, backend == null ? "not loaded" : backend.getClass().getSimpleName())));
+        // FastJet and fjcontrib have no process of their own: they run in Sphere's JVM.
+        for (com.sphere.core.InProcessEngine engine : com.sphere.core.InProcessEngine.values()) {
+            AppLogger.raw(String.format("  %-10s %s", engine.key(), engine.description()));
+        }
     }
 
     public static void backendDiag(String input, CommandExecutionContext c) {
@@ -542,19 +548,33 @@ public class Handlers {
             return;
         }
         com.sphere.utils.SettingsManager sm = new com.sphere.utils.SettingsManager();
+        // The name shown, then the key the router registers the backend under:
+        // Python's is "py", and looking it up as "python" said "not loaded" always.
         String[][] probes = {
-            {"python", "PYTHON_EXEC", "python3"},
-            {"cpp", "GPP_DIR", "g++"},
-            {"js", "NODE_DIR", "node"},
+            {"python", "py", "PYTHON_EXEC", "python3"},
+            {"cpp", "cpp", "GPP_DIR", "g++"},
+            {"julia", "julia", "JULIA_DIR", "julia"},
+            {"js", "js", "NODE_DIR", "node"},
         };
         for (String[] probe : probes) {
-            Object backend = c.ctx.backends.get(probe[0]);
-            String tool = sm.isDeclaredEmpty(probe[1]) ? null : sm.resolveTool(probe[1], probe[2]);
+            Object backend = c.ctx.backends.get(probe[1]);
+            String tool = sm.isDeclaredEmpty(probe[2]) ? null : sm.resolveTool(probe[2], probe[3]);
             AppLogger.raw(String.format("  %-8s %-14s %s", probe[0],
                 backend == null ? "not loaded" : "loaded",
-                tool == null ? (sm.isDeclaredEmpty(probe[1])
-                    ? probe[1] + " is empty in settings.conf" : probe[2] + " not found")
+                tool == null ? (sm.isDeclaredEmpty(probe[2])
+                    ? probe[2] + " is empty in settings.conf" : probe[3] + " not found")
                     : tool));
+        }
+        com.sphere.core.rootbackend.RootBackend root = com.sphere.core.rootbackend.RootBackend.getInstance();
+        AppLogger.raw(String.format("  %-8s %-14s %s", "root",
+            c.ctx.backends.get("root") == null ? "not loaded" : "loaded",
+            root != null && root.isAvailable() ? "engine running (':root ping')" : "engine not running"));
+        // No executable to look for: each answers a probe that does real work.
+        for (com.sphere.core.InProcessEngine engine : com.sphere.core.InProcessEngine.values()) {
+            com.sphere.core.InProcessEngine.Probe answer = engine.probe();
+            AppLogger.raw(String.format(java.util.Locale.ROOT, "  %-8s %-14s %s in %.1f ms: %s", engine.key(),
+                answer.ok() ? "in process" : "FAILED", answer.ok() ? "PONG" : "wrong answer",
+                answer.millis(), answer.detail()));
         }
     }
 
@@ -730,7 +750,7 @@ public class Handlers {
                     AppLogger.error("OS Level Denial: Failed to terminate process [PID: " + pid + "]. Check execution permissions.");
                 }
             } else {
-                AppLogger.info("System supervisor scan completed: No active process found with PID '" + pid + "'.");
+                AppLogger.result("System supervisor scan completed: No active process found with PID '" + pid + "'.");
             }
         } catch (NumberFormatException e) {
             AppLogger.warn("Invalid argument: ':kill' expects a numeric Process ID (PID). Example: :kill 1234");
@@ -747,9 +767,9 @@ public class Handlers {
         if (ctx != null && ctx.ctx != null) {
             java.util.Map<String, Process> mine = ctx.ctx.getActiveProcesses();
             if (mine.isEmpty()) {
-                AppLogger.info("No command started from Sphere is running.");
+                AppLogger.result("No command started from Sphere is running.");
             } else {
-                AppLogger.info("Started from Sphere, stoppable with ':kill <name>':");
+                AppLogger.result("Started from Sphere, stoppable with ':kill <name>':");
                 for (java.util.Map.Entry<String, Process> one : mine.entrySet()) {
                     AppLogger.raw(String.format("  %-20s pid %-10s %s", one.getKey(),
                         one.getValue().pid(),
@@ -895,7 +915,7 @@ public class Handlers {
             return;
         }
         int stale = 0;
-        AppLogger.info("What a build would do, under " + made.getRoot());
+        AppLogger.result("What a build would do, under " + made.getRoot());
         for (com.sphere.core.cpp.CppIncrementalBuilder.Unit unit : units) {
             if (unit.stale()) stale++;
             AppLogger.raw(String.format("  %-40s %s",
@@ -976,7 +996,7 @@ public class Handlers {
     public static void cppProject(String input, CommandExecutionContext c) {
         com.sphere.core.cpp.CppProjectManager made = project(c);
         if (made == null) return;
-        AppLogger.info("Project at " + made.getRootDirectory());
+        AppLogger.result("Project at " + made.getRootDirectory());
         AppLogger.raw("  build system  " + made.getBuildSystem()
                       + (made.hasBuildSystem() ? "   (" + made.getBuildSystem().getMarkerFile()
                                                  + " is there)" : "   (assumed, no marker file)"));
@@ -1037,7 +1057,7 @@ public class Handlers {
     private static void runProjectStep(CommandExecutionContext c,
                                        java.util.List<String> command, String step) {
         if (command.isEmpty()) {
-            AppLogger.info("This build system has no " + step + " step of its own.");
+            AppLogger.result("This build system has no " + step + " step of its own.");
             return;
         }
         final com.sphere.core.cpp.CppBackend backend = cppBackend(c);
@@ -1314,7 +1334,7 @@ public class Handlers {
             // Graceful fallback safeguard
         }
 
-        AppLogger.info(mode == null ? "Exited persistent language shell state." : "Entered " + mode + " persistent execution mode.");
+        AppLogger.result(mode == null ? "Exited persistent language shell state." : "Entered " + mode + " persistent execution mode.");
     }
 
     public static void echoCommand(String input, CommandExecutionContext ctx) {
@@ -1326,7 +1346,7 @@ public class Handlers {
         }
 
         if ("all".equalsIgnoreCase(args)) {
-            AppLogger.info("--- Sphere Config Registry Cache ---");
+            AppLogger.result("--- Sphere Config Registry Cache ---");
             System.getenv().keySet().stream().sorted().forEach(key -> 
                 AppLogger.raw("  Env  -> " + key)
             );
@@ -1343,7 +1363,7 @@ public class Handlers {
                     AppLogger.raw(osFallback);
                     return;
                 }
-                AppLogger.info("$" + varName + " exists, but it is empty (null).");
+                AppLogger.result("$" + varName + " exists, but it is empty (null).");
             } else {
                 AppLogger.raw(varValue);
             }
@@ -1408,6 +1428,11 @@ public class Handlers {
      * the caller already resolved; anything else is first looked up among the
      * registered :root commands, and only then handed to the interpreter.
      */
+    /** ".x hsimple.C", ".ls", ".q": a line for ROOT's prompt itself rather than C++. */
+    public static boolean isRootPromptCommand(String line) {
+        return RootPrompt.isPromptCommand(line);
+    }
+
     public static void sendToRootBridge(String command, CommandExecutionContext context) {
         if (command == null || command.isBlank()) {
             return;
@@ -1415,6 +1440,17 @@ public class Handlers {
         String text = command.trim();
         if (text.regionMatches(true, 0, "CLING_EXEC ", 0, 11)) {
             cling(context, text.substring(11).trim());
+            return;
+        }
+        // ROOT's browser is a window of ROOT's own; here it is Sphere's TBrowser.
+        if (java.util.regex.Pattern.compile("\\bnew\\s+TBrowser\\b|^\\s*TBrowser\\s+\\w+\\s*[;(]?\\s*$")
+                .matcher(text).find()) {
+            RootDemoCommands.browser(":root browser", context);
+            return;
+        }
+        // .x, .L, .ls, .demo, .q...: ROOT's prompt commands, not C++.
+        if (RootPrompt.isPromptCommand(text)) {
+            RootPrompt.run(text, context);
             return;
         }
         String full = text.startsWith(":root") ? text : ":root " + text;
@@ -1439,7 +1475,7 @@ public class Handlers {
                 return;
             }
         }
-        AppLogger.info(answer);
+        AppLogger.result(answer);
     }
 
     // --- Unknown command rather than a puzzling interpreter error ---
@@ -1602,14 +1638,14 @@ public class Handlers {
             AppLogger.error("No answer from the engine (opcode " + opcode + ").");
             return;
         }
-        AppLogger.info(answer);
+        AppLogger.result(answer);
     }
 
     /** Runs one C++ expression in the engine's interpreter and prints the result. */
     static void cling(CommandExecutionContext c, String expression) {
         String answer = clingAnswer(c, expression);
         if (answer != null) {
-            AppLogger.info(answer);
+            AppLogger.result(answer);
         }
     }
 
@@ -1728,17 +1764,17 @@ public class Handlers {
     public static void plotsAdd(String i, CommandExecutionContext c) {
         String a = args(i, ":plots add");
         if (a.isEmpty()) {
-            usage(":plots add <file.png|jpg|svg>");
+            usage(":plots add <file.png|jpg|tif|svg>");
             return;
         }
         java.io.File image = resolve(a);
         if (!com.sphere.components.imaging.ImageFileIO.isImage(image)) {
             AppLogger.error(image + " is not a picture Sphere reads. "
-                + "It reads png, jpg, jpeg, gif, bmp and svg.");
+                + "It reads " + String.join(", ", com.sphere.components.imaging.ImageFileIO.READABLE) + ".");
             return;
         }
         com.sphere.components.rootview.RootPlotsPanel.instance().showImage(image);
-        AppLogger.info(image.getName() + " shown in the Plots tab");
+        AppLogger.result(image.getName() + " shown in the Plots tab");
     }
 
     /** Adds a folder to the ones watched for new pictures. */
@@ -1751,7 +1787,7 @@ public class Handlers {
             for (java.nio.file.Path folder : panel.watched()) {
                 text.append("\n  ").append(folder);
             }
-            AppLogger.info(text.toString());
+            AppLogger.result(text.toString());
             return;
         }
         java.io.File folder = resolve(a);
@@ -1760,7 +1796,7 @@ public class Handlers {
             return;
         }
         panel.watch(folder.toPath());
-        AppLogger.info("Watching " + folder + " for new pictures");
+        AppLogger.result("Watching " + folder + " for new pictures");
     }
 
     public static void plotsUnwatch(String i, CommandExecutionContext c) {
@@ -1772,7 +1808,7 @@ public class Handlers {
         final boolean dropped = com.sphere.components.rootview.RootPlotsPanel
             .instance().unwatch(resolve(a).toPath());
         if (dropped) {
-            AppLogger.info("No longer watching " + resolve(a));
+            AppLogger.result("No longer watching " + resolve(a));
         } else {
             AppLogger.error("That folder was not being watched. "
                 + "Try :plots watch to see which are.");
@@ -1789,7 +1825,7 @@ public class Handlers {
             panel.setOutputFolder(folder.toPath());
         }
         try {
-            AppLogger.info("Plots are written to " + panel.outputFolder());
+            AppLogger.result("Plots are written to " + panel.outputFolder());
         } catch (java.io.IOException unwritable) {
             AppLogger.error("That folder cannot be used: " + unwritable.getMessage());
         }
@@ -1803,10 +1839,22 @@ public class Handlers {
             new com.sphere.utils.SettingsManager());
     }
 
+    /**
+     * Opens the session. What follows is handed to Julia itself, as what sits
+     * before the bracket of "::jul -t 4 [@ f.jl]" is: ":julia start -t 4
+     * --project=." gives a session with four threads in that project.
+     */
     public static void juliaStart(String i, CommandExecutionContext c) {
+        final String rest = args(i, ":julia start");
         try {
-            julia().start();
-            AppLogger.info("Julia session open. What it defines stays between commands.");
+            if (rest.isEmpty()) {
+                julia().start();
+            } else {
+                julia().start(com.sphere.core.commandrouterincludes.Tokenizer.DEFAULT.tokenize(rest));
+            }
+            final java.util.List<String> flags = julia().flags();
+            AppLogger.result("Julia session open" + (flags.isEmpty() ? "" : " (" + String.join(" ", flags) + ")")
+                           + ". What it defines stays between commands.");
         } catch (java.io.IOException unavailable) {
             AppLogger.error(unavailable.getMessage());
         }
@@ -1814,7 +1862,7 @@ public class Handlers {
 
     public static void juliaStop(String i, CommandExecutionContext c) {
         julia().shutdown();
-        AppLogger.info("Julia session closed. Its variables went with it.");
+        AppLogger.result("Julia session closed. Its variables went with it.");
     }
 
     public static void juliaMode(String i, CommandExecutionContext c) {
@@ -1832,7 +1880,7 @@ public class Handlers {
 
     /** Prints what the three columns measure and where those widths came from. */
     public static void layoutReport(String i, CommandExecutionContext c) {
-        AppLogger.info(com.sphere.Sphere.layoutReport());
+        AppLogger.result(com.sphere.Sphere.layoutReport());
     }
 
     public static void fortMode(String i, CommandExecutionContext c) {
@@ -1916,6 +1964,9 @@ public class Handlers {
 
     public static void juliaDiag(String i, CommandExecutionContext c) {
         reportTool("julia", "JULIA_DIR", "julia", "--version");
+        final java.util.List<String> flags = julia().flags();
+        AppLogger.raw("  session: " + (julia().isRunning() ? "running" : "not running")
+                      + (flags.isEmpty() ? ", no flags" : ", flags " + String.join(" ", flags)));
     }
 
     // ---- variables ----------------------------------------------------------
@@ -1948,7 +1999,7 @@ public class Handlers {
     /** Says where the variables would come from, and what is in the way. */
     public static void varsDiag(String i, CommandExecutionContext c) {
         registerRootVariables();
-        AppLogger.info(com.sphere.components.variables.VariablesPanel.instance()
+        AppLogger.result(com.sphere.components.variables.VariablesPanel.instance()
                                                                     .diagnosis());
     }
 
@@ -1956,7 +2007,7 @@ public class Handlers {
     public static void varsRefresh(String i, CommandExecutionContext c) {
         registerRootVariables();
         com.sphere.components.variables.VariablesPanel.instance().refreshAll();
-        AppLogger.info("Asked " + String.join(", ",
+        AppLogger.result("Asked " + String.join(", ",
             com.sphere.components.variables.VariableSources.names())
             + " and reread " + variablesFolder());
     }
@@ -1967,7 +2018,7 @@ public class Handlers {
         // folder publishes them again and the table fills back up.
         final int removed = com.sphere.components.variables.VariablesPanel.instance()
                                 .forget(a.isEmpty() ? null : a);
-        AppLogger.info((a.isEmpty() ? "Variables tab emptied"
+        AppLogger.result((a.isEmpty() ? "Variables tab emptied"
                                     : "Dropped the variables of " + a)
                        + (removed == 0 ? "" : ", " + removed + " file(s) removed"));
     }
@@ -1980,7 +2031,7 @@ public class Handlers {
         if (!a.isEmpty()) {
             panel.setFolder(resolve(a).toPath());
         }
-        AppLogger.info("Variables are read from " + variablesFolder());
+        AppLogger.result("Variables are read from " + variablesFolder());
     }
 
     public static void varsWatch(String i, CommandExecutionContext c) {
@@ -2001,7 +2052,7 @@ public class Handlers {
             return;
         }
         panel.watch(folder.toPath());
-        AppLogger.info("Watching " + folder + " for variable files");
+        AppLogger.result("Watching " + folder + " for variable files");
     }
 
     public static void varsUnwatch(String i, CommandExecutionContext c) {
@@ -2013,7 +2064,7 @@ public class Handlers {
         final boolean dropped = com.sphere.components.variables.VariablesPanel
             .instance().unwatch(resolve(a).toPath());
         if (dropped) {
-            AppLogger.info("No longer watching " + resolve(a));
+            AppLogger.result("No longer watching " + resolve(a));
         } else {
             AppLogger.error("That folder was not being watched. "
                 + "Try :vars watch to see which are.");
@@ -2029,7 +2080,7 @@ public class Handlers {
             usage(":vars wrap [on|off]");
             return;
         }
-        AppLogger.info("A Python script "
+        AppLogger.result("A Python script "
             + (com.sphere.components.variables.PythonProbe.isWrapping()
                ? "is run so that its variables are collected"
                : "is run as it is, and publishes nothing"));
@@ -2048,7 +2099,7 @@ public class Handlers {
                 .instance().folder().getParent();
             java.nio.file.Path written = com.sphere.components.variables.VariableHelpers
                 .write(folder == null ? java.nio.file.Path.of(".") : folder, a);
-            AppLogger.info("Wrote " + written);
+            AppLogger.result("Wrote " + written);
         } catch (java.io.IOException unwritable) {
             AppLogger.error(unwritable.getMessage());
         }
@@ -2066,7 +2117,7 @@ public class Handlers {
             }
         }
         if (held > 0) {
-            AppLogger.info(held + " " + source + " variables in the Variables tab");
+            AppLogger.result(held + " " + source + " variables in the Variables tab");
             return;
         }
         AppLogger.raw("Nothing from " + source + " yet. It answers while it is running; "
@@ -2095,17 +2146,17 @@ public class Handlers {
 
     /** Says what the clipboard holds and which fields answer the copy keys. */
     public static void clipStatus(String i, CommandExecutionContext c) {
-        AppLogger.info(com.sphere.components.ClipboardBridge.status());
+        AppLogger.result(com.sphere.components.ClipboardBridge.status());
     }
 
     /** Writes a marker to the clipboard and reads it back. */
     public static void clipTest(String i, CommandExecutionContext c) {
-        AppLogger.info(com.sphere.components.ClipboardBridge.roundTrip());
+        AppLogger.result(com.sphere.components.ClipboardBridge.roundTrip());
     }
 
     public static void plotsClear(String i, CommandExecutionContext c) {
         com.sphere.components.rootview.RootPlotsPanel.instance().clear();
-        AppLogger.info("Plots tab emptied");
+        AppLogger.result("Plots tab emptied");
     }
 
     /** A path as typed, taken from the console's own folder when relative. */

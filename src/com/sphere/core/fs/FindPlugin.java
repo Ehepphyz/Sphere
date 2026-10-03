@@ -198,7 +198,7 @@ public class FindPlugin implements CommandRouter.CommandPlugin {
 
             @Override
             protected void done() {
-                if (found == 0) AppLogger.info("Nothing matched under " + finalRoot);
+                if (found == 0) AppLogger.result("Nothing matched under " + finalRoot);
                 else if (found >= finalLimit) {
                     AppLogger.warn(found + " results, stopped at the limit. Use  --all  for everything.");
                 }

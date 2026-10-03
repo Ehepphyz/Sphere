@@ -17,7 +17,7 @@ import java.nio.file.Path;
 public final class JuliaScript {
 
     /** Bumped whenever the source below changes, so a stale copy is rewritten. */
-    public static final int VERSION = 2;
+    public static final int VERSION = 4;
 
     public static final String FILE_NAME = "sphere_julia.jl";
 
@@ -48,7 +48,7 @@ public final class JuliaScript {
     }
 
     private static final String SOURCE = """
-        # SPHERE_JULIA_VERSION = 2
+        # SPHERE_JULIA_VERSION = 4
         #
         # Sphere's Julia session. It reads one command per line on its standard
         # input and answers with a single control line, so that everything else it
@@ -56,6 +56,20 @@ public final class JuliaScript {
         #
         # Everything lives in a module of its own, which keeps Main holding only
         # what the user puts there.
+
+        # The bridge to Sphere's other engines: SphereSPX reads the PDF sets,
+        # events and jets Sphere exports, and publishes results back to it. It is
+        # a module, so the Variables tab does not list it.
+        let lib = get(ENV, "SPHERE_BRIDGE_LIB", "")
+            file = joinpath(lib, "SphereSPX.jl")
+            if !isempty(lib) && isfile(file)
+                try
+                    Base.include(Main, file)
+                catch failure
+                    println(stderr, "SphereSPX could not be loaded: ", failure)
+                end
+            end
+        end
 
         module SphereJulia
 
@@ -103,10 +117,67 @@ public final class JuliaScript {
             end
         end
 
+        # ---- pictures -------------------------------------------------------
+        #
+        # What Julia would show as a picture goes to Sphere's Plots tab: a plot
+        # passed to display(), or one a run ends on, as the REPL would show it.
+        # Written as a PNG into SPHERE_PLOTS, the tab picks it up and the image
+        # editor can open it. Without this a plot in the session either opened
+        # a GR window of its own or went nowhere.
+
+        struct SphereDisplay <: AbstractDisplay end
+
+        const FIGURES = Ref(0)
+
+        plots_folder() = get(ENV, "SPHERE_PLOTS", joinpath(pwd(), "plots"))
+
+        function publish_picture(x)
+            showable(MIME("image/png"), x) || return false
+            FIGURES[] += 1
+            folder = plots_folder()
+            mkpath(folder)
+            path = joinpath(folder, "julia_fig$(FIGURES[]).png")
+            open(path, "w") do io
+                show(io, MIME("image/png"), x)
+            end
+            println("[plots] ", basename(path))
+            return true
+        end
+
+        Base.display(::SphereDisplay, x) =
+            publish_picture(x) ? nothing : throw(MethodError(display, (SphereDisplay(), x)))
+        Base.display(::SphereDisplay, ::MIME"image/png", x) = (publish_picture(x); nothing)
+
+        # On top of the display stack, before every run: Plots.jl and the others
+        # push a display of their own when loaded, and theirs opens a window.
+        function display_on_top()
+            stack = Base.Multimedia.displays
+            if isempty(stack) || !(last(stack) isa SphereDisplay)
+                filter!(d -> !(d isa SphereDisplay), stack)
+                pushdisplay(SphereDisplay())
+            end
+        end
+
+        # What a run ended on, shown if it is a picture. A trailing semicolon
+        # keeps it quiet, as it does in the REPL.
+        function show_result(value, code = "")
+            (value === nothing || endswith(rstrip(code), ';')) && return
+            try
+                publish_picture(value)
+            catch failure
+                println(stderr, "The result could not be drawn: ", sprint(showerror, failure))
+            end
+        end
+
         \"\"\"Runs code in Main, reporting a failure the way Julia would.\"\"\"
         function run_code(code::AbstractString)
+            display_on_top()
             try
-                include_string(Main, code, "sphere")
+                # invokelatest: this loop started before the user's packages
+                # were loaded, and from here their show and showable methods
+                # (Plots', Makie's) would not be seen at all.
+                value = include_string(Main, code, "sphere")
+                Base.invokelatest(show_result, value, code)
             catch failure
                 showerror(stderr, failure, catch_backtrace())
                 println(stderr)
@@ -122,8 +193,10 @@ public final class JuliaScript {
             path = String(pieces[1])
             empty!(ARGS)
             append!(ARGS, String.(pieces[2:end]))
+            display_on_top()
             try
-                Base.include(Main, path)
+                value = Base.include(Main, path)
+                Base.invokelatest(show_result, value)
             catch failure
                 showerror(stderr, failure, catch_backtrace())
                 println(stderr)
@@ -150,7 +223,9 @@ public final class JuliaScript {
                 end
 
                 try
-                    dump_variables()
+                    # The same reason: a value of a package loaded since the
+                    # session started is shown with that package's own show.
+                    Base.invokelatest(dump_variables)
                 catch
                 end
 

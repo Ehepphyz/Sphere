@@ -35,7 +35,7 @@ public class FreezeCommand implements PythonCommand {
 
             // Write to requirements.txt in the application root
             Files.write(Paths.get(REQUIREMENTS_FILE), output.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            AppLogger.info("Requirements saved to: " + new File(REQUIREMENTS_FILE).getAbsolutePath());
+            AppLogger.result("Requirements saved to: " + new File(REQUIREMENTS_FILE).getAbsolutePath());
 
         } catch (IOException e) {
             AppLogger.error("Failed to execute or save pip freeze: " + e.getMessage());

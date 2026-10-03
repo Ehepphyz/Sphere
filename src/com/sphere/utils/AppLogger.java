@@ -42,8 +42,25 @@ public class AppLogger {
      * Public Logging API (Prefix tokens preserved for ConsoleUI context compilation)
      * ------------------------------------------------------------------------- */
     
-    public static void info(String message) { 
-        log("[i] " + message); 
+    /**
+     * A notice: something that informs without being what a command was asked
+     * for, such as progress ("Compiling 3 macros..."), a background event
+     * (a plugin loaded, an engine publishing a plot), a hint. Marked [i].
+     * The answer of a command goes through {@link #result} instead.
+     */
+    public static void info(String message) {
+        log("[i] " + message);
+    }
+
+    /**
+     * The answer of a command: the value it was asked for (":root version"
+     * gives 6.41.01), the confirmation that it was done ("Entered root
+     * persistent execution mode."), the heading of the table it prints.
+     * Printed as it is, without a marker: [i] announces a notice, and a result
+     * is not one. Never scanned for keywords either.
+     */
+    public static void result(String message) {
+        writeToTargets(message, LogLevel.PLAIN);
     }
     
     public static void success(String message) { 
@@ -107,7 +124,8 @@ public class AppLogger {
      *
      * The console prints it exactly as given. It is never scanned for keywords,
      * so a line reading "python  not loaded" is not turned green by the word
-     * "loaded". Use info/success/warn/error when the line really is a result.
+     * "loaded". A command's answer goes through {@link #result}, which prints
+     * the same way; success, warn and error mark a status, info a notice.
      */
     public static void raw(String message) {
         writeToTargets(message, LogLevel.PLAIN);

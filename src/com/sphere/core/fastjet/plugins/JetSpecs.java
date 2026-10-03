@@ -6,6 +6,7 @@ import com.sphere.core.fastjet.JetDefinition;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Jet definitions from one line of text, for the command line and scripts:
@@ -18,6 +19,64 @@ import java.util.Map;
 public final class JetSpecs {
 
     private JetSpecs() {
+    }
+
+    /**
+     * A spec for an algorithm this class does not know itself: its name, the
+     * number that came first (R for most), and the key=value options. Given
+     * to the factories other packages register with {@link #extend}.
+     */
+    public record Spec(String name, double first, Map<String, String> options) {
+
+        public boolean has(String key) {
+            return options.containsKey(key);
+        }
+
+        public double d(String key, double fallback) {
+            final String v = options.get(key);
+            return v == null ? fallback : Double.parseDouble(v);
+        }
+
+        public int i(String key, int fallback) {
+            final String v = options.get(key);
+            return v == null ? fallback : (int) Double.parseDouble(v);
+        }
+
+        public String s(String key, String fallback) {
+            final String v = options.get(key);
+            return v == null ? fallback : v.toLowerCase(Locale.ROOT);
+        }
+
+        /** The first number, else the option r, else the fallback. */
+        public double r(double fallback) {
+            return Double.isNaN(first) ? d("r", fallback) : first;
+        }
+    }
+
+    private record Extension(String usage, Function<Spec, JetDefinition> factory) {
+    }
+
+    /** Algorithms other packages add, fjcontrib's for instance, keeping this one independent of them. */
+    private static final Map<String, Extension> EXTENSIONS = new LinkedHashMap<>();
+
+    /**
+     * Lets a package add an algorithm: "name:R,key=value" then builds the
+     * definition the factory makes. The usage line is what ':fjet algorithms'
+     * shows.
+     */
+    public static synchronized void extend(String name, String usage, Function<Spec, JetDefinition> factory) {
+        EXTENSIONS.put(name.toLowerCase(Locale.ROOT), new Extension(usage, factory));
+    }
+
+    /** The names added by {@link #extend}, with their usage lines. */
+    public static synchronized Map<String, String> extensions() {
+        final Map<String, String> m = new LinkedHashMap<>();
+        for (Map.Entry<String, Extension> e : EXTENSIONS.entrySet()) m.put(e.getKey(), e.getValue().usage());
+        return m;
+    }
+
+    private static synchronized Extension extension(String name) {
+        return EXTENSIONS.get(name);
     }
 
     /** The plugin names this reads, with their parameters and defaults. */
@@ -37,6 +96,7 @@ public final class JetSpecs {
         m.put("gridjet", "gridjet:spacing,ymax=5");
         m.put("eecambridge", "eecambridge:ycut");
         m.put("jade", "jade,strategy=nnfjn2plain|nnh");
+        for (Map.Entry<String, String> e : extensions().entrySet()) m.put(e.getKey(), e.getValue());
         return m;
     }
 
@@ -46,7 +106,8 @@ public final class JetSpecs {
         final int comma = s.indexOf(',');
         final int cut = colon >= 0 ? colon : (comma >= 0 ? comma : s.length());
         final String name = s.substring(0, cut).toLowerCase(Locale.ROOT);
-        if (!plugins().containsKey(name) && !name.equals("cms") && !name.equals("atlas") && !name.equals("midpoint")
+        final Extension extension = extension(name);
+        if (extension == null && !plugins().containsKey(name) && !name.equals("cms") && !name.equals("atlas") && !name.equals("midpoint")
                 && !name.equals("jetclu") && !name.equals("sisconespheri")) {
             return JetDefinition.parse(s);
         }
@@ -61,6 +122,14 @@ public final class JetSpecs {
             if (eq < 0 && Double.isNaN(first) && isNumber(p)) first = Double.parseDouble(p);
             else if (eq < 0) kv.put(p.toLowerCase(Locale.ROOT), "true");
             else kv.put(p.substring(0, eq).trim().toLowerCase(Locale.ROOT), p.substring(eq + 1).trim());
+        }
+        if (extension != null) {
+            final JetDefinition def = extension.factory().apply(new Spec(name, first, kv));
+            if (kv.containsKey("precision")) {
+                def.setPrecision(com.sphere.core.fastjet.Precision.valueOf(kv.get("precision").toUpperCase(Locale.ROOT)
+                    .replace("DOUBLE-DOUBLE", "DD")));
+            }
+            return def;
         }
         final double r = Double.isNaN(first) ? d(kv, "r", 0.7) : first;
         final JetDefinition.Plugin plugin = switch (name) {

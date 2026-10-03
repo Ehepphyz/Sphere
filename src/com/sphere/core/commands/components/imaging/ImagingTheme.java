@@ -71,6 +71,66 @@ public final class ImagingTheme {
                          Math.max(0, base.getBlue() - 14));
     }
 
+    /** Whether the current theme is a dark one, judged by its main background. */
+    public static boolean isDark() {
+        final Color c = panel();
+        return 0.2126 * c.getRed() + 0.7152 * c.getGreen() + 0.0722 * c.getBlue() < 128;
+    }
+
+    /**
+     * A picture drawn for white paper, re-inked for the theme, in place: the
+     * paper takes the theme's canvas paper (ThemePalette.getCanvasPaper) and
+     * black ink its canvas ink (getCanvasInk).
+     * Only what is near grey is re-inked (the paper, the axes, the text, the
+     * frame): lightness turned over (each channel shifted by 255 - max - min)
+     * and spread between the surface and the text. A saturated colour is data
+     * (a colour scale, a curve, a fill) and keeps its exact value, so a COLZ
+     * map still reads on its colour bar; between the two, a blend.
+     */
+    public static void onThemePaper(int[] argb) {
+        final Color ground = palette().getCanvasPaper();
+        final Color ink = palette().getCanvasInk();
+        final int gr = ground.getRed();
+        final int gg = ground.getGreen();
+        final int gb = ground.getBlue();
+        final int dr = ink.getRed() - gr;
+        final int dg = ink.getGreen() - gg;
+        final int db = ink.getBlue() - gb;
+        for (int i = 0; i < argb.length; i++) {
+            final int c = argb[i];
+            final int r = c >> 16 & 255;
+            final int g = c >> 8 & 255;
+            final int b = c & 255;
+            final int max = Math.max(r, Math.max(g, b));
+            final int min = Math.min(r, Math.min(g, b));
+            final int chroma = max - min;
+            if (chroma >= 72) continue;
+            final int shift = 255 - max - min;
+            final int ir = Math.max(0, Math.min(255, r + shift));
+            final int ig = Math.max(0, Math.min(255, g + shift));
+            final int ib = Math.max(0, Math.min(255, b + shift));
+            final int nr = gr + dr * ir / 255;
+            final int ng = gg + dg * ig / 255;
+            final int nb = gb + db * ib / 255;
+            // Full re-inking up to a chroma of 24, none from 72.
+            final int w = chroma <= 24 ? 256 : (72 - chroma) * 256 / 48;
+            argb[i] = (c & 0xFF000000) | (nr * w + r * (256 - w)) >> 8 << 16 | (ng * w + g * (256 - w)) >> 8 << 8
+                | (nb * w + b * (256 - w)) >> 8;
+        }
+    }
+
+    /** The same, as a new picture. */
+    public static java.awt.image.BufferedImage onThemePaper(java.awt.image.BufferedImage src) {
+        final int w = src.getWidth();
+        final int h = src.getHeight();
+        final int[] px = src.getRGB(0, 0, w, h, null, 0, w);
+        onThemePaper(px);
+        final java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, h,
+            java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        out.setRGB(0, 0, w, h, px, 0, w);
+        return out;
+    }
+
     public static Font uiFont(int style, float size) {
         return new Font(Font.SANS_SERIF, style, 12).deriveFont(style, size);
     }

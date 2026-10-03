@@ -401,6 +401,30 @@ public final class RootBridgeCompiler {
         }
     }
 
+    /**
+     * The root executable: ROOT_DIR/bin/root, where an installation keeps it
+     * and where root-config is looked for too, then the PATH. ROOT_DIR names
+     * the installation, not the program, so looking for "root" in ROOT_DIR
+     * itself found nothing and '::root' worked only when the shell that
+     * started Sphere had sourced thisroot.sh. Null when ROOT is off or absent.
+     */
+    public static String rootExecutable(SettingsManager settings) {
+        final SettingsManager s = settings != null ? settings : new SettingsManager();
+        if (s.isDeclaredEmpty("ROOT_DIR")) {
+            return null;
+        }
+        final String dir = s.getProperty("ROOT_DIR");
+        if (dir != null && !dir.isBlank()) {
+            for (String name : new String[]{"root", "root.exe"}) {
+                final Path candidate = Path.of(dir.strip(), "bin", name);
+                if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
+                    return candidate.toAbsolutePath().toString();
+                }
+            }
+        }
+        return com.sphere.core.bridge.Bridge.tool(s, "root", "ROOT_DIR");
+    }
+
     public static String getRootConfigOutput(String flag) {
         return getRootConfigOutput(flag, null);
     }

@@ -68,6 +68,8 @@ public final class FastJetCommands {
 
     private static final List<List<PseudoJet>> EVENTS = new ArrayList<>();
     private static final List<Double> WEIGHTS = new ArrayList<>();
+    /** The incoming partons of each event, null where the file did not give them. */
+    private static final List<EventIO.Incoming> INCOMING = new ArrayList<>();
     private static String source = "";
     private static int current;
     private static final Map<String, JetDefinition> DEFS = new LinkedHashMap<>();
@@ -241,7 +243,7 @@ public final class FastJetCommands {
     /* ------------------------------------------------------------------ */
 
     public static void help(String i, CommandExecutionContext c) {
-        AppLogger.info("Jet finding in Java (FastJet " + FastJet.FASTJET_VERSION + " ported, precision "
+        AppLogger.result("Jet finding in Java (FastJet " + FastJet.FASTJET_VERSION + " ported, precision "
             + Precision.defaultPrecision() + "). The order of an analysis:");
         AppLogger.raw("  events       :fjet read <file> | :fjet toy [n]      then :fjet event [i]");
         AppLogger.raw("  definition   :fjet def <name> <spec>   specs: antikt:0.4  kt:0.6,scheme=pt  siscone:0.7,f=0.75 ...");
@@ -272,18 +274,20 @@ public final class FastJetCommands {
             final List<EventIO.Event> events = EventIO.read(file, format, (int) a.opt("max", Integer.MAX_VALUE));
             EVENTS.clear();
             WEIGHTS.clear();
+            INCOMING.clear();
             long n = 0;
             for (EventIO.Event e : events) {
                 final List<PseudoJet> ps = new ArrayList<>(e.particles().size());
                 for (PseudoJet p : e.particles()) ps.add(p.copy().setPrecision(Precision.defaultPrecision()));
                 EVENTS.add(ps);
                 WEIGHTS.add(e.weight());
+                INCOMING.add(e.incoming());
                 n += ps.size();
             }
             source = file.toString();
             current = 0;
             last = null;
-            AppLogger.info(f("%d events read from %s (%s), %.1f particles per event.", EVENTS.size(),
+            AppLogger.result(f("%d events read from %s (%s), %.1f particles per event.", EVENTS.size(),
                 file.getFileName(), format, EVENTS.isEmpty() ? 0.0 : (double) n / EVENTS.size()));
         } catch (IOException | RuntimeException e) {
             AppLogger.error("Cannot read " + file + ": " + e.getMessage());
@@ -297,16 +301,18 @@ public final class FastJetCommands {
             (int) a.opt("soft", 200), (long) a.opt("seed", 1));
         EVENTS.clear();
         WEIGHTS.clear();
+        INCOMING.clear();
         for (List<PseudoJet> e : evs) {
             final List<PseudoJet> ps = new ArrayList<>(e.size());
             for (PseudoJet p : e) ps.add(p.setPrecision(Precision.defaultPrecision()));
             EVENTS.add(ps);
             WEIGHTS.add(1.0);
+            INCOMING.add(null);
         }
         source = "toy";
         current = 0;
         last = null;
-        AppLogger.info(n + " toy events made (" + (int) a.opt("jets", 2) + " hard partons of about "
+        AppLogger.result(n + " toy events made (" + (int) a.opt("jets", 2) + " hard partons of about "
             + a.opt("pt", 500) + " GeV each, " + (int) a.opt("soft", 200) + " soft particles).");
     }
 
@@ -334,7 +340,7 @@ public final class FastJetCommands {
                 ymax = Math.max(ymax, p.rap());
             }
         }
-        AppLogger.info(f("event %d of %d (%s): %d particles, sum pt %.3f GeV, sum E %.3f GeV, y in [%.3f, %.3f], weight %g",
+        AppLogger.result(f("event %d of %d (%s): %d particles, sum pt %.3f GeV, sum E %.3f GeV, y in [%.3f, %.3f], weight %g",
             current, EVENTS.size(), source, ev.size(), sumPt, sumE, ymin, ymax, WEIGHTS.get(current)));
     }
 
@@ -348,7 +354,7 @@ public final class FastJetCommands {
         try {
             final Path out = Handlers.resolve(a.plain.get(0)).toPath();
             EventIO.writeFastJet(out, EVENTS);
-            AppLogger.info(EVENTS.size() + " events written to " + out);
+            AppLogger.result(EVENTS.size() + " events written to " + out);
         } catch (IOException e) {
             AppLogger.error(e.getMessage());
         }
@@ -365,7 +371,7 @@ public final class FastJetCommands {
             final JetDefinition d = JetSpecs.parse(spec);
             DEFS.put(a.plain.get(0), d);
             active = a.plain.get(0);
-            AppLogger.info(active + " (active): " + d.description() + " [" + d.precision() + "]");
+            AppLogger.result(active + " (active): " + d.description() + " [" + d.precision() + "]");
         } catch (RuntimeException e) {
             AppLogger.error("Cannot read the spec '" + spec + "': " + e.getMessage());
         }
@@ -385,28 +391,28 @@ public final class FastJetCommands {
             return;
         }
         active = a.plain.get(0);
-        AppLogger.info(active + ": " + DEFS.get(active).description());
+        AppLogger.result(active + ": " + DEFS.get(active).description());
     }
 
     public static void algorithms(String i, CommandExecutionContext c) {
-        AppLogger.info("Native algorithms (spec: name:R[,p=...][,scheme=E|pt|pt2|Et|Et2|BIpt|BIpt2|WTA_pt|WTA_modp][,strategy=...][,precision=double|dd]):");
+        AppLogger.result("Native algorithms (spec: name:R[,p=...][,scheme=E|pt|pt2|Et|Et2|BIpt|BIpt2|WTA_pt|WTA_modp][,strategy=...][,precision=double|dd]):");
         for (JetAlgorithm alg : JetAlgorithm.values()) {
             if (alg == JetAlgorithm.UNDEFINED || alg == JetAlgorithm.PLUGIN) continue;
             AppLogger.raw("  " + alg.name().toLowerCase(Locale.ROOT) + "  " + alg.description());
         }
-        AppLogger.info("Plugins:");
+        AppLogger.result("Plugins:");
         for (Map.Entry<String, String> e : JetSpecs.plugins().entrySet()) AppLogger.raw("  " + e.getValue());
     }
 
     public static void strategies(String i, CommandExecutionContext c) {
-        AppLogger.info("Strategies (strategy=<label> in a spec; Best picks one from N and R as FastJet 3.5 does):");
+        AppLogger.result("Strategies (strategy=<label> in a spec; Best picks one from N and R as FastJet 3.5 does):");
         for (Strategy s : Strategy.values()) AppLogger.raw(f("  %4d  %s", s.id, s.label()));
     }
 
     public static void precision(String i, CommandExecutionContext c) {
         final Args a = new Args(i, ":fjet precision");
         if (a.plain.isEmpty()) {
-            AppLogger.info("Precision: " + Precision.defaultPrecision()
+            AppLogger.result("Precision: " + Precision.defaultPrecision()
                 + ". 'double' gives FastJet's results bit for bit; 'dd' carries 106 bits (angles to 2^-106).");
             return;
         }
@@ -416,7 +422,7 @@ public final class FastJetCommands {
         for (JetDefinition d : DEFS.values()) d.setPrecision(p);
         for (List<PseudoJet> ev : EVENTS) for (PseudoJet q : ev) q.setPrecision(p);
         last = null;
-        AppLogger.info("Precision set to " + p + " for the definitions and the events.");
+        AppLogger.result("Precision set to " + p + " for the definitions and the events.");
     }
 
     /* ------------------------------------------------------------------ */
@@ -441,7 +447,7 @@ public final class FastJetCommands {
                 final double ms = (System.nanoTime() - t0) / 1e6;
                 int njets = 0;
                 for (ClusterSequence cs : all) njets += cs.inclusiveJets(5.0).size();
-                AppLogger.info(f("%d events clustered with %s in %.1f ms (%d thread%s), %.2f jets above 5 GeV per event.",
+                AppLogger.result(f("%d events clustered with %s in %.1f ms (%d thread%s), %.2f jets above 5 GeV per event.",
                     all.size(), def.description(), ms, def.plugin() == null ? threads : 1,
                     def.plugin() == null && threads > 1 ? "s" : "", (double) njets / all.size()));
                 return;
@@ -450,7 +456,7 @@ public final class FastJetCommands {
             last = null;
             final ClusterSequence cs = clustering();
             final double ms = (System.nanoTime() - t0) / 1e6;
-            AppLogger.info(f("event %d: %d particles clustered in %.2f ms, strategy %s; %d jets above 5 GeV.",
+            AppLogger.result(f("event %d: %d particles clustered in %.2f ms, strategy %s; %d jets above 5 GeV.",
                 current, cs.nParticles(), ms, cs.strategyString(), cs.inclusiveJets(5.0).size()));
             AppLogger.raw("  " + def.description());
         } catch (RuntimeException e) {
@@ -464,7 +470,7 @@ public final class FastJetCommands {
         final Args a = new Args(i, ":fjet jets");
         final double ptmin = a.num(0, 5.0);
         final List<PseudoJet> jets = PseudoJet.sortedByPt(cs.inclusiveJets(ptmin));
-        AppLogger.info(f("%d jets above %g GeV (event %d, %s):", jets.size(), ptmin, current, active));
+        AppLogger.result(f("%d jets above %g GeV (event %d, %s):", jets.size(), ptmin, current, active));
         table(jets, false, a.has("const"));
     }
 
@@ -478,7 +484,7 @@ public final class FastJetCommands {
             if (w.startsWith("d=")) jets = cs.exclusiveJets(Double.parseDouble(w.substring(2)));
             else if (w.startsWith("y=")) jets = cs.exclusiveJetsYcut(Double.parseDouble(w.substring(2)));
             else jets = cs.exclusiveJets(Integer.parseInt(w));
-            AppLogger.info(jets.size() + " exclusive jets (" + w + "):");
+            AppLogger.result(jets.size() + " exclusive jets (" + w + "):");
             table(PseudoJet.sortedByPt(jets), false, false);
         } catch (RuntimeException e) {
             AppLogger.error(e.getMessage());
@@ -547,7 +553,7 @@ public final class FastJetCommands {
             final ClusterSequenceArea csa = new ClusterSequenceArea(EVENTS.get(current), DEFS.get(active),
                 areaDefinition(kind, a.opt("ghost-area", 0.01), a.opt("maxrap", 5.0)));
             final List<PseudoJet> jets = PseudoJet.sortedByPt(csa.inclusiveJets(ptmin));
-            AppLogger.info(jets.size() + " jets above " + ptmin + " GeV with " + kind + " areas:");
+            AppLogger.result(jets.size() + " jets above " + ptmin + " GeV with " + kind + " areas:");
             table(jets, true, false);
         } catch (RuntimeException e) {
             AppLogger.error("Areas failed: " + e.getMessage());
@@ -564,12 +570,12 @@ public final class FastJetCommands {
                     new JetDefinition(JetAlgorithm.KT, 0.4),
                     new AreaDefinition(AreaDefinition.AreaType.ACTIVE_EXPLICIT_GHOSTS, new GhostedAreaSpec(rapmax, 1, 0.01)));
                 b.setParticles(EVENTS.get(current));
-                AppLogger.info(f("rho = %.6g GeV per unit area, sigma = %.6g (kt 0.4 jets, median, |y| < %.2f)",
+                AppLogger.result(f("rho = %.6g GeV per unit area, sigma = %.6g (kt 0.4 jets, median, |y| < %.2f)",
                     b.rho(), b.sigma(), rapmax - 0.4));
             } else {
                 final GridMedianBackgroundEstimator b = new GridMedianBackgroundEstimator(rapmax, 0.55);
                 b.setParticles(EVENTS.get(current));
-                AppLogger.info(f("rho = %.6g GeV per unit area, sigma = %.6g (grid of 0.55 cells, |y| < %.2f)",
+                AppLogger.result(f("rho = %.6g GeV per unit area, sigma = %.6g (grid of 0.55 cells, |y| < %.2f)",
                     b.rho(), b.sigma(), rapmax));
             }
         } catch (RuntimeException e) {
@@ -588,7 +594,7 @@ public final class FastJetCommands {
                 areaDefinition("active", 0.01, 5.0));
             final List<PseudoJet> jets = PseudoJet.sortedByPt(csa.inclusiveJets(ptmin));
             final Subtractor sub = new Subtractor(bge);
-            AppLogger.info(f("rho = %.4g GeV per unit area; jets above %g GeV before and after subtraction:", bge.rho(), ptmin));
+            AppLogger.result(f("rho = %.4g GeV per unit area; jets above %g GeV before and after subtraction:", bge.rho(), ptmin));
             AppLogger.raw(f("%5s %12s %12s %12s %12s %12s", "jet", "rapidity", "phi", "pt", "area", "pt subtr."));
             for (int k = 0; k < jets.size(); k++) {
                 final PseudoJet j = jets.get(k);
@@ -621,7 +627,7 @@ public final class FastJetCommands {
             Handlers.usage(":fjet groom <softdrop beta zcut|mmdt zcut|trim rtrim ptfrac|filter r n|prune zcut rcut> [--njets n]");
             return;
         }
-        AppLogger.info(t.description());
+        AppLogger.result(t.description());
         AppLogger.raw(f("%5s %12s %12s %12s %12s %8s %8s", "jet", "pt", "mass", "pt groomed", "m groomed", "n", "n gr."));
         final List<PseudoJet> jets = leading(cs, (int) a.opt("njets", 2), 0);
         for (int k = 0; k < jets.size(); k++) {
@@ -646,7 +652,7 @@ public final class FastJetCommands {
         final StringBuilder head = new StringBuilder(f("%5s %10s", "jet", "pt"));
         for (int n = 1; n <= nmax; n++) head.append(f(" %10s", "tau" + n));
         for (int n = 2; n <= nmax; n++) head.append(f(" %9s", "tau" + n + (n - 1)));
-        AppLogger.info(f("N-subjettiness, beta = %g, %s axes, normalised:", beta, axes));
+        AppLogger.result(f("N-subjettiness, beta = %g, %s axes, normalised:", beta, axes));
         AppLogger.raw(head.toString());
         final List<PseudoJet> jets = leading(cs, (int) a.opt("njets", 2), 0);
         for (int k = 0; k < jets.size(); k++) {
@@ -668,7 +674,7 @@ public final class FastJetCommands {
         final Args a = new Args(i, ":fjet ecf");
         final double beta = a.num(0, 2.0);
         final EnergyCorrelator ec = new EnergyCorrelator(beta);
-        AppLogger.info(f("Energy correlators, beta = %g (sums to 106 bits):", beta));
+        AppLogger.result(f("Energy correlators, beta = %g (sums to 106 bits):", beta));
         AppLogger.raw(f("%5s %10s %12s %12s %10s %10s %10s %10s", "jet", "pt", "e2", "e3", "C2", "D2", "N2", "M2"));
         final List<PseudoJet> jets = leading(cs, (int) a.opt("njets", 2), 0);
         for (int k = 0; k < jets.size(); k++) {
@@ -690,7 +696,7 @@ public final class FastJetCommands {
         }
         final LundPlane lp = new LundPlane(DEFS.get(active).isSpherical());
         final List<LundPlane.Declustering> ds = a.has("all") ? lp.all(jets.get(k)) : lp.primary(jets.get(k));
-        AppLogger.info(ds.size() + (a.has("all") ? " declusterings (primary and secondary)" : " primary declusterings")
+        AppLogger.result(ds.size() + (a.has("all") ? " declusterings (primary and secondary)" : " primary declusterings")
             + " of jet " + k + f(" (pt %.3f GeV):", jets.get(k).pt()));
         AppLogger.raw(f("%5s %6s %11s %11s %11s %11s %11s %9s", "step", "depth", "ln(1/D)", "ln kt", "z", "Delta", "kt", "psi"));
         for (int s = 0; s < ds.size(); s++) {
@@ -716,7 +722,7 @@ public final class FastJetCommands {
                 JetShapes.thrustLike(j, r), pull[0], pull[1]));
         }
         if (jets.size() >= 2) {
-            AppLogger.info(f("pull angle of jet 0 towards jet 1: %.4f rad", JetShapes.pullAngle(jets.get(0), jets.get(1))));
+            AppLogger.result(f("pull angle of jet 0 towards jet 1: %.4f rad", JetShapes.pullAngle(jets.get(0), jets.get(1))));
         }
     }
 
@@ -730,9 +736,9 @@ public final class FastJetCommands {
         final JetDefinition def = definition(a.plain.isEmpty() ? null : a.plain.get(0));
         if (def == null) return;
         try {
-            AppLogger.info("On the current event:");
+            AppLogger.result("On the current event:");
             AppLogger.raw(IrcSafetyCheck.check(EVENTS.get(current), def, a.opt("ptmin", 20), (int) a.opt("trials", 10), 1).toString());
-            AppLogger.info("On the textbook configurations:");
+            AppLogger.result("On the textbook configurations:");
             for (IrcSafetyCheck.Probe p : IrcSafetyCheck.probes(def)) AppLogger.raw(p.toString());
         } catch (RuntimeException e) {
             AppLogger.error(e.getMessage());
@@ -749,8 +755,8 @@ public final class FastJetCommands {
             base.cellPhi(), base.etaMax(), a.opt("noise", base.noiseSigma()), a.opt("threshold", base.threshold()),
             base.stochastic(), base.constant(), a.opt("rho", base.pileupRho()), base.pileupMeanPt(),
             base.pileupRapMax(), (long) a.opt("seed", base.seed()));
-        AppLogger.info(def.description());
-        AppLogger.info("Hard jets above " + a.opt("ptmin", 20) + " GeV, particle level against the detector-level situations:");
+        AppLogger.result(def.description());
+        AppLogger.result("Hard jets above " + a.opt("ptmin", 20) + " GeV, particle level against the detector-level situations:");
         for (DetectorRobustness.Result r : DetectorRobustness.run(EVENTS.get(current), def, a.opt("ptmin", 20), d)) {
             AppLogger.raw(r.toString());
         }
@@ -779,7 +785,7 @@ public final class FastJetCommands {
         final long t0 = System.nanoTime();
         for (int r = 0; r < repeat; r++) EventBatch.cluster(EVENTS, def, threads);
         final double us = (System.nanoTime() - t0) / 1e3 / repeat / EVENTS.size();
-        AppLogger.info(f("%s: %.1f microseconds per event (%d events x %d repeats, %d thread%s, precision %s)",
+        AppLogger.result(f("%s: %.1f microseconds per event (%d events x %d repeats, %d thread%s, precision %s)",
             def.description(), us, EVENTS.size(), repeat, threads, threads > 1 ? "s" : "", def.precision()));
     }
 
@@ -797,7 +803,7 @@ public final class FastJetCommands {
         final Args a = new Args(i, ":fjet tune");
         final JetDefinition def = DEFS.get(active);
         if (def.plugin() != null || def.isSpherical()) {
-            AppLogger.info("Plugins and e+e- algorithms have a single strategy; nothing to tune.");
+            AppLogger.result("Plugins and e+e- algorithms have a single strategy; nothing to tune.");
             return;
         }
         final int repeat = Math.max(1, (int) a.opt("repeat", 3));
@@ -838,12 +844,12 @@ public final class FastJetCommands {
         for (int k : order) {
             final JetDefinition d = defs.get(k);
             if (times.get(k) > 0.95 * current) {
-                AppLogger.info(f("%s keeps %s: no strategy is more than 5%% faster, which is within timing noise.",
+                AppLogger.result(f("%s keeps %s: no strategy is more than 5%% faster, which is within timing noise.",
                     active, def.strategy().label()));
                 return;
             }
             if (d.strategy() == def.strategy()) {
-                AppLogger.info(f("%s keeps %s, already the fastest here (%.1f us per event).", active,
+                AppLogger.result(f("%s keeps %s, already the fastest here (%.1f us per event).", active,
                     def.strategy().label(), times.get(k)));
                 return;
             }
@@ -870,11 +876,11 @@ public final class FastJetCommands {
             }
             DEFS.put(active, d);
             last = null;
-            AppLogger.info(f("%s now uses %s (%.1f us per event, identical jets on all %d events).",
+            AppLogger.result(f("%s now uses %s (%.1f us per event, identical jets on all %d events).",
                 active, d.strategy().label(), times.get(k), EVENTS.size()));
             return;
         }
-        AppLogger.info(active + " keeps " + def.strategy().label() + ": no faster strategy gives the same jets.");
+        AppLogger.result(active + " keeps " + def.strategy().label() + ": no faster strategy gives the same jets.");
     }
 
     /** Microseconds to cluster all the loaded events once. */
@@ -989,7 +995,7 @@ public final class FastJetCommands {
         double mean = 0;
         for (double x : v) mean += x;
         mean /= v.length;
-        AppLogger.info(f("%s of the %d leading jets above %g GeV: %d entries, mean %.6g", what, njets, ptmin, v.length, mean));
+        AppLogger.result(f("%s of the %d leading jets above %g GeV: %d entries, mean %.6g", what, njets, ptmin, v.length, mean));
         RootPlotsPanel.instance().showColumn(what + " (" + active + ")", v);
         if (a.has("root")) {
             final String name = a.opts.get("root");
@@ -1042,7 +1048,7 @@ public final class FastJetCommands {
             }
             render(cs, out);
             RootPlotsPanel.instance().showImage(out);
-            AppLogger.info("Event " + current + " drawn in " + out);
+            AppLogger.result("Event " + current + " drawn in " + out);
         } catch (IOException | RuntimeException e) {
             AppLogger.error("Cannot draw the event: " + e.getMessage());
         }
@@ -1147,7 +1153,7 @@ public final class FastJetCommands {
                     n++;
                 }
             }
-            AppLogger.info(n + " jets of " + EVENTS.size() + " events written to " + out);
+            AppLogger.result(n + " jets of " + EVENTS.size() + " events written to " + out);
         } catch (IOException | RuntimeException e) {
             AppLogger.error(e.getMessage());
         }
@@ -1160,7 +1166,7 @@ public final class FastJetCommands {
     public static void selftest(String i, CommandExecutionContext c) {
         List<PseudoJet> ev = EVENTS.isEmpty() ? ToyEvents.generate(1, 3, 300, 150, 7).get(0) : EVENTS.get(current);
         int failures = 0;
-        AppLogger.info("Self test on " + (EVENTS.isEmpty() ? "a toy event" : "event " + current) + " (" + ev.size() + " particles):");
+        AppLogger.result("Self test on " + (EVENTS.isEmpty() ? "a toy event" : "event " + current) + " (" + ev.size() + " particles):");
         // every strategy finds the same jets, in double precision. The histories
         // themselves may list steps in a different order (C/A's beam distances are
         // all equal, FastJet breaks those ties per strategy) and NlnNCam computes
@@ -1248,16 +1254,65 @@ public final class FastJetCommands {
         final boolean conserved = Math.abs(sum.E() - tot.E()) <= 1e-9 * tot.E();
         AppLogger.raw((conserved ? "  ok    " : "  FAIL  ") + "the jets carry the event's energy (E scheme)");
         if (!conserved) failures++;
-        AppLogger.info(failures == 0 ? "All checks passed." : failures + " check(s) failed.");
+        AppLogger.result(failures == 0 ? "All checks passed." : failures + " check(s) failed.");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* What the bridge to the other engines reads                          */
+    /* ------------------------------------------------------------------ */
+
+    static List<List<PseudoJet>> loadedEvents() { return EVENTS; }
+    static List<Double> loadedWeights() { return WEIGHTS; }
+    static List<EventIO.Incoming> loadedIncoming() { return INCOMING; }
+    static String loadedSource() { return source; }
+    static String activeName() { return active; }
+    static JetDefinition activeDefinition() { return DEFS.get(active); }
+    static int currentIndex() { return current; }
+
+    /** The clustering of the current event with the active definition, the one ':fjet jets' shows. */
+    static ClusterSequence currentClustering() {
+        return clustering();
+    }
+
+    /**
+     * Replaces the events, as ':fjco toy' and ':fjco sample use' do: every
+     * :fjet command then works on them. The definitions are kept.
+     */
+    static void adoptEvents(List<List<PseudoJet>> events, List<Double> weights, List<EventIO.Incoming> incoming,
+                            String from) {
+        EVENTS.clear();
+        WEIGHTS.clear();
+        INCOMING.clear();
+        for (int e = 0; e < events.size(); e++) {
+            final List<PseudoJet> ev = events.get(e);
+            for (PseudoJet p : ev) p.setPrecision(Precision.defaultPrecision());
+            EVENTS.add(ev);
+            WEIGHTS.add(weights != null && e < weights.size() ? weights.get(e) : 1.0);
+            INCOMING.add(incoming != null && e < incoming.size() ? incoming.get(e) : null);
+        }
+        source = from;
+        current = 0;
+        last = null;
+    }
+
+    /** A jet observable by the name :fjet hist knows it by. */
+    static double jetObservable(String what, PseudoJet j) {
+        return observable(what, j);
+    }
+
+    /** The n hardest jets above ptmin. */
+    static List<PseudoJet> hardest(ClusterSequence cs, int n, double ptmin) {
+        return leading(cs, n, ptmin);
     }
 
     public static void clear(String i, CommandExecutionContext c) {
         EVENTS.clear();
         WEIGHTS.clear();
+        INCOMING.clear();
         last = null;
         source = "";
         current = 0;
-        AppLogger.info("Events and clusterings forgotten; the definitions are kept.");
+        AppLogger.result("Events and clusterings forgotten; the definitions are kept.");
     }
 
     private static boolean isNumber(String s) {

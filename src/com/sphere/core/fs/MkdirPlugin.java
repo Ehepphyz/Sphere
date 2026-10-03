@@ -107,7 +107,7 @@ public class MkdirPlugin implements CommandRouter.CommandPlugin {
         }
 
         if (Files.exists(targetPath) && Files.isDirectory(targetPath)) {
-            AppLogger.info("Directory already exists: " + targetPath);
+            AppLogger.result("Directory already exists: " + targetPath);
             return;
         }
 

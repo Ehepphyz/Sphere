@@ -1,0 +1,5 @@
+Reference outputs and input data of the fjcontrib 1.104 example programs
+(https://fastjet.hepforge.org/contrib/), in the release's own layout, distributed
+with it under the GNU GPL v2 or later. ":fjco validate" runs Sphere's Java
+translations of the examples on the data and compares their output with these
+files, to the character.

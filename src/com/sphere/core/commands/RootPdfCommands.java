@@ -59,7 +59,7 @@ public final class RootPdfCommands {
             RootPdfSet set = RootPdfSet.open(folder,
                 everyMember ? Integer.MAX_VALUE : 1, accuracy);
             OPEN.put(w[0], set);
-            AppLogger.info(w[0] + " -> " + set);
+            AppLogger.result(w[0] + " -> " + set);
             report(set.check(), "  ");
         } catch (IOException cannotRead) {
             AppLogger.error(cannotRead.getMessage());
@@ -71,10 +71,10 @@ public final class RootPdfCommands {
         if (a.isEmpty()) {
             final int had = OPEN.size();
             OPEN.clear();
-            AppLogger.info("Closed " + had + " set(s).");
+            AppLogger.result("Closed " + had + " set(s).");
             return;
         }
-        AppLogger.info(OPEN.remove(a) == null ? "No set named " + a : "Closed " + a);
+        AppLogger.result(OPEN.remove(a) == null ? "No set named " + a : "Closed " + a);
     }
 
     public static void rootPdfList(String i, CommandExecutionContext c) {
@@ -134,7 +134,7 @@ public final class RootPdfCommands {
         }
         List<RootPdfGrid.Finding> found = set.check();
         if (found.isEmpty()) {
-            AppLogger.info(set.name() + ": nothing to report.");
+            AppLogger.result(set.name() + ": nothing to report.");
         } else {
             AppLogger.raw(set.name() + ":");
             report(found, "  ");
@@ -167,7 +167,7 @@ public final class RootPdfCommands {
             return;
         }
         final double value = set.xfxQ(pid, x, q);
-        AppLogger.info(String.format(Locale.ROOT,
+        AppLogger.result(String.format(Locale.ROOT,
             "xf(%d, x=%.6g, Q=%.6g) = %.8g       f = %.8g",
             pid, x, q, value, value / x));
     }
@@ -188,7 +188,7 @@ public final class RootPdfCommands {
         }
         final double q = number(w[3]);
         RootPdfSet.Band band = set.band(particle(w[1]), number(w[2]), q * q);
-        AppLogger.info(String.format(Locale.ROOT,
+        AppLogger.result(String.format(Locale.ROOT,
             "%s   +-%.2f%%   from %d members, %s",
             band, 100.0 * band.relative(), set.memberCount(), set.errorType()));
     }
@@ -250,7 +250,7 @@ public final class RootPdfCommands {
         }
         List<Double> seams = set.centralMember().seams();
         if (seams.isEmpty()) {
-            AppLogger.info("One subgrid, no seam.");
+            AppLogger.result("One subgrid, no seam.");
             return;
         }
         StringBuilder text = new StringBuilder("Subgrids meet at:");
@@ -284,7 +284,7 @@ public final class RootPdfCommands {
         final double collider = w.length > 3 ? number(w[3]) : 13600.0;
         if (w.length > 2) {
             final double mass = number(w[2]);
-            AppLogger.info(String.format(Locale.ROOT,
+            AppLogger.result(String.format(Locale.ROOT,
                 "dL/dM for %s at M = %.6g GeV, sqrt(s) = %.6g GeV:  %.8g",
                 w[1], mass, collider, lumi(set, w[1], mass, collider)));
             return;
@@ -482,7 +482,7 @@ public final class RootPdfCommands {
         final Path out = Handlers.resolve(w[1]).toPath();
         try {
             Files.writeString(out, text.toString(), StandardCharsets.UTF_8);
-            AppLogger.info(points + " points written to " + out);
+            AppLogger.result(points + " points written to " + out);
         } catch (IOException cannotWrite) {
             AppLogger.error("Could not write " + out + ": " + cannotWrite.getMessage());
         }
@@ -504,7 +504,7 @@ public final class RootPdfCommands {
         try {
             Files.writeString(out, com.sphere.core.rootbackend.RootPdfHeader.source(),
                               StandardCharsets.UTF_8);
-            AppLogger.info("Wrote " + out + ". Include it and call "
+            AppLogger.result("Wrote " + out + ". Include it and call "
                 + "sphere::Pdf::open(\"<folder>\") then set.xfxQ2(pid, x, q2).");
         } catch (IOException cannotWrite) {
             AppLogger.error("Could not write " + out + ": " + cannotWrite.getMessage());
@@ -534,7 +534,7 @@ public final class RootPdfCommands {
         }
         if (w.length > 1) {
             final double q = number(w[1]);
-            AppLogger.info(String.format(Locale.ROOT, "alpha_s(%.6g GeV) = %.8f   [%s]",
+            AppLogger.result(String.format(Locale.ROOT, "alpha_s(%.6g GeV) = %.8f   [%s]",
                 q, as.alphasQ2(q * q), as.type()));
             return;
         }
@@ -573,7 +573,7 @@ public final class RootPdfCommands {
         if (w.length > 1) {
             as.matchingLhapdf(!w[1].equalsIgnoreCase("off"));
         }
-        AppLogger.info(as.matchesLhapdf()
+        AppLogger.result(as.matchesLhapdf()
             ? "Answering exactly what LHAPDF would, so it is held constant above "
               + String.format(Locale.ROOT, "%.6g", as.frozenAbove()) + " GeV."
             : "Continuing the running above the table, where LHAPDF holds it constant.");
@@ -587,7 +587,7 @@ public final class RootPdfCommands {
         final String[] w = Handlers.words(Handlers.args(i, ":root pdf where"));
         if (w.length >= 2 && w[0].equalsIgnoreCase("add")) {
             final Path folder = Handlers.resolve(Handlers.join(w, 1)).toPath();
-            AppLogger.info(RootPdfCatalog.addPath(folder)
+            AppLogger.result(RootPdfCatalog.addPath(folder)
                 ? "Looking in " + folder + " as well."
                 : (Files.isDirectory(folder) ? folder + " was already listed."
                                              : "Not a folder: " + folder));
@@ -595,7 +595,7 @@ public final class RootPdfCommands {
         }
         if (w.length >= 2 && w[0].equalsIgnoreCase("drop")) {
             final Path folder = Handlers.resolve(Handlers.join(w, 1)).toPath();
-            AppLogger.info(RootPdfCatalog.dropPath(folder)
+            AppLogger.result(RootPdfCatalog.dropPath(folder)
                 ? "No longer looking in " + folder
                 : folder + " was not one Sphere was told about.");
             return;
@@ -628,13 +628,13 @@ public final class RootPdfCommands {
         final int asNumber = Handlers.asInt(a, -1);
         if (asNumber > 0) {
             final RootPdfCatalog.Entry one = RootPdfCatalog.describe(asNumber);
-            AppLogger.info(one == null ? "No set carries the number " + asNumber
+            AppLogger.result(one == null ? "No set carries the number " + asNumber
                                        : one.toString());
             return;
         }
         final List<RootPdfCatalog.Entry> found = RootPdfCatalog.search(a);
         if (found.isEmpty()) {
-            AppLogger.info(RootPdfCatalog.index().isEmpty()
+            AppLogger.result(RootPdfCatalog.index().isEmpty()
                 ? "No pdfsets.index in any declared folder, so there is nothing to search."
                 : "Nothing published is named like " + a);
             return;
@@ -668,7 +668,7 @@ public final class RootPdfCommands {
         AppLogger.info("Fetching " + w[0] + " from " + RootPdfCatalog.downloadBase());
         final RootPdfCatalog.Fetched done = RootPdfCatalog.fetch(w[0], into);
         if (done.succeeded()) {
-            AppLogger.info(done.message());
+            AppLogger.result(done.message());
         } else {
             AppLogger.error(done.message());
         }
@@ -680,7 +680,7 @@ public final class RootPdfCommands {
         if (!a.isEmpty()) {
             RootPdfCatalog.downloadFrom(a);
         }
-        AppLogger.info("Sets are fetched from " + RootPdfCatalog.downloadBase());
+        AppLogger.result("Sets are fetched from " + RootPdfCatalog.downloadBase());
     }
 
     /** Unpacks an archive already on disk. */
@@ -694,7 +694,7 @@ public final class RootPdfCommands {
         final Path into = w.length > 1 ? Handlers.resolve(w[1]).toPath() : null;
         final RootPdfCatalog.Fetched done = RootPdfCatalog.install(archive, into);
         if (done.succeeded()) {
-            AppLogger.info(done.message());
+            AppLogger.result(done.message());
         } else {
             AppLogger.error(done.message());
         }
@@ -724,7 +724,7 @@ public final class RootPdfCommands {
             RootPdfSet set = RootPdfCatalog.open(w[0],
                 everyMember ? Integer.MAX_VALUE : 1, accuracy);
             OPEN.put(handle, set);
-            AppLogger.info(handle + " -> " + set);
+            AppLogger.result(handle + " -> " + set);
             report(set.check(), "  ");
         } catch (IOException cannotRead) {
             AppLogger.error(cannotRead.getMessage());
@@ -745,7 +745,7 @@ public final class RootPdfCommands {
             return;
         }
         if (w.length == 1) {
-            AppLogger.info(set.name() + ": " + set.centralMember().interpolation()
+            AppLogger.result(set.name() + ": " + set.centralMember().interpolation()
                 + " between the knots, " + set.centralMember().extrapolation()
                 + " outside them, slopes " + set.centralMember().accuracy());
             return;
@@ -776,7 +776,7 @@ public final class RootPdfCommands {
                     break;
                 }
             }
-            AppLogger.info(again.name() + " reread: " + ipol + " between the knots, "
+            AppLogger.result(again.name() + " reread: " + ipol + " between the knots, "
                 + xpol + " outside them.");
         } catch (IOException cannotRead) {
             AppLogger.error(cannotRead.getMessage());

@@ -21,6 +21,29 @@ public final class CRMath {
         return DD.log(x).hi;
     }
 
+    /**
+     * log(1 + x) without the cancellation of forming 1 + x: the sum is kept
+     * exact in double-double, and below 2^-20 the series is summed instead,
+     * so that the relative precision holds down to the smallest x.
+     */
+    public static double log1p(double x) {
+        if (Double.isNaN(x) || x <= -1.0 || Double.isInfinite(x)) {
+            return Math.log1p(x);
+        }
+        if (Math.abs(x) < 0x1p-20) {
+            // x - x^2/2 + x^3/3 - ... to x^8, truncation below 2^-160 relative
+            final DD dx = new DD(x);
+            DD term = dx;
+            DD sum = dx;
+            for (int k = 2; k <= 8; k++) {
+                term = term.mul(-x);
+                sum = sum.add(term.div(k));
+            }
+            return sum.hi;
+        }
+        return DD.sum(1.0, x).log().hi;
+    }
+
     public static double exp(double x) {
         if (Double.isNaN(x) || x <= -745.2 || x >= 709.8) {
             return Math.exp(x);

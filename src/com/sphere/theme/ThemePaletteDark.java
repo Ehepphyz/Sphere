@@ -236,6 +236,54 @@ public final class ThemePaletteDark implements ThemePalette {
     @Override public Color getJupyPyImageBg()   { return JUPY_PY_IMAGE_BG; }
     @Override public Color getJupyPyAttribute() { return JUPY_PY_ATTRIBUTE; }
 
+    // ROOT canvas
+    private static final Color CANVAS_GROUND       = new Color(24, 25, 28);
+    private static final Color CANVAS_PAPER        = new Color(36, 38, 41);
+    private static final Color CANVAS_INK          = TEXT_PRIMARY;
+    private static final Color CANVAS_INK_MUTED    = TEXT_SECOND;
+    private static final Color CANVAS_GRID         = new Color(66, 69, 75);
+    private static final Color CANVAS_BOX_FILL     = new Color(48, 51, 55);
+    private static final Color CANVAS_BOX_BORDER   = new Color(112, 115, 121);
+    private static final Color CANVAS_SELECTION    = new Color(89, 166, 255);
+    private static final Color CANVAS_HIST_LINE    = new Color(110, 160, 255);
+    private static final Color CANVAS_FILL_DEFAULT = new Color(112, 115, 121);
+    private static final Color CANVAS_3D_WALL      = new Color(40, 42, 46);
+    private static final Color CANVAS_3D_WALL_LINE = new Color(96, 99, 105);
+    private static final Color CANVAS_3D_WALL_GRID = new Color(58, 61, 66);
+    private static final Color CANVAS_3D_MESH      = new Color(22, 23, 25);
+    private static final Color CANVAS_3D_FILL      = new Color(104, 136, 190);
+
+    @Override public Color getCanvasGround()        { return CANVAS_GROUND; }
+    @Override public Color getCanvasPaper()         { return CANVAS_PAPER; }
+    @Override public Color getCanvasInk()           { return CANVAS_INK; }
+    @Override public Color getCanvasInkMuted()      { return CANVAS_INK_MUTED; }
+    @Override public Color getCanvasGrid()          { return CANVAS_GRID; }
+    @Override public Color getCanvasBoxFill()       { return CANVAS_BOX_FILL; }
+    @Override public Color getCanvasBoxBorder()     { return CANVAS_BOX_BORDER; }
+    @Override public Color getCanvasSelection()     { return CANVAS_SELECTION; }
+    @Override public Color getCanvasHistLine()      { return CANVAS_HIST_LINE; }
+    @Override public Color getCanvasFillDefault()   { return CANVAS_FILL_DEFAULT; }
+    @Override public Color getCanvas3DWall()        { return CANVAS_3D_WALL; }
+    @Override public Color getCanvas3DWallLine()    { return CANVAS_3D_WALL_LINE; }
+    @Override public Color getCanvas3DWallGrid()    { return CANVAS_3D_WALL_GRID; }
+    @Override public Color getCanvas3DMesh()        { return CANVAS_3D_MESH; }
+    @Override public Color getCanvas3DDefaultFill() { return CANVAS_3D_FILL; }
+
+    // Sphere's 3D space
+    private static final Color SPACE3D_GROUND_TOP    = new Color(40, 42, 46);
+    private static final Color SPACE3D_GROUND_BOTTOM = new Color(18, 19, 21);
+    private static final Color SPACE3D_GRID          = new Color(52, 56, 63);
+    private static final Color SPACE3D_EDGE          = new Color(128, 140, 160);
+    private static final Color SPACE3D_LABEL         = new Color(196, 202, 212);
+    private static final Color SPACE3D_TITLE         = TEXT_PRIMARY;
+
+    @Override public Color getSpace3DGroundTop()    { return SPACE3D_GROUND_TOP; }
+    @Override public Color getSpace3DGroundBottom() { return SPACE3D_GROUND_BOTTOM; }
+    @Override public Color getSpace3DGrid()         { return SPACE3D_GRID; }
+    @Override public Color getSpace3DEdge()         { return SPACE3D_EDGE; }
+    @Override public Color getSpace3DLabel()        { return SPACE3D_LABEL; }
+    @Override public Color getSpace3DTitle()        { return SPACE3D_TITLE; }
+
 
 
 

@@ -115,17 +115,39 @@ public final class ConsolePython implements PythonKernelProcess.Listener,
 
     @Override
     public void onDisplay(int execId, Map<String, Object> bundle) {
-        show(bundle);
+        show(execId, bundle);
     }
 
     @Override
     public void onResult(int execId, int count, Map<String, Object> bundle) {
-        show(bundle);
+        show(execId, bundle);
     }
 
-    /** Prints the plain-text side of what the kernel produced, when there is one. */
-    private static void show(Map<String, Object> bundle) {
+    /** Pictures of this session so far, so each figure gets a name of its own. */
+    private int figures;
+
+    /**
+     * What the kernel produced: a picture goes to the Plots tab, the text to
+     * the console. The kernel sends every matplotlib figure as a PNG once a
+     * block has run, and only the text side used to be read here, so a figure
+     * drawn in console mode was lost.
+     */
+    private void show(int execId, Map<String, Object> bundle) {
         if (bundle == null) {
+            return;
+        }
+        final Object png = bundle.get("image/png");
+        if (png != null) {
+            try {
+                final byte[] bytes = java.util.Base64.getMimeDecoder().decode(String.valueOf(png));
+                final java.io.File kept = com.sphere.components.rootview.RootPlotsPanel.showEncoded(
+                    bytes, "python_fig" + (++figures));
+                if (kept != null) {
+                    AppLogger.info("Figure shown in the Plots tab (" + kept.getName() + ").");
+                }
+            } catch (IllegalArgumentException undecodable) {
+                AppLogger.error("A figure came back unreadable: " + undecodable.getMessage());
+            }
             return;
         }
         Object plain = bundle.get("text/plain");

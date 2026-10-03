@@ -84,6 +84,8 @@ public class ClusterSequence {
     private static final LimitedWarning NO_CGAL_WARNING = new LimitedWarning(1);
     private static volatile boolean bannerPrinted;
     private static volatile Consumer<String> bannerSink = System.out::println;
+    /** Set on the thread of a check Sphere makes of itself, which is not the user's first clustering. */
+    private static final ThreadLocal<Boolean> SELF_CHECK = ThreadLocal.withInitial(() -> false);
 
     protected JetDefinition jetDef;
     protected boolean writeoutCombinations;
@@ -412,9 +414,24 @@ public class ClusterSequence {
         bannerSink = sink == null ? System.out::println : sink;
     }
 
+    /**
+     * Runs a check of the engine on this thread without spending the version
+     * line: a probe at startup or from ':fjet ping' leaves it for the user's
+     * own first clustering.
+     */
+    public static <T> T selfCheck(java.util.concurrent.Callable<T> check) throws Exception {
+        final boolean outer = SELF_CHECK.get();
+        SELF_CHECK.set(true);
+        try {
+            return check.call();
+        } finally {
+            SELF_CHECK.set(outer);
+        }
+    }
+
     /** Prints the version line, once per session. */
     public static void printBanner() {
-        if (bannerPrinted) {
+        if (bannerPrinted || SELF_CHECK.get()) {
             return;
         }
         synchronized (ClusterSequence.class) {
@@ -1079,6 +1096,15 @@ public class ClusterSequence {
 
     public void pluginAssociateExtras(Object extrasIn) {
         this.extras = extrasIn;
+    }
+
+    /**
+     * The jet itself, not a copy, for a plugin to change, e.g. its user
+     * information, fastjet::ClusterSequence::plugin_non_const_jet.
+     */
+    public PseudoJet pluginNonConstJet(int index) {
+        requirePlugin();
+        return jets.get(index);
     }
 
     private void requirePlugin() {

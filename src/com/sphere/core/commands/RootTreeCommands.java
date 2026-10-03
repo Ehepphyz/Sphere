@@ -444,7 +444,7 @@ public final class RootTreeCommands {
         }
         com.sphere.components.rootview.RootPlotsPanel.instance()
             .showColumn(branch, values);
-        AppLogger.info(Handlers.summarize(branch, values));
+        AppLogger.result(Handlers.summarize(branch, values));
     }
 
     public static void rootTreeCopytree(String i, CommandExecutionContext c) {
@@ -532,7 +532,7 @@ public final class RootTreeCommands {
         }
         com.sphere.components.rootview.RootPlotsPanel.instance()
             .showCurve(xName, yName, xValues, yValues);
-        AppLogger.info(String.format(java.util.Locale.ROOT,
+        AppLogger.result(String.format(java.util.Locale.ROOT,
             "%s vs %s drawn in the Plots tab, %d points",
             yName, xName, Math.min(xValues.length, yValues.length)));
     }

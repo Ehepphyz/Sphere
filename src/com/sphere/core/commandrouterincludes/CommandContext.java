@@ -90,6 +90,6 @@ public class CommandContext {
 
     public void setActiveProject(String projectName) {
         this.activeProject = projectName;
-        AppLogger.info("Active project set to: " + projectName);
+        AppLogger.result("Active project set to: " + projectName);
     }
 }

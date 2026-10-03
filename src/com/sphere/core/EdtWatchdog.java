@@ -21,6 +21,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * running at that instant. So the stall is sampled several times: the calls
  * common to every sample are the ones that are stuck, and the calls that change
  * above them are where the time is going.
+ *
+ * What is timed is a question: the event thread is handed a task, and the
+ * silence runs from that moment until it has run it. Timing from its last
+ * answer instead counted the watchdog's own lateness as the interface's: when
+ * Windows throttled the idle process, or the clock was set, the watchdog woke
+ * seconds late, found the last answer old, and reported an event thread that
+ * was only waiting for something to do.
  */
 public final class EdtWatchdog {
 
@@ -79,6 +86,7 @@ public final class EdtWatchdog {
     /** Two reports are never closer than this, however bad the machine is. */
     private static final long REPORT_GAP_MILLIS = 15000;
 
+    /** When the last report was written (nanoTime), or 0. */
     private static final AtomicLong LAST_REPORT = new AtomicLong(0);
 
     /**
@@ -91,8 +99,17 @@ public final class EdtWatchdog {
      */
     private static final long STARTUP_PATIENCE_MILLIS = 60000;
 
-    /** When the event thread last answered. Restarted when a busy stretch ends. */
-    private static final AtomicLong LAST_ANSWER = new AtomicLong(System.currentTimeMillis());
+    /** The question the event thread has not run yet, or 0 when it has answered them all. */
+    private static final AtomicLong WAITING = new AtomicLong(0);
+
+    /**
+     * When the silence of the waiting question started (nanoTime, which the
+     * clock being set does not move). Restarted when a busy stretch ends, and
+     * when the watchdog itself was kept from running.
+     */
+    private static final AtomicLong WAITING_SINCE = new AtomicLong(0);
+
+    private static final AtomicLong QUESTIONS = new AtomicLong(0);
 
     /** One report per stall, not one per second. */
     private static final AtomicBoolean REPORTED = new AtomicBoolean(false);
@@ -106,9 +123,9 @@ public final class EdtWatchdog {
             return;
         }
         patienceMillis = readPatience();
-        LAST_ANSWER.set(System.currentTimeMillis());
 
         worker = new Thread(() -> {
+            long woke = System.nanoTime();
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     Thread.sleep(CHECK_MILLIS);
@@ -116,37 +133,63 @@ public final class EdtWatchdog {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                SwingUtilities.invokeLater(() -> {
-                    LAST_ANSWER.set(System.currentTimeMillis());
-                    REPORTED.set(false);
-                });
+                final long now = System.nanoTime();
+                final long late = millis(now - woke) - CHECK_MILLIS;
+                woke = now;
+                if (late >= patienceMillis) {
+                    // The watchdog did not run either: the machine slept, or the
+                    // process was throttled while in the background. Nothing ran,
+                    // so the event thread cannot be blamed for what it did not do.
+                    WAITING_SINCE.set(now);
+                    continue;
+                }
 
-                final long now = System.currentTimeMillis();
-                final long silent = now - LAST_ANSWER.get();
-
-                // Answered on time: that is what a settled interface looks like.
-                if (silent < CHECK_MILLIS * 2) {
+                final long waiting = WAITING.get();
+                if (waiting == 0) {
+                    // The last question was answered: that is what a settled
+                    // interface looks like. Ask the next one.
                     if (!SHOWN.get() && CALM.incrementAndGet() >= CALM_CHECKS) {
                         SHOWN.set(true);
                     }
-                } else {
-                    CALM.set(0);
+                    ask(now);
+                    continue;
                 }
 
+                final long silent = millis(now - WAITING_SINCE.get());
+                if (silent >= CHECK_MILLIS * 2) {
+                    CALM.set(0);
+                }
                 final long allowed = SHOWN.get()
                     ? patienceMillis
                     : Math.max(patienceMillis, STARTUP_PATIENCE_MILLIS);
+                final long lastReport = LAST_REPORT.get();
                 final boolean quietEnough =
-                    now - LAST_REPORT.get() >= REPORT_GAP_MILLIS;
+                    lastReport == 0 || millis(now - lastReport) >= REPORT_GAP_MILLIS;
                 if (silent >= allowed && !EXPECTED.get() && quietEnough
                     && REPORTED.compareAndSet(false, true)) {
-                    report(silent, LAST_ANSWER);
+                    report(silent, waiting);
                 }
             }
         }, "sphere-edt-watchdog");
         worker.setDaemon(true);
         worker.setPriority(Thread.MIN_PRIORITY);
         worker.start();
+    }
+
+    /** Hands the event thread a task that says it ran; one at a time, so a freeze does not pile them up. */
+    private static void ask(long now) {
+        final long question = QUESTIONS.incrementAndGet();
+        WAITING_SINCE.set(now);
+        WAITING.set(question);
+        SwingUtilities.invokeLater(() -> {
+            if (WAITING.compareAndSet(question, 0)) {
+                REPORTED.set(false);
+            }
+        });
+    }
+
+    private static long millis(long nanos) {
+        return nanos / 1_000_000;
     }
 
     /**
@@ -190,7 +233,7 @@ public final class EdtWatchdog {
     public static void expectBusy(boolean busy) {
         EXPECTED.set(busy);
         if (!busy) {
-            LAST_ANSWER.set(System.currentTimeMillis());
+            WAITING_SINCE.set(System.nanoTime());
             REPORTED.set(false);
         }
     }
@@ -202,12 +245,11 @@ public final class EdtWatchdog {
         }
     }
 
-    private static void report(long silentMillis, AtomicLong lastAnswer) {
+    private static void report(long silentMillis, long question) {
         List<StackTraceElement[]> samples = new ArrayList<>();
         String state = "unknown";
         String lock = null;
 
-        final long answeredBefore = lastAnswer.get();
         for (int taken = 0; taken < SAMPLES; taken++) {
             ThreadInfo info = eventThread();
             if (info == null) {
@@ -226,17 +268,20 @@ public final class EdtWatchdog {
                 Thread.currentThread().interrupt();
                 break;
             }
-            if (lastAnswer.get() != answeredBefore) {
+            if (WAITING.get() != question) {
                 // It answered while being watched: a slow moment, not a freeze.
                 // Reporting it would print an idle stack and use up the quiet
                 // period that a real freeze needs.
                 return;
             }
         }
-        if (samples.isEmpty()) {
+        if (samples.isEmpty() || samples.stream().allMatch(EdtWatchdog::idle)) {
+            // Waiting for its next event in every look: the event thread has
+            // nothing to do, which is the opposite of being stuck.
+            REPORTED.set(false);
             return;
         }
-        LAST_REPORT.set(System.currentTimeMillis());
+        LAST_REPORT.set(System.nanoTime());
 
         StringBuilder message = new StringBuilder();
         message.append("The interface has not answered for ")
@@ -271,6 +316,20 @@ public final class EdtWatchdog {
             }
         }
         AppLogger.error(message.toString());
+    }
+
+    /** The event thread parked in its queue, waiting for work. */
+    private static boolean idle(StackTraceElement[] stack) {
+        for (StackTraceElement frame : stack) {
+            if (frame.getClassName().equals("java.awt.EventQueue")
+                && frame.getMethodName().equals("getNextEvent")) {
+                return true;
+            }
+            if (frame.getClassName().startsWith("java.awt.EventDispatchThread")) {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static ThreadInfo eventThread() {

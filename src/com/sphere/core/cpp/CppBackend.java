@@ -250,7 +250,7 @@ public class CppBackend implements Backend {
             if (toolchains.containsKey(targetToolchain)) {
                 activeToolchain = toolchains.get(targetToolchain);
                 String msg = "Switched active C++ toolchain to: " + targetToolchain;
-                AppLogger.info(msg);
+                AppLogger.result(msg);
                 if (listener != null) {
                     listener.onStdoutLine(msg);
                     listener.onProcessComplete(0, false);
@@ -720,6 +720,9 @@ public class CppBackend implements Backend {
             try {
                 ProcessBuilder pb = new ProcessBuilder(executionCommand);
                 pb.redirectErrorStream(false);
+                // #include "sphere_spx.hpp" resolves, and the program finds what
+                // the other engines exported.
+                com.sphere.core.bridge.Bridge.environment(pb.environment());
 
                 if (toolchain != null && "msvc".equalsIgnoreCase(toolchain.getName())) {
                     Map<String, String> env = pb.environment();

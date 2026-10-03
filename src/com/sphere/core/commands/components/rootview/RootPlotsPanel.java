@@ -51,6 +51,13 @@ public final class RootPlotsPanel extends ViewSurface {
     private Runnable reveal;
     /** Where pictures are written, when something has said where. */
     private Path outputFolder;
+    /**
+     * The plot drawn from numbers that is on screen, which has no file of its
+     * own yet: "Edit..." writes one for it, as a double click does.
+     */
+    private RootGallery.Entry showing;
+    /** The picture on screen, for Sphere's TBrowser to open live or in relief. */
+    private File shownFile;
 
     /** The one panel the tab holds, which every drawer reaches for. */
     public static synchronized RootPlotsPanel instance() {
@@ -127,6 +134,79 @@ public final class RootPlotsPanel extends ViewSurface {
             : com.sphere.core.fs.WorkingDirectory.get().resolve("plots");
         java.nio.file.Files.createDirectories(folder);
         return folder;
+    }
+
+    /**
+     * The same folder, for a process about to be started: engines are told it
+     * (SPHERE_PLOTS) so what they draw lands where the tab looks. Asked without
+     * building the tab when nothing has built it yet.
+     */
+    public static Path plotsFolder() {
+        final RootPlotsPanel panel;
+        synchronized (RootPlotsPanel.class) {
+            panel = shared;
+        }
+        try {
+            if (panel != null) {
+                return panel.outputFolder();
+            }
+            final Path folder = com.sphere.core.fs.WorkingDirectory.get().resolve("plots");
+            java.nio.file.Files.createDirectories(folder);
+            return folder;
+        } catch (java.io.IOException unwritable) {
+            return com.sphere.core.fs.WorkingDirectory.get();
+        }
+    }
+
+    /**
+     * Shows a picture Sphere made in memory: a ROOT canvas, a notebook figure,
+     * a console plot. It is written into the plots folder first, which is what
+     * makes it a picture like any other, kept, reopened and editable; the same
+     * name replaces the earlier picture of that name, so a canvas redrawn ten
+     * times leaves one thumbnail.
+     */
+    public static File showRendered(java.awt.image.BufferedImage image, String name) {
+        if (image == null) {
+            return null;
+        }
+        try {
+            final File target = plotsFolder().resolve(fileNameFor(name)).toFile();
+            javax.imageio.ImageIO.write(image, "png", target);
+            return shownWritten(target);
+        } catch (java.io.IOException unwritable) {
+            com.sphere.utils.AppLogger.error("Could not keep " + name + " for the Plots tab: "
+                + unwritable.getMessage());
+            return null;
+        }
+    }
+
+    /** The same for a picture that arrives already encoded, a PNG from a notebook. */
+    public static File showEncoded(byte[] bytes, String name) {
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        try {
+            final File target = plotsFolder().resolve(fileNameFor(name)).toFile();
+            java.nio.file.Files.write(target.toPath(), bytes);
+            return shownWritten(target);
+        } catch (java.io.IOException unwritable) {
+            com.sphere.utils.AppLogger.error("Could not keep " + name + " for the Plots tab: "
+                + unwritable.getMessage());
+            return null;
+        }
+    }
+
+    /** Shows a picture a process Sphere ran has written, such as a ROOT demo's canvas. */
+    public static File showFile(File file) {
+        return file == null || !file.isFile() ? null : shownWritten(file);
+    }
+
+    /** Shows a file Sphere has just written, without the watch announcing it a second time. */
+    private static File shownWritten(File target) {
+        final RootPlotsPanel panel = instance();
+        panel.watch.ignore(target);
+        panel.showImage(target);
+        return target;
     }
 
     /** The folders being watched for pictures. */
@@ -207,26 +287,39 @@ public final class RootPlotsPanel extends ViewSurface {
     /**
      * Shows a picture a script wrote, and keeps it.
      *
-     * PNG, JPEG and SVG all arrive the same way; the reading, the vector one
-     * included, is what the image editor already does.
+     * PNG, JPEG, TIFF and SVG all arrive the same way; the reading, the vector
+     * one and a 16-bit detector TIFF included, is what the image editor does.
      */
     public void showImage(File file) {
         if (file == null || !ImageFileIO.isImage(file)) {
             return;
         }
-        onSwing(() -> {
-            gallery.rememberImage(file);
-            display(file);
-            if (reveal != null) {
-                reveal.run();
-            }
+        // Decoded here, in arrival order, and only then handed to the event thread.
+        DECODER.execute(() -> {
+            final java.awt.image.BufferedImage thumbnail = RootGallery.thumbnailOf(file);
+            onSwing(() -> {
+                gallery.rememberImage(file, thumbnail);
+                display(file);
+                if (reveal != null) {
+                    reveal.run();
+                }
+            });
         });
     }
+
+    /** One thread, so pictures reach the tab in the order they were written. */
+    private static final java.util.concurrent.ExecutorService DECODER =
+        java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            final Thread t = new Thread(r, "sphere-plot-decoder");
+            t.setDaemon(true);
+            return t;
+        });
 
     public void clear() {
         onSwing(() -> {
             gallery.clear();
             picture.clear();
+            showing = null;
             cards.show(stage, "plot");
             openInEditor.setEnabled(false);
             plot.showMessage("Nothing drawn yet");
@@ -242,17 +335,47 @@ public final class RootPlotsPanel extends ViewSurface {
 
     private void keep(String caption) {
         cards.show(stage, "plot");
-        openInEditor.setEnabled(false);
-        gallery.remember(plot, caption);
+        showing = gallery.remember(plot, caption);
+        // A plot drawn from numbers is as editable as a picture: "Edit..."
+        // writes it out and opens that, which used to take a double click.
+        openInEditor.setEnabled(showing != null);
         if (reveal != null) {
             reveal.run();
         }
     }
 
     private void display(File file) {
+        showing = null;
+        shownFile = file;
         picture.show(file);
         cards.show(stage, "picture");
         openInEditor.setEnabled(true);
+    }
+
+    /** What "Edit..." opens: the picture on screen, or the drawn plot written out. */
+    private void editShowing() {
+        if (showing != null && showing.source == null) {
+            openInEditor(showing);
+        } else {
+            picture.openInEditor();
+        }
+    }
+
+    /** What is on screen, in Sphere's TBrowser: its numbers when it has them, else its file. */
+    private void openInBrowser() {
+        if (showing != null && showing.source == null) {
+            if (showing.histogram != null) {
+                com.sphere.components.spherebrowser.SphereBrowser.openHistogram(showing.histogram, showing.caption);
+            } else if (showing.graph != null) {
+                com.sphere.components.spherebrowser.SphereBrowser.openGraph(showing.graph, showing.caption);
+            } else if (showing.surface != null) {
+                com.sphere.components.spherebrowser.SphereBrowser.openGraph2D(showing.surface, showing.caption);
+            }
+            return;
+        }
+        final File file = showing != null && showing.source != null ? showing.source : shownFile;
+        com.sphere.components.spherebrowser.SphereBrowser.open(
+            file == null ? java.util.List.of() : java.util.List.of(file.toPath()));
     }
 
     private void imageAppeared(File file) {
@@ -328,7 +451,8 @@ public final class RootPlotsPanel extends ViewSurface {
             return;
         }
         cards.show(stage, "plot");
-        openInEditor.setEnabled(false);
+        showing = entry;
+        openInEditor.setEnabled(true);
         if (entry.histogram != null) {
             plot.showHistogram(entry.histogram);
         } else if (entry.graph != null) {
@@ -401,8 +525,13 @@ public final class RootPlotsPanel extends ViewSurface {
         }
         viewRow.add(Box.createHorizontalStrut(6));
         openInEditor.setEnabled(false);
-        openInEditor.addActionListener(e -> picture.openInEditor());
+        openInEditor.addActionListener(e -> editShowing());
         viewRow.add(openInEditor);
+        viewRow.add(Box.createHorizontalStrut(2));
+        JButton browser = ImagingTheme.textButton("TBrowser 3D",
+            "Sphere's TBrowser: the plot live in its 3D space and its analysis; a picture in relief");
+        browser.addActionListener(e -> openInBrowser());
+        viewRow.add(browser);
         viewRow.add(Box.createHorizontalStrut(2));
         JButton drop = ImagingTheme.textButton("Clear", "Drop the plots kept here");
         drop.addActionListener(e -> clear());

@@ -26,8 +26,21 @@ public final class EventIO {
 
     public enum Format { FASTJET, LHE, HEPMC, CSV }
 
-    /** One event: its final-state particles and weight. */
-    public record Event(List<PseudoJet> particles, double weight) {
+    /** One event: its final-state particles and weight, and its incoming partons when the file says. */
+    public record Event(List<PseudoJet> particles, double weight, Incoming incoming) {
+        public Event(List<PseudoJet> particles, double weight) {
+            this(particles, weight, null);
+        }
+    }
+
+    /**
+     * The two partons that made the event and the scale they were taken at.
+     *
+     * Only a Les Houches file carries them, and they are what reweighting an
+     * event to another PDF needs: the momentum fractions come from the beam
+     * energies of the init block, the scale is SCALUP.
+     */
+    public record Incoming(int id1, int id2, double x1, double x2, double scale) {
     }
 
     /** The format a file's name or first lines say it is in. */
@@ -57,13 +70,23 @@ public final class EventIO {
         };
     }
 
+    /**
+     * "px py pz E [pdg]" lines, events ending at "#END"; in a file without
+     * any "#END", an empty line ends the event instead, as in fjcontrib's
+     * flavour samples (pythia8_Zq_vshort.dat).
+     */
     private static List<Event> readFastJet(Path file, int max) throws IOException {
+        boolean endMarkers = false;
+        try (BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = r.readLine()) != null && !endMarkers) endMarkers = line.startsWith("#END");
+        }
         final List<Event> events = new ArrayList<>();
         List<PseudoJet> cur = new ArrayList<>();
         try (BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             String line;
             while ((line = r.readLine()) != null && events.size() < max) {
-                if (line.startsWith("#END")) {
+                if (line.startsWith("#END") || (!endMarkers && line.isBlank() && !cur.isEmpty())) {
                     events.add(new Event(cur, 1.0));
                     cur = new ArrayList<>();
                     continue;
@@ -82,22 +105,54 @@ public final class EventIO {
 
     private static List<Event> readLhe(Path file, int max) throws IOException {
         final List<Event> events = new ArrayList<>();
+        double eb1 = Double.NaN;
+        double eb2 = Double.NaN;
         try (BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             String line;
             while ((line = r.readLine()) != null && events.size() < max) {
+                if (line.trim().startsWith("<init") && Double.isNaN(eb1)) {
+                    final String[] v = r.readLine().trim().split("\\s+");
+                    if (v.length > 3) {
+                        eb1 = num(v[2]);
+                        eb2 = num(v[3]);
+                    }
+                    continue;
+                }
                 if (!line.trim().startsWith("<event")) continue;
                 final String[] head = r.readLine().trim().split("\\s+");
                 final int nup = Integer.parseInt(head[0]);
                 final double weight = head.length > 2 ? num(head[2]) : 1.0;
+                final double scale = head.length > 3 ? num(head[3]) : Double.NaN;
                 final List<PseudoJet> ps = new ArrayList<>();
+                int id1 = 0;
+                int id2 = 0;
+                double x1 = Double.NaN;
+                double x2 = Double.NaN;
                 for (int k = 0; k < nup; k++) {
                     final String[] w = r.readLine().trim().split("\\s+");
-                    if (Integer.parseInt(w[1]) != 1) continue;
+                    final int status = Integer.parseInt(w[1]);
+                    if (status == -1 && !Double.isNaN(eb1)) {
+                        // The same assignment :lpdf reweight makes: the parton
+                        // moving along +z came from the first beam.
+                        final double pz = num(w[8]);
+                        final double e = num(w[9]);
+                        if (pz >= 0 && id1 == 0) {
+                            id1 = Integer.parseInt(w[0]);
+                            x1 = (e + Math.abs(pz)) / (2 * eb1);
+                        } else {
+                            id2 = Integer.parseInt(w[0]);
+                            x2 = (e + Math.abs(pz)) / (2 * eb2);
+                        }
+                        continue;
+                    }
+                    if (status != 1) continue;
                     final PseudoJet p = new PseudoJet(num(w[6]), num(w[7]), num(w[8]), num(w[9]));
                     p.setUserIndex(Integer.parseInt(w[0]));
                     ps.add(p);
                 }
-                events.add(new Event(ps, weight));
+                final Incoming in = id1 != 0 && id2 != 0 && !Double.isNaN(scale)
+                    ? new Incoming(id1, id2, x1, x2, scale) : null;
+                events.add(new Event(ps, weight, in));
             }
         }
         return events;

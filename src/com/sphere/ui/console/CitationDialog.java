@@ -22,7 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * A window showing one citation (ROOT, FastJet, LHAPDF) with its BibTeX, opened
+ * A window showing one citation (ROOT, FastJet, fjcontrib, LHAPDF) with its BibTeX, opened
  * from Citations in the console's context menu. The text goes nowhere else:
  * the console output stays free of banners.
  */

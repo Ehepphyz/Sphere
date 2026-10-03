@@ -10,11 +10,20 @@
 #include <ROOT/RConfig.hxx>
 #include <RVersion.h>
 #include <TROOT.h>
+#include <TCanvas.h>
+#include <TDirectory.h>
+#include <TEnv.h>
+#include <TError.h>
+#include <TFile.h>
 #include <TInterpreter.h>
+#include <TList.h>
+#include <TSeqCollection.h>
 #include <TSystem.h>
+#include <TVirtualPad.h>
 
 #include <array>
 #include <atomic>
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -28,6 +37,13 @@
 #include <fstream>
 #include <iterator>
 #include <thread>
+#include <filesystem>
+#include <vector>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace Sphere {
 namespace cmd {
@@ -1135,6 +1151,302 @@ bool handles_ready() {
   return ready;
 }
 
+
+/**
+ * What a ROOT prompt carries from one line to the next: the current pad, the
+ * current directory, the current file.
+ *
+ * ROOT keeps all three per thread once thread safety is on, and each command
+ * is run by whichever worker is free. A line therefore found a gPad and a
+ * gDirectory the previous line never set: `h->Draw()` and then
+ * `gPad->SaveAs(...)` met a null pad on another thread. They are handed from
+ * command to command under the interpreter lock. The directory travels by
+ * path and the pad and file are checked against ROOT's own lists, so a canvas
+ * deleted or a file closed in between leaves nothing dangling.
+ */
+struct PromptState {
+  TVirtualPad *pad = nullptr;
+  TFile *file = nullptr;
+  std::string directory;
+};
+
+PromptState &prompt_state() {
+  static PromptState state;
+  return state;
+}
+
+bool pad_within(TVirtualPad *pad, TVirtualPad *wanted) {
+  if (pad == wanted) {
+    return true;
+  }
+  TList *primitives = pad->GetListOfPrimitives();
+  if (primitives == nullptr) {
+    return false;
+  }
+  TIter next(primitives);
+  while (TObject *object = next()) {
+    if (auto *sub = dynamic_cast<TVirtualPad *>(object)) {
+      if (pad_within(sub, wanted)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool pad_alive(TVirtualPad *wanted) {
+  if (wanted == nullptr || gROOT->GetListOfCanvases() == nullptr) {
+    return false;
+  }
+  TIter next(gROOT->GetListOfCanvases());
+  while (TObject *object = next()) {
+    if (auto *canvas = dynamic_cast<TVirtualPad *>(object)) {
+      if (pad_within(canvas, wanted)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void restore_prompt_state() {
+  PromptState &state = prompt_state();
+  gPad = pad_alive(state.pad) ? state.pad : nullptr;
+  TSeqCollection *files = gROOT->GetListOfFiles();
+  gFile = (state.file != nullptr && files != nullptr && files->FindObject(state.file) != nullptr)
+              ? state.file
+              : nullptr;
+  if (state.directory.empty() || !gROOT->cd(state.directory.c_str())) {
+    gROOT->cd();
+  }
+}
+
+void keep_prompt_state() {
+  PromptState &state = prompt_state();
+  state.pad = gPad;
+  state.file = gFile;
+  TDirectory *directory = gDirectory;
+  state.directory = directory != nullptr ? directory->GetPath() : "";
+}
+
+/**
+ * The formats a canvas is written in for the Plots tab: Sphere.Canvas.Formats
+ * in gEnv (what ':root canvas formats' sets, and what a .rootrc may say), then
+ * SPHERE_CANVAS_FORMATS, then png. "none" turns the export off.
+ */
+std::vector<std::string> canvas_formats() {
+  std::string spec = gEnv != nullptr ? gEnv->GetValue("Sphere.Canvas.Formats", "") : "";
+  if (spec.empty()) {
+    if (const char *given = std::getenv("SPHERE_CANVAS_FORMATS")) {
+      spec = given;
+    }
+  }
+  std::vector<std::string> formats;
+  std::string word;
+  auto take = [&]() {
+    for (char &c : word) {
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (word == "jpeg") word = "jpg";
+    if (word == "tif") word = "tiff";
+    if ((word == "png" || word == "svg" || word == "jpg" || word == "tiff" || word == "gif") &&
+        std::find(formats.begin(), formats.end(), word) == formats.end()) {
+      formats.push_back(word);
+    }
+    if (word == "none") {
+      formats.push_back("none");
+    }
+    word.clear();
+  };
+  for (char c : spec) {
+    if (c == ' ' || c == ',' || c == ';' || c == '\t') {
+      take();
+    } else {
+      word += c;
+    }
+  }
+  take();
+  if (std::find(formats.begin(), formats.end(), "none") != formats.end()) {
+    return {};
+  }
+  if (formats.empty()) {
+    formats.push_back("png");
+  }
+  return formats;
+}
+
+bool pad_modified(TVirtualPad *pad) {
+  if (pad->IsModified()) {
+    return true;
+  }
+  if (TList *primitives = pad->GetListOfPrimitives()) {
+    TIter next(primitives);
+    while (TObject *object = next()) {
+      if (auto *sub = dynamic_cast<TVirtualPad *>(object)) {
+        if (pad_modified(sub)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+void clear_modified(TVirtualPad *pad) {
+  pad->Modified(kFALSE);
+  if (TList *primitives = pad->GetListOfPrimitives()) {
+    TIter next(primitives);
+    while (TObject *object = next()) {
+      if (auto *sub = dynamic_cast<TVirtualPad *>(object)) {
+        clear_modified(sub);
+      }
+    }
+  }
+}
+
+std::string file_safe(const char *name) {
+  std::string out = (name != nullptr && *name != '\0') ? name : "canvas";
+  for (char &c : out) {
+    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-' && c != '.') {
+      c = '_';
+    }
+  }
+  return out;
+}
+
+/**
+ * Writes every canvas the line changed into SPHERE_PLOTS, where the Plots tab
+ * picks it up: root_<canvas>.<format>, one file per format.
+ *
+ * The engine runs in batch, as a ROOT with no window, so this is how what it
+ * draws is seen. "Changed" is ROOT's own notion, the pad's modified flag: set
+ * by Draw() and by Modified(), cleared when the pad is painted. A canvas is
+ * therefore written again exactly when ROOT itself would repaint it. Each
+ * file is written aside and then renamed over the old one, so the tab never
+ * reads half a picture.
+ */
+void export_changed_canvases() {
+  const char *folder = std::getenv("SPHERE_PLOTS");
+  TSeqCollection *canvases = gROOT != nullptr ? gROOT->GetListOfCanvases() : nullptr;
+  if (folder == nullptr || *folder == '\0' || canvases == nullptr || canvases->GetSize() == 0) {
+    return;
+  }
+  std::vector<TCanvas *> changed;
+  TIter next(canvases);
+  while (TObject *object = next()) {
+    if (auto *canvas = dynamic_cast<TCanvas *>(object)) {
+      if (pad_modified(canvas)) {
+        changed.push_back(canvas);
+      }
+    }
+  }
+  if (changed.empty()) {
+    return;
+  }
+  const std::vector<std::string> formats = canvas_formats();
+  namespace fs = std::filesystem;
+  std::error_code ignored;
+  const fs::path plots(folder);
+  const fs::path aside = plots / ".sphere-partial";
+  fs::create_directories(aside, ignored);
+
+  // SaveAs announces every file with an Info line; those belong to no command.
+  const Int_t quiet = gErrorIgnoreLevel;
+  gErrorIgnoreLevel = std::max<Int_t>(quiet, kWarning);
+  TVirtualPad *current = gPad;
+  for (TCanvas *canvas : changed) {
+    const std::string stem = "root_" + file_safe(canvas->GetName());
+    for (const std::string &format : formats) {
+      const fs::path partial = aside / (stem + "." + format);
+      canvas->SaveAs(partial.string().c_str());
+      std::error_code moved;
+      fs::rename(partial, plots / (stem + "." + format), moved);
+      if (moved) {
+        fs::remove(plots / (stem + "." + format), ignored);
+        fs::rename(partial, plots / (stem + "." + format), ignored);
+      }
+    }
+    clear_modified(canvas);
+  }
+  gPad = current;
+  gErrorIgnoreLevel = quiet;
+}
+
+/** A line meant for the ROOT prompt itself: ".x", ".L", ".ls", ".help"... but not ".5 * 2". */
+bool is_prompt_command(const std::string &command) {
+  const std::size_t at = command.find_first_not_of(" \t");
+  return at != std::string::npos && command[at] == '.' && at + 1 < command.size() &&
+         !std::isdigit(static_cast<unsigned char>(command[at + 1]));
+}
+
+/**
+ * Runs a prompt command the way root.exe does: through TApplication, which
+ * knows .x and .L along the macro path, .ls, .pwd, .which, .credits,
+ * .license, .libraries and .help, and hands the rest (.I, .class, .files,
+ * .g, .!, .undo...) to cling.
+ *
+ * Two are refused: ".q" and its kin would end the engine and every object it
+ * holds (Sphere leaves ROOT mode instead), and ".R" would open a remote
+ * session nobody can see.
+ */
+std::string run_prompt_command(const std::string &line) {
+  std::string command = line.substr(line.find_first_not_of(" \t"));
+  while (!command.empty() && (command.back() == ';' || command.back() == ' ' || command.back() == '\t' ||
+                              command.back() == '\r' || command.back() == '\n')) {
+    command.pop_back();
+  }
+  const std::string head = command.substr(0, std::min<std::size_t>(command.size(), 5));
+  std::string lower = head;
+  for (char &c : lower) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (lower.rfind(".q", 0) == 0 || lower.rfind(".exi", 0) == 0) {
+    return "ERROR: " + command +
+           " would end the engine and every object it holds. In ROOT mode, .q leaves the "
+           "mode and the engine keeps running.";
+  }
+  if (command.rfind(".R", 0) == 0 && (command.size() == 2 || command[2] == ' ')) {
+    return "ERROR: remote sessions (.R) are not available from Sphere's engine.";
+  }
+
+#if defined(__linux__)
+  // .help on a class, .gh and .forum open a page with xdg-open, which under
+  // WSL finds no browser, or a text one waiting on a terminal nobody has. With
+  // no DISPLAY, ROOT prints the address instead and Sphere opens it.
+  const bool opens_page = command.rfind(".help ", 0) == 0 || command.rfind(".? ", 0) == 0 ||
+                          command.rfind(".gh", 0) == 0 || command.rfind(".forum", 0) == 0;
+  std::string display;
+  if (opens_page) {
+    if (const char *shown = std::getenv("DISPLAY")) {
+      display = shown;
+    }
+    ::unsetenv("DISPLAY");
+  }
+#endif
+
+  Int_t error = TInterpreter::kNoError;
+  std::string printed;
+  {
+    OutputCapture capture;
+    try {
+      (void)gROOT->ProcessLine(command.c_str(), &error);
+    } catch (...) {
+      error = TInterpreter::kFatal;
+    }
+    printed = capture.stop();
+  }
+#if defined(__linux__)
+  if (opens_page && !display.empty()) {
+    ::setenv("DISPLAY", display.c_str(), 1);
+  }
+#endif
+  const bool refused = error != TInterpreter::kNoError || printed.rfind("Error in <", 0) == 0;
+  if (refused) {
+    return "ERROR: " + (printed.empty() ? "the interpreter refused " + command : printed);
+  }
+  return printed.empty() ? "OK" : printed;
+}
+
 // Runs one line through the ROOT interpreter and answers with its result.
 void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt,
                        void *context) {
@@ -1155,6 +1467,25 @@ void handle_cling_exec(ShmLayout &shm, const Proto::PacketHeader &pkt,
   }
 
   const std::lock_guard<std::mutex> interpreter_lock(interpreter_mutex());
+
+  // Whatever the line does, the next one finds the pad, directory and file it
+  // left, and the Plots tab shows the canvases it changed.
+  restore_prompt_state();
+  struct AfterLine {
+    ~AfterLine() {
+      keep_prompt_state();
+      try {
+        export_changed_canvases();
+      } catch (...) {
+        std::cerr << "[cmd_system] A canvas could not be written for the Plots tab.\n";
+      }
+    }
+  } after_line;
+
+  if (is_prompt_command(command)) {
+    send_response(shm, pkt.job_id, pkt.req_id, run_prompt_command(command));
+    return;
+  }
 
   std::string *slot = interpreter_result_slot();
   if (slot == nullptr) {
@@ -1352,8 +1683,53 @@ void handle_sys_threads(ShmLayout &shm, const Proto::PacketHeader &pkt,
                 "ERROR: say on, on <n>, off or status");
 }
 
+#if !defined(_WIN32)
+/**
+ * cling prints its own commands (.help, .class, .files, .g, .stats...)
+ * through a stream of its own on the standard output, and that stream keeps
+ * what it is given in a buffer when the output is not a terminal: the
+ * engine's is a log file, so what those commands printed stayed in the
+ * buffer and was never seen. The stream settles its buffering at its first
+ * write, so that write is made with a terminal in place; from then on it
+ * writes at once, and the capture around each command receives it.
+ */
+void unbuffer_cling_output() {
+  const int master = ::posix_openpt(O_RDWR | O_NOCTTY);
+  if (master < 0) {
+    return;
+  }
+  const char *name = (::grantpt(master) == 0 && ::unlockpt(master) == 0) ? ::ptsname(master) : nullptr;
+  const int terminal = name != nullptr ? ::open(name, O_RDWR | O_NOCTTY) : -1;
+  if (terminal >= 0) {
+    std::fflush(stdout);
+    const int saved = ::dup(STDOUT_FILENO);
+    if (saved >= 0 && ::dup2(terminal, STDOUT_FILENO) >= 0) {
+      // Twice: the first turns raw input on and prints, the second restores it.
+      (void)gInterpreter->ProcessLine(".rawInput");
+      (void)gInterpreter->ProcessLine(".rawInput");
+      std::fflush(stdout);
+      ::dup2(saved, STDOUT_FILENO);
+    }
+    if (saved >= 0) {
+      ::close(saved);
+    }
+    ::close(terminal);
+  }
+  ::close(master);
+}
+#endif
+
 // Installs the handlers above into the process-wide CommandRegistry.
 void warm_up() {
+  // The engine is a ROOT with no window: its canvases reach the Plots tab as
+  // files. Said here rather than left to the first TCanvas, which would open
+  // an X11 window under WSLg that nothing ever repaints.
+  gROOT->SetBatch(kTRUE);
+#if !defined(_WIN32)
+  if (gInterpreter != nullptr) {
+    unbuffer_cling_output();
+  }
+#endif
   (void)AdvancedRootConfigCache::instance();
   // Instantiating Run()/ToText() here costs the autoparse once, on the main
   // thread, instead of on the first client command. Captured so the interpreter's

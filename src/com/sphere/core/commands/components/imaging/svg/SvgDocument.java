@@ -365,6 +365,7 @@ public final class SvgDocument {
         set(style, "font-weight", attributeOrStyle(e, "font-weight"));
         set(style, "font-style", attributeOrStyle(e, "font-style"));
         set(style, "text-anchor", attributeOrStyle(e, "text-anchor"));
+        set(style, "shape-rendering", attributeOrStyle(e, "shape-rendering"));
         return style;
     }
 
@@ -431,6 +432,13 @@ public final class SvgDocument {
                 break;
             }
             case "font-size": style.fontSize = SvgStyle.length(v, style.fontSize); break;
+            case "shape-rendering": {
+                final String mode = v.toLowerCase(Locale.ROOT);
+                if (!mode.equals("inherit")) {
+                    style.crispEdges = mode.equals("crispedges") || mode.equals("optimizespeed");
+                }
+                break;
+            }
             case "font-weight": {
                 String lower = v.toLowerCase(Locale.ROOT);
                 style.bold = lower.equals("bold") || lower.equals("bolder");
@@ -681,6 +689,8 @@ public final class SvgDocument {
     private void paintShape(Graphics2D g, Item item) {
         final Shape shape = item.transform.createTransformedShape(item.shape);
         final SvgStyle s = item.style;
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, s.crispEdges
+            ? RenderingHints.VALUE_ANTIALIAS_OFF : RenderingHints.VALUE_ANTIALIAS_ON);
 
         if (s.hasFill()) {
             Paint paint = resolvePaint(s.fill, s.opacity * s.fillOpacity, shape);

@@ -53,7 +53,7 @@ public final class RootEngineCommands {
         for (long one : sorted) {
             total += one;
         }
-        AppLogger.info("round trips " + answered
+        AppLogger.result("round trips " + answered
             + "   median " + (sorted[answered / 2] / 1000L) + " us"
             + "   mean " + (total / answered / 1000L) + " us"
             + "   p99 " + (sorted[Math.min(answered - 1, (answered * 99) / 100)] / 1000L) + " us"
@@ -226,7 +226,7 @@ public final class RootEngineCommands {
                 }
             }
             if (queue.isEmpty()) {
-                AppLogger.info("Nothing to build. Everything in includes/ is up to date.");
+                AppLogger.result("Nothing to build. Everything in includes/ is up to date.");
                 return;
             }
         } else {
@@ -266,7 +266,7 @@ public final class RootEngineCommands {
             }
         }
         if (libraries + sources == 0) {
-            AppLogger.info("Nothing in includes/ yet. A .so there is loaded at startup.");
+            AppLogger.result("Nothing in includes/ yet. A .so there is loaded at startup.");
         }
 
         com.sphere.core.rootbackend.RootUserCompiler compiler =
@@ -291,7 +291,7 @@ public final class RootEngineCommands {
         com.sphere.core.rootbackend.RootBackend.setActivePipelineProject(project);
         var outcome = com.sphere.core.rootbackend.RootUserPipeline.loadInto(b, project);
         if (outcome.total() == 0) {
-            AppLogger.info("Nothing to load in includes/.");
+            AppLogger.result("Nothing to load in includes/.");
         }
         for (String problem : outcome.problems()) {
             AppLogger.raw("      " + problem);
@@ -528,7 +528,7 @@ public final class RootEngineCommands {
         final String name = Handlers.args(i, ":root personal pipeline").trim();
         com.sphere.core.rootbackend.RootPipelineWindow.show(
             Handlers.backend(c), project, name.isEmpty() ? null : name);
-        AppLogger.info("The pipeline builder is open."
+        AppLogger.result("The pipeline builder is open."
             + (name.isEmpty() ? "" : " Showing " + name + "."));
     }
 
@@ -573,7 +573,7 @@ public final class RootEngineCommands {
         }
 
         if (live.isEmpty() && waiting == 0) {
-            AppLogger.info("No pipeline yet. :root personal pipeline opens the builder.");
+            AppLogger.result("No pipeline yet. :root personal pipeline opens the builder.");
         }
     }
 
@@ -785,7 +785,7 @@ public final class RootEngineCommands {
         final java.nio.file.Path open = source;
         javax.swing.SwingUtilities.invokeLater(
             () -> com.sphere.ui.WindowManager.showFileInEditor(open.toFile()));
-        AppLogger.info(source.getFileName() + " is open in the editor.");
+        AppLogger.result(source.getFileName() + " is open in the editor.");
     }
 
     /** What one pipeline declares about itself, in full. */
@@ -845,7 +845,7 @@ public final class RootEngineCommands {
             }
         }
         if (found == 0) {
-            AppLogger.info("No chain yet. The Chain tab of :root personal pipeline builds one.");
+            AppLogger.result("No chain yet. The Chain tab of :root personal pipeline builds one.");
         }
     }
 
@@ -1004,7 +1004,7 @@ public final class RootEngineCommands {
         var values = com.sphere.core.rootbackend.RootPipelineProbe.watch(
             compilerFor(c), ready.manifest, ready.source, arguments);
         if (values.isEmpty()) {
-            AppLogger.info("Nothing was recorded. Name a value with SPHERE_WATCH(x) "
+            AppLogger.result("Nothing was recorded. Name a value with SPHERE_WATCH(x) "
                 + "inside the body, then look again.");
             return;
         }
@@ -1183,7 +1183,7 @@ public final class RootEngineCommands {
             }
         }
         if (shown == 0) {
-            AppLogger.info("No macro yet. Put a .C or .cpp in user_scripts/.");
+            AppLogger.result("No macro yet. Put a .C or .cpp in user_scripts/.");
         } else {
             AppLogger.raw("  " + shown + " macros. A later folder overrides an earlier name.");
         }
@@ -1315,7 +1315,7 @@ public final class RootEngineCommands {
             queue.addAll(com.sphere.core.rootbackend.RootUserPipeline.macros(root));
         }
         if (queue.isEmpty()) {
-            AppLogger.info("No macro in user_scripts/ to compile.");
+            AppLogger.result("No macro in user_scripts/ to compile.");
             return;
         }
 

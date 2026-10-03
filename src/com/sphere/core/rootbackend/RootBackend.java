@@ -2839,7 +2839,7 @@ public final class RootBackend implements AutoCloseable, Backend {
             AppLogger.warn("ROOT Backend is disabled. Cannot execute command: " + command);
             return;
         }
-        AppLogger.info("RootBackend dispatching non-blocking command over SHM: " + command);
+        AppLogger.debug("RootBackend dispatching non-blocking command over SHM: " + command);
         if (processBridge != null) {
             processBridge.pushCommand(command);
         }

@@ -46,11 +46,30 @@ public final class RootGraphicsCommands {
     public static void rootCanvasSave(String i, CommandExecutionContext c) {
         String a = Handlers.args(i, ":root canvas save");
         if (a.isEmpty()) {
-            Handlers.usage(":root canvas save <file>");
+            Handlers.usage(":root canvas save <file.png|tiff|svg|pdf|root|C>");
             return;
         }
-        String a0 = a;
-        Handlers.cling(c, "gPad->SaveAs(\"" + a0 + "\")");
+        final java.io.File target = Handlers.resolve(a);
+        Handlers.cling(c, "gPad->SaveAs(\"" + forCling(target) + "\")");
+        showSaved(target);
+    }
+
+    /**
+     * A path as the engine must be given it. The engine runs in its own folder,
+     * so a name alone landed there rather than in the one the console is in,
+     * where the Plots tab looks and the user expected it.
+     */
+    static String forCling(java.io.File file) {
+        return file.getAbsolutePath().replace('\\', '/').replace("\"", "\\\"");
+    }
+
+    /** A picture ROOT just wrote goes to the Plots tab, where it can be edited. */
+    static void showSaved(java.io.File file) {
+        if (com.sphere.components.imaging.ImageFileIO.isImage(file)) {
+            com.sphere.components.rootview.RootPlotsPanel.instance().showImage(file);
+        } else if (file.isFile()) {
+            AppLogger.result(file.getName() + " written; the Plots tab shows png, jpg, tiff, gif, bmp and svg.");
+        }
     }
 
     public static void rootCanvasUpdate(String i, CommandExecutionContext c) {

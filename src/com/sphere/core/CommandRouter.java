@@ -128,7 +128,7 @@ public class CommandRouter {
         "ROOT",                      // ROOTSYS, ROOT_INCLUDE_PATH, ROOTIGNOREPREFIX
         "G4", "GEANT4",
         "LHAPDF", "PYTHIA8", "HERWIG", "THEPEG", "MG5", "MADGRAPH",
-        "FASTJET", "HEPMC", "GSL", "XROOTD", "CLHEP",
+        "FASTJET", "FJCONTRIB", "HEPMC", "GSL", "XROOTD", "CLHEP",
         "SPHERE_"
     );
 
@@ -593,9 +593,35 @@ public class CommandRouter {
                     collectOrRun(currentMode.get(), input.stripTrailing());
                     return;
                 }
+                // ROOT's own prompt commands (.x, .demo, .q...) are answered in
+                // order, and .q changes the mode itself: they take the ':root' path.
+                if ("root".equals(currentMode.get())
+                        && com.sphere.core.commands.Handlers.isRootPromptCommand(base)) {
+                    ctx.currentMode = currentMode.get();
+                    registry.dispatch(":root " + base, ctx);
+                    currentMode.set(ctx.currentMode);
+                    if (modeUpdater != null) modeUpdater.accept(currentMode.get());
+                    return;
+                }
                 Backend backend = backends.get(currentMode.get());
                 if (backend != null) {
                     backend.execute(command);
+                    return;
+                }
+                // An engine inside Sphere (:fjet, :fjco) has no interpreter to send
+                // the line to: in its mode a line is one of its commands typed
+                // without the prefix, so "obs tau21" in fjco mode is ":fjco obs tau21".
+                if (InProcessEngine.find(currentMode.get()) != null) {
+                    final String prefixed = ":" + currentMode.get() + " " + base;
+                    if (com.sphere.core.commands.CommandDefinitions.find(prefixed) == null) {
+                        AppLogger.error("'" + base + "' is not a :" + currentMode.get()
+                            + " command. 'help' lists them, 'exit' leaves the mode.");
+                        return;
+                    }
+                    ctx.currentMode = currentMode.get();
+                    registry.dispatch(prefixed, ctx);
+                    currentMode.set(ctx.currentMode);
+                    if (modeUpdater != null) modeUpdater.accept(currentMode.get());
                     return;
                 }
                 // A mode with neither a buffer nor a backend has nowhere to send
@@ -709,6 +735,10 @@ public class CommandRouter {
         // TagInterpreter returns the name unchanged when it resolves nothing, and
         // the interpreter then answered with its own stack trace instead of us.
         String script = pc.snippetTokens.get(0);
+        // A ROOT macro may carry ACLiC's suffix, which is not part of its name.
+        if ("root".equalsIgnoreCase(pc.languageOrApp)) {
+            script = com.sphere.core.rootbackend.RootAclic.split(script)[0];
+        }
         File scriptFile = new File(script);
         if (!scriptFile.isFile()) {
             AppLogger.error("Snippet not found: " + script);
@@ -906,6 +936,40 @@ public class CommandRouter {
             return;
         }
 
+        // ::root runs as ::py does, a process of its own; only its command line
+        // needs building, the rest below is the same.
+        final List<String> rootCommand;
+        final Path rootLaunchers;
+        // Set when the macro is to be compiled by ACLiC (macro.C+): the process
+        // then needs the compiler's environment, which on Windows is not a given.
+        final File rootCompiles;
+        if (pc.hasSnippet && "root".equalsIgnoreCase(pc.languageOrApp)) {
+            final com.sphere.utils.SettingsManager settings = new com.sphere.utils.SettingsManager();
+            final String root = com.sphere.core.rootbackend.RootBridgeCompiler.rootExecutable(settings);
+            if (root == null) {
+                AppLogger.error(settings.isDeclaredEmpty("ROOT_DIR")
+                    ? "ROOT_DIR is empty in settings.conf, which disables ROOT."
+                    : "ROOT was not found: set ROOT_DIR in settings.conf.");
+                return;
+            }
+            try {
+                rootLaunchers = java.nio.file.Files.createTempDirectory("sphere-root");
+                rootCommand = com.sphere.core.rootbackend.RootMacroLauncher.command(root,
+                    pc.macroTokens, pc.snippetTokens.get(0),
+                    pc.snippetTokens.subList(1, pc.snippetTokens.size()), rootLaunchers,
+                    com.sphere.components.rootview.RootPlotsPanel.plotsFolder());
+            } catch (IOException unwritable) {
+                AppLogger.error("Could not prepare the ROOT macro: " + unwritable.getMessage());
+                return;
+            }
+            rootCompiles = com.sphere.core.rootbackend.RootAclic.split(pc.snippetTokens.get(0))[1].isEmpty()
+                ? null : new File(root);
+        } else {
+            rootCommand = null;
+            rootLaunchers = null;
+            rootCompiles = null;
+        }
+
         new SwingWorker<Void, String>() {
             @Override
             protected Void doInBackground() throws Exception {
@@ -949,6 +1013,8 @@ public class CommandRouter {
                         cmd.add(com.sphere.components.variables.PythonProbe.WRAPPER);
                     }
                     cmd.addAll(program);
+                } else if (rootCommand != null) {
+                    cmd.addAll(rootCommand);
                 } else if (pc.hasSnippet) {
                     // The raw line used to be handed to the shell here, prefix and
                     // brackets included, so ::jul and any other language answered
@@ -959,7 +1025,7 @@ public class CommandRouter {
                         AppLogger.error(detachedPrefixHint(pc));
                     } else {
                         AppLogger.error("No runner for '" + pc.languageOrApp
-                                        + "' snippets; supported: py, js, cpp, julia, fortran.");
+                                        + "' snippets; supported: py, js, cpp, julia, fortran, root.");
                     }
                     return null;
                 } else {
@@ -1077,6 +1143,15 @@ public class CommandRouter {
 
                 }
 
+                // After the Python path is settled, which rebuilds PYTHONPATH:
+                // a script run here finds what the other engines exported, its
+                // plt.show() lands in the Plots tab, and a ROOT macro can
+                // #include "sphere_spx.hpp".
+                com.sphere.core.bridge.Bridge.environment(env);
+                if (rootCompiles != null) {
+                    com.sphere.core.rootbackend.RootAclic.environment(env, rootCompiles);
+                }
+
                 // Every program launched from here is told where to leave its
                 // variables, whatever language it is: a shell line is as likely
                 // to be a Fortran binary as a Python script.
@@ -1143,6 +1218,11 @@ public class CommandRouter {
                 // The output of a program Sphere launched, not text Sphere wrote:
                 // stream is what carries its own errors and warnings into color.
                 chunks.forEach(AppLogger::stream);
+            }
+
+            @Override
+            protected void done() {
+                com.sphere.core.rootbackend.RootMacroLauncher.discard(rootLaunchers);
             }
         }.execute();
     }
@@ -1222,19 +1302,18 @@ public class CommandRouter {
      *
      * A process would take its variables with it when it ended. The session keeps
      * them, which is the whole reason it exists.
+     *
+     * The two sides of the bracket mean what they mean for ::py and ::cpp: what
+     * sits before it is for Julia ("::jul -t 4 --project=. [@ ...]"), what sits
+     * inside it after the file reaches the file as ARGS. Julia takes its flags
+     * when it starts, so a session running with other ones is restarted with
+     * these; with none given, the file runs in the session as it is.
      */
     private void runJuliaSnippet(ParsedCommand pc) {
         final File script = new File(pc.snippetTokens.get(0));
         final List<String> runtimeArgs =
             new ArrayList<>(pc.snippetTokens.subList(1, pc.snippetTokens.size()));
-
-        if (!pc.macroTokens.isEmpty()) {
-            // The interpreter is already up and holding the session's variables;
-            // restarting it to honor an option would throw them away.
-            AppLogger.warn("The Julia session is already running, so "
-                           + String.join(" ", pc.macroTokens)
-                           + " cannot configure it. Put arguments inside the brackets.");
-        }
+        final List<String> interpreterFlags = new ArrayList<>(pc.macroTokens);
 
         new SwingWorker<Void, Void>() {
             @Override
@@ -1243,7 +1322,11 @@ public class CommandRouter {
                     com.sphere.core.julia.JuliaSession.instance(
                         new com.sphere.utils.SettingsManager());
                 try {
-                    session.start();
+                    if (interpreterFlags.isEmpty()) {
+                        session.start();
+                    } else {
+                        session.start(interpreterFlags);
+                    }
                 } catch (IOException unavailable) {
                     AppLogger.error(unavailable.getMessage());
                     return null;

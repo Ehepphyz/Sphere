@@ -33,6 +33,13 @@ public final class SvgStyle implements Cloneable {
     public boolean bold;
     public boolean italic;
     public String textAnchor = "start";
+    /**
+     * shape-rendering="crispEdges" (or optimizeSpeed): shapes drawn without
+     * antialiasing. ROOT writes it on every SVG, because a surface is thousands
+     * of polygons edge to edge, and smoothing each edge on its own leaves a
+     * pale seam along every one of them.
+     */
+    public boolean crispEdges;
 
     @Override
     public SvgStyle clone() {

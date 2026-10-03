@@ -421,6 +421,8 @@ public class PythonBackend implements Backend {
             try {
                 ProcessBuilder pb = new ProcessBuilder(command);
                 pb.redirectErrorStream(false);
+                // import sphere_spx works, and finds what the other engines exported.
+                com.sphere.core.bridge.Bridge.environment(pb.environment());
                 try {
                     final String variables =
                         com.sphere.components.variables.PythonProbe.folder();

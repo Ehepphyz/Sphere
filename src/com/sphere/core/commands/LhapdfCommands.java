@@ -90,7 +90,7 @@ public final class LhapdfCommands {
         return h;
     }
 
-    private static int pid(String w) {
+    static int pid(String w) {
         return switch (w.toLowerCase(Locale.ROOT)) {
             case "g", "gluon", "0" -> 21;
             case "d" -> 1;
@@ -142,7 +142,7 @@ public final class LhapdfCommands {
     /* ------------------------------------------------------------------ */
 
     public static void help(String i, CommandExecutionContext c) {
-        AppLogger.info("Parton distributions, LHAPDF 6 style, read in Java (no LHAPDF needed):");
+        AppLogger.result("Parton distributions, LHAPDF 6 style, read in Java (no LHAPDF needed):");
         AppLogger.raw("  find        :lpdf list | search <text> | install <name> | show <set> | paths");
         AppLogger.raw("  open        :lpdf mkpdf CT18NLO/0 as ct   (one member)   :lpdf mkpdfs CT18NLO as cts   (every member)");
         AppLogger.raw("  evaluate    :lpdf xfxq ct g 0.01 100 | xfxq2 | alphasq ct 91.1876 | inrange | table ct 100");
@@ -184,7 +184,7 @@ public final class LhapdfCommands {
             return;
         }
         final Path info = folder.resolve(folder.getFileName() + ".info");
-        AppLogger.info(folder.getFileName() + "  (" + folder + ")");
+        AppLogger.result(folder.getFileName() + "  (" + folder + ")");
         try {
             if (Files.isRegularFile(info)) {
                 for (String line : Files.readAllLines(info, StandardCharsets.UTF_8)) {
@@ -197,7 +197,7 @@ public final class LhapdfCommands {
             try (var files = Files.list(folder)) {
                 members = files.filter(p -> p.getFileName().toString().matches(".*_\\d{4}\\.dat")).count();
             }
-            AppLogger.info(members + " member file(s) on disk.");
+            AppLogger.result(members + " member file(s) on disk.");
         } catch (IOException e) {
             AppLogger.error(e.getMessage());
         }
@@ -241,7 +241,7 @@ public final class LhapdfCommands {
             HANDLES.put(as, new Handle(set, member, whole));
             RootPdfCommands.adopt(as, set);
             if (LhapdfCitation.firstUse()) AppLogger.raw(LhapdfCitation.VERSION_LINE);
-            AppLogger.info(as + " -> " + set.name() + (whole ? f(" (%d members, %s errors at %.4g%% CL)",
+            AppLogger.result(as + " -> " + set.name() + (whole ? f(" (%d members, %s errors at %.4g%% CL)",
                 set.memberCount(), set.errorType(), set.confidenceLevel()) : "/" + member));
         } catch (IOException e) {
             AppLogger.error(e.getMessage());
@@ -250,7 +250,7 @@ public final class LhapdfCommands {
 
     public static void pdfs(String i, CommandExecutionContext c) {
         if (HANDLES.isEmpty()) {
-            AppLogger.info("No handle open.");
+            AppLogger.result("No handle open.");
             return;
         }
         for (Map.Entry<String, Handle> e : HANDLES.entrySet()) {
@@ -264,13 +264,13 @@ public final class LhapdfCommands {
         final String a = Handlers.args(i, ":lpdf close");
         if (a.isEmpty()) {
             for (String name : HANDLES.keySet()) RootPdfCommands.forget(name);
-            AppLogger.info("Closed " + HANDLES.size() + " handle(s).");
+            AppLogger.result("Closed " + HANDLES.size() + " handle(s).");
             HANDLES.clear();
             return;
         }
         if (HANDLES.remove(a) != null) {
             RootPdfCommands.forget(a);
-            AppLogger.info("Closed " + a);
+            AppLogger.result("Closed " + a);
         } else {
             AppLogger.error("No handle named " + a);
         }
@@ -305,7 +305,7 @@ public final class LhapdfCommands {
                 }
             } else {
                 final int p = pid(w[1]);
-                AppLogger.info(f("xf(%d, x=%g, Q2=%g) = %.12e", p, x, q2, h.pdf().xfxQ2(p, x, q2)));
+                AppLogger.result(f("xf(%d, x=%g, Q2=%g) = %.12e", p, x, q2, h.pdf().xfxQ2(p, x, q2)));
             }
         } catch (RuntimeException e) {
             AppLogger.error(e.getMessage());
@@ -321,7 +321,7 @@ public final class LhapdfCommands {
         final Handle h = handle(w[0]);
         if (h == null) return;
         final double a = h.set().alphasQ(num(w[1]));
-        AppLogger.info(Double.isNaN(a) ? "The set defines no alpha_s." : f("alpha_s(Q = %g GeV) = %.12f", num(w[1]), a));
+        AppLogger.result(Double.isNaN(a) ? "The set defines no alpha_s." : f("alpha_s(Q = %g GeV) = %.12f", num(w[1]), a));
     }
 
     public static void alphasq2(String i, CommandExecutionContext c) {
@@ -333,7 +333,7 @@ public final class LhapdfCommands {
         final Handle h = handle(w[0]);
         if (h == null) return;
         final double a = h.set().alphasQ(Math.sqrt(num(w[1])));
-        AppLogger.info(Double.isNaN(a) ? "The set defines no alpha_s." : f("alpha_s(Q2 = %g GeV^2) = %.12f", num(w[1]), a));
+        AppLogger.result(Double.isNaN(a) ? "The set defines no alpha_s." : f("alpha_s(Q2 = %g GeV^2) = %.12f", num(w[1]), a));
     }
 
     public static void inrange(String i, CommandExecutionContext c) {
@@ -346,7 +346,7 @@ public final class LhapdfCommands {
         if (h == null) return;
         final RootPdfGrid g = h.pdf();
         final boolean in = g.inRange(num(w[1]), num(w[2]) * num(w[2]));
-        AppLogger.info(f("%s: x in [%g, %g], Q in [%g, %g] GeV", in ? "inside" : "OUTSIDE", g.xMin(), g.xMax(), g.qMin(), g.qMax()));
+        AppLogger.result(f("%s: x in [%g, %g], Q in [%g, %g] GeV", in ? "inside" : "OUTSIDE", g.xMin(), g.xMax(), g.qMin(), g.qMax()));
     }
 
     public static void members(String i, CommandExecutionContext c) {
@@ -375,7 +375,7 @@ public final class LhapdfCommands {
         final double[] v = set.members(pid(w[1]), num(w[2]), num(w[3]) * num(w[3]));
         final PdfUncertainty.Result r = PdfUncertainty.uncertainty(v, set.errorType(), set.confidenceLevel(), cl,
             flag(w, "alternative"));
-        AppLogger.info(f("%s, %d members, %s errors (set at %.4g%% CL, given at %.4g%%%s):", set.name(), v.length,
+        AppLogger.result(f("%s, %d members, %s errors (set at %.4g%% CL, given at %.4g%%%s):", set.name(), v.length,
             set.errorType(), set.confidenceLevel(), cl, r.scale() != 1 ? f(", scaled by %.6f", r.scale()) : ""));
         AppLogger.raw(f("  central %.10e   +%.6e  -%.6e   symmetric %.6e   (%.3f%%)", r.central(), r.errplus(),
             r.errminus(), r.errsymm(), r.central() == 0 ? 0 : 100 * r.errsymm() / Math.abs(r.central())));
@@ -392,7 +392,7 @@ public final class LhapdfCommands {
         final RootPdfSet set = h.set();
         final double[] a = set.members(pid(w[1]), num(w[2]), num(w[3]) * num(w[3]));
         final double[] b = set.members(pid(w[4]), num(w[5]), num(w[6]) * num(w[6]));
-        AppLogger.info(f("correlation = %.8f  (%s, %d members, %s)", PdfUncertainty.correlation(a, b, set.errorType()),
+        AppLogger.result(f("correlation = %.8f  (%s, %d members, %s)", PdfUncertainty.correlation(a, b, set.errorType()),
             set.name(), a.length, set.errorType()));
     }
 
@@ -410,7 +410,7 @@ public final class LhapdfCommands {
         final int[] fl = h.set().flavors();
         final StringBuilder head = new StringBuilder(f("%12s", "x"));
         for (int p : fl) head.append(f(" %12s", "xf(" + p + ")"));
-        AppLogger.info(h.set().name() + f(" at Q = %g GeV:", q));
+        AppLogger.result(h.set().name() + f(" at Q = %g GeV:", q));
         AppLogger.raw(head.toString());
         final double lo = Math.log(Math.max(g.xMin(), 1e-7));
         for (int k = 0; k < n; k++) {
@@ -543,7 +543,7 @@ public final class LhapdfCommands {
             AppLogger.error("No event in " + file);
             return;
         }
-        AppLogger.info(f("%d events reweighted from %s to %s (beams %.1f and %.1f GeV, scale = SCALUP).",
+        AppLogger.result(f("%d events reweighted from %s to %s (beams %.1f and %.1f GeV, scale = SCALUP).",
             nev, from.set().name(), to.set().name(), eb1, eb2));
         AppLogger.raw(f("  sum of weights: %.8e -> %.8e   (ratio %.6f)", sumOld, sumNew[0], sumNew[0] / sumOld));
         AppLogger.raw(f("  event weight ratio: mean %.6f, min %.6f, max %.6f; %d beyond a factor 3", sumRatio / nev, rmin,
@@ -562,12 +562,39 @@ public final class LhapdfCommands {
             try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(out, StandardCharsets.UTF_8))) {
                 for (String s : rewritten) pw.println(s);
             }
-            AppLogger.info("Reweighted events written to " + out + (allMembers ? " (one <wgt> per member)" : ""));
+            AppLogger.result("Reweighted events written to " + out + (allMembers ? " (one <wgt> per member)" : ""));
         }
     }
 
+    /* ------------------------------------------------------------------ */
+    /* What the bridge to the other engines reads                          */
+    /* ------------------------------------------------------------------ */
+
+    /** The set behind a handle, or null (and said) when there is none. */
+    static RootPdfSet handleSet(String name) {
+        final Handle h = handle(name);
+        return h == null ? null : h.set();
+    }
+
+    /** The one member a handle evaluates with. */
+    static RootPdfGrid handlePdf(String name) {
+        final Handle h = handle(name);
+        return h == null ? null : h.pdf();
+    }
+
+    /** True when the handle holds every member, as mkpdfs opens them. */
+    static boolean handleWhole(String name) {
+        final Handle h = HANDLES.get(name);
+        return h != null && h.wholeSet();
+    }
+
+    /** The names of the handles open. */
+    static List<String> handleNames() {
+        return new ArrayList<>(HANDLES.keySet());
+    }
+
     /** The PDG code of an incoming parton as a PDF flavour (21 for a gluon given as 0 or 9). */
-    private static int pdg(int id) {
+    static int pdg(int id) {
         return (id == 0 || id == 9) ? 21 : id;
     }
 

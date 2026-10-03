@@ -564,7 +564,10 @@ public final class RootHistCommands {
             Handlers.usage(":root hist save <name> <file>".trim());
             return;
         }
-        Handlers.cling(c, "(" + Handlers.obj("TH1", w[0]) + "->SaveAs(\"" + w[1] + "\"), std::string(\"saved\"))");
+        final java.io.File target = Handlers.resolve(w[1]);
+        Handlers.cling(c, "(" + Handlers.obj("TH1", w[0]) + "->SaveAs(\""
+            + RootGraphicsCommands.forCling(target) + "\"), std::string(\"saved\"))");
+        RootGraphicsCommands.showSaved(target);
     }
 
     public static void rootHistScale(String i, CommandExecutionContext c) {

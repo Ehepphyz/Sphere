@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import com.sphere.core.InProcessEngine;
 import com.sphere.core.rootbackend.RootBridgeCompiler;
 
 /**
@@ -113,8 +114,20 @@ public final class StartupDiagnostic {
 
         PythonEnvs.initialize(sm);
 
-        // 4. Generate a clean, unified, and professional summary report
-        generateSummaryReport();
+        // 4. The engines inside Sphere have nothing on disk to find: each one is
+        // made to compute, and is named in the summary when it answers right.
+        List<String> inProcess = new ArrayList<>();
+        for (InProcessEngine engine : InProcessEngine.values()) {
+            InProcessEngine.Probe probe = engine.probe();
+            if (probe.ok()) {
+                inProcess.add(engine.label());
+            } else {
+                AppLogger.error("CRITICAL: " + engine.label() + " (in process) FAILED -> " + probe.detail());
+            }
+        }
+
+        // 5. Generate a clean, unified, and professional summary report
+        generateSummaryReport(inProcess);
     }
 
     private static void populateDiagnosticTargets(List<DiagnosticTarget> targets, boolean isWin) {
@@ -233,7 +246,7 @@ public final class StartupDiagnostic {
     /**
      * Analyzes compiled verification mappings to print a high-grade professional summary.
      */
-    private static void generateSummaryReport() {
+    private static void generateSummaryReport(List<String> inProcess) {
         long totalCore = results.values().stream().filter(r -> !r.isOptional).count();
         long successfulCore = results.values().stream().filter(r -> !r.isOptional && r.success).count();
         long criticalErrors = results.values().stream().filter(r -> !r.isOptional && !r.success).count();
@@ -254,8 +267,9 @@ public final class StartupDiagnostic {
 
         if (criticalErrors == 0) {
             // Pristine operational summary
-            AppLogger.info(String.format("Environment verified. %d/%d core runtimes fully functional. Ready.", 
-                    successfulCore, totalCore));
+            AppLogger.info(String.format("Environment verified. %d/%d core runtimes fully functional%s. Ready.",
+                    successfulCore, totalCore, inProcess.isEmpty() ? ""
+                        : "; " + String.join(" and ", inProcess) + " answering in process"));
         } else {
             AppLogger.error(String.format("System initialization failed. %d critical components missing.", 
                     criticalErrors));

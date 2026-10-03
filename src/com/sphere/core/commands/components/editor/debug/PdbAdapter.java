@@ -46,7 +46,7 @@ public final class PdbAdapter implements DebugAdapter {
         this.listener = listener;
         setState(State.STARTING);
 
-        String python = settings == null ? null : settings.resolveTool("PYTHON_EXEC", "python3");
+        String python = settings == null ? null : settings.resolveTool("PYTHON_EXEC", "python");
         if (python == null) {
             // A blank key is a decision the user wrote down; an absent tool is not.
             fail(settings != null && settings.isDeclaredEmpty("PYTHON_EXEC")

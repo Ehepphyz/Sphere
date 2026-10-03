@@ -201,7 +201,7 @@ public class GrepPlugin implements CommandRouter.CommandPlugin {
             @Override
             protected void done() {
                 if (hits == 0) {
-                    AppLogger.info("No match in " + scanned + " files"
+                    AppLogger.result("No match in " + scanned + " files"
                                    + (skipped > 0 ? ", " + skipped + " skipped" : "") + ".");
                 } else if (hits >= finalMax) {
                     AppLogger.warn(hits + " matches shown, stopped at the limit. Use  --all  for everything.");

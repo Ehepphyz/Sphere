@@ -57,7 +57,7 @@ public class SmartDispatcher implements CommandDispatcher {
                     .orElse(null);
 
             if (lastModifiedFile != null) {
-                AppLogger.info("Opening last modified file: " + lastModifiedFile.getFileName());
+                AppLogger.result("Opening last modified file: " + lastModifiedFile.getFileName());
             } else {
                 AppLogger.error("No files found in current directory.");
             }

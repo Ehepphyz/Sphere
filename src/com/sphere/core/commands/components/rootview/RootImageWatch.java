@@ -197,6 +197,18 @@ public final class RootImageWatch {
         }
     }
 
+    /**
+     * The subfolders a script writes its figures into by habit. They are
+     * looked into as well: "plt.savefig('plots/fig1.png')" or ROOT's
+     * "c->SaveAs('figures/mass.tiff')" is drawing in the folder the console is
+     * in as surely as a file beside the script. Only these names, and only one
+     * level down: every subfolder of a big tree, every two seconds, would cost
+     * more than it finds.
+     */
+    private static final Set<String> FIGURE_FOLDERS = Set.of(
+        "plots", "plot", "figures", "figure", "figs", "fig", "images", "img", "output", "outputs",
+        "out", "results", "graphs", "pictures", "png", "tiff");
+
     private static List<File> imagesIn(Path directory) {
         List<File> images = new ArrayList<>();
         if (directory == null) {
@@ -213,6 +225,21 @@ public final class RootImageWatch {
             }
             if (entry.isFile() && ImageFileIO.isImage(entry)) {
                 images.add(entry);
+            } else if (entry.isDirectory()
+                       && FIGURE_FOLDERS.contains(entry.getName().toLowerCase(java.util.Locale.ROOT))) {
+                File[] inside = entry.listFiles();
+                if (inside == null) {
+                    continue;
+                }
+                int more = 0;
+                for (File file : inside) {
+                    if (more++ >= MAX_FILES) {
+                        break;
+                    }
+                    if (file.isFile() && ImageFileIO.isImage(file)) {
+                        images.add(file);
+                    }
+                }
             }
         }
         return images;

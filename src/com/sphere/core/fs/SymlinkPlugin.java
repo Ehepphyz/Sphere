@@ -126,7 +126,7 @@ public class SymlinkPlugin implements CommandRouter.CommandPlugin {
                 AppLogger.error("Target does not exist. On Windows, symbolic links typically require an existing target.");
                 return;
             } else {
-                AppLogger.info("Warning: target does not exist; creating a dangling symbolic link.");
+                AppLogger.warn("The target does not exist; creating a dangling symbolic link.");
             }
         }
 

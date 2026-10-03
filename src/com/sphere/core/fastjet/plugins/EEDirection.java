@@ -12,14 +12,19 @@ import com.sphere.core.fastjet.PseudoJet;
  * direction is normalised to 106 bits and 1 - cos(theta) is taken as half
  * the squared chord |n_a - n_b|^2, which has no cancellation at all.
  */
-final class EEDirection {
+public final class EEDirection {
 
     private final boolean dd;
     private final double xH, xL, yH, yL, zH, zL;
     /** The low word of the last {@link #oneMinusCos} result. */
     double lastLow;
 
-    EEDirection(PseudoJet jet, boolean dd) {
+    /** The low word of the last {@link #oneMinusCos} result; 0 in double. */
+    public double lastLow() {
+        return lastLow;
+    }
+
+    public EEDirection(PseudoJet jet, boolean dd) {
         this.dd = dd;
         if (!dd) {
             final double norm = 1.0 / Math.sqrt(jet.modp2());
@@ -50,7 +55,7 @@ final class EEDirection {
     }
 
     /** 1 - cos(theta) to the other direction; the low word goes to lastLow. */
-    double oneMinusCos(EEDirection o) {
+    public double oneMinusCos(EEDirection o) {
         if (!dd) {
             lastLow = 0.0;
             return 1 - xH * o.xH - yH * o.yH - zH * o.zH;

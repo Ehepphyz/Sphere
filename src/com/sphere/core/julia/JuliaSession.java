@@ -16,7 +16,9 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Base64;
-import java.util.concurrent.SynchronousQueue;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -43,9 +45,20 @@ public final class JuliaSession implements VariableSources.Source {
 
     private Process process;
     private BufferedWriter toJulia;
-    /** Holds the answer of the command in flight, one at a time. */
-    private final SynchronousQueue<String> answers = new SynchronousQueue<>();
+    /**
+     * The answers the interpreter gives, one per command. A queue that keeps
+     * them rather than a hand-over: the sender now looks up between waits to see
+     * whether the process died, and a hand-over made while it looked would be lost.
+     */
+    private final LinkedBlockingQueue<String> answers = new LinkedBlockingQueue<>();
     private volatile boolean running;
+
+    /**
+     * What the interpreter was started with, before the driver: -t 4,
+     * --project=., -O3. A session takes them at start only, so asking for other
+     * ones means another session.
+     */
+    private List<String> flags = List.of();
 
     private JuliaSession(SettingsManager settings) {
         this.settings = settings;
@@ -77,6 +90,37 @@ public final class JuliaSession implements VariableSources.Source {
 
     // ---- the session --------------------------------------------------------
 
+    /** The flags the session runs, or will next start, with. */
+    public synchronized List<String> flags() {
+        return flags;
+    }
+
+    /**
+     * Starts the session with these interpreter flags, as "::jul -t 4 [@ f.jl]"
+     * and ":julia start -t 4" ask. A session already running with the same ones
+     * is kept. One running with others cannot take them, since Julia reads its
+     * flags when it starts, so it is restarted, and saying so matters: what it
+     * held goes with it.
+     */
+    public synchronized void start(List<String> wanted) throws IOException {
+        final List<String> asked = List.copyOf(wanted);
+        if (isRunning()) {
+            if (asked.equals(flags)) {
+                return;
+            }
+            AppLogger.warn("Julia restarts with " + describe(asked) + " (it ran with "
+                           + describe(flags) + "): the variables of the session are gone.");
+            shutdown();
+        }
+        flags = asked;
+        start();
+    }
+
+    private static String describe(List<String> flags) {
+        return flags.isEmpty() ? "no flags" : String.join(" ", flags);
+    }
+
+    /** Starts the session, with the flags it last had, unless it is running. */
     public synchronized void start() throws IOException {
         if (isRunning()) {
             return;
@@ -91,13 +135,21 @@ public final class JuliaSession implements VariableSources.Source {
         }
         Path script = JuliaScript.materialize();
 
-        ProcessBuilder builder = new ProcessBuilder(executable, "--startup-file=no",
-                                                    script.toAbsolutePath().toString());
+        // The user's flags after Sphere's own, so that one of theirs overrides
+        // it (--startup-file=yes), and before the driver, where Julia would
+        // otherwise hand them to the driver as its ARGS.
+        final List<String> command = new ArrayList<>();
+        command.add(executable);
+        command.add("--startup-file=no");
+        command.addAll(flags);
+        command.add(script.toAbsolutePath().toString());
+        ProcessBuilder builder = new ProcessBuilder(command);
         builder.redirectErrorStream(false);
         final String folder = PythonProbe.folder();
         if (folder != null) {
             builder.environment().put(PythonProbe.FOLDER_VARIABLE, folder);
         }
+        com.sphere.core.bridge.Bridge.environment(builder.environment());
         process = builder.start();
         toJulia = new BufferedWriter(new OutputStreamWriter(
             process.getOutputStream(), StandardCharsets.UTF_8));
@@ -113,7 +165,16 @@ public final class JuliaSession implements VariableSources.Source {
 
         VariableSources.register(this);
         // Julia takes a moment to start; the first answer is what says it is up.
-        send("VARS", "", START_TIMEOUT_MS);
+        if (!send("VARS", "", START_TIMEOUT_MS)) {
+            // A flag Julia refuses ends it at once, its reason already on the
+            // console. The next start is not made to fail the same way.
+            final List<String> refused = flags;
+            flags = List.of();
+            shutdown();
+            throw new IOException("Julia did not start"
+                + (refused.isEmpty() ? "." : " with " + describe(refused)
+                   + "; the next start uses no flags."));
+        }
     }
 
     public synchronized void shutdown() {
@@ -176,25 +237,44 @@ public final class JuliaSession implements VariableSources.Source {
         send(operation, payload, ANSWER_TIMEOUT_MS);
     }
 
-    private void send(String operation, String payload, long timeoutMillis) {
+    /** Sends one command and waits for its answer; false when none came. */
+    private boolean send(String operation, String payload, long timeoutMillis) {
         if (!isRunning()) {
             AppLogger.error("No Julia session. Start one with :julia start.");
-            return;
+            return false;
         }
         final long started = System.nanoTime();
+        final Process live = process;
         try {
-            answers.poll();                 // drop anything a lost command left
+            answers.clear();                // drop anything a lost command left
             write(operation + " " + Base64.getEncoder().encodeToString(
                 payload.getBytes(StandardCharsets.UTF_8)));
-            final String answer = answers.poll(timeoutMillis, TimeUnit.MILLISECONDS);
+            // Waited for in slices, so that an interpreter that died (a flag it
+            // refused, a crash) is noticed at once rather than after ten minutes.
+            final long deadline = System.nanoTime()
+                                  + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+            String answer = null;
+            while (answer == null && System.nanoTime() < deadline) {
+                answer = answers.poll(250, TimeUnit.MILLISECONDS);
+                if (answer == null && live != null && !live.isAlive()) {
+                    answer = answers.poll();
+                    if (answer == null) {
+                        AppLogger.error("Julia stopped (exit status " + live.exitValue() + ").");
+                        running = false;
+                        record(operation, payload, started, live.exitValue(), false);
+                        return false;
+                    }
+                }
+            }
             if (answer == null) {
                 AppLogger.error("Julia did not answer in "
                                 + (timeoutMillis / 1000) + " s.");
                 record(operation, payload, started, -1, true);
-                return;
+                return false;
             }
             record(operation, payload, started, 0, false);
             VariablesPanel.instance().reread();
+            return true;
         } catch (IOException unreachable) {
             AppLogger.error("Could not reach the Julia session: "
                             + unreachable.getMessage());
@@ -202,6 +282,7 @@ public final class JuliaSession implements VariableSources.Source {
         } catch (InterruptedException stopped) {
             Thread.currentThread().interrupt();
         }
+        return false;
     }
 
     /**

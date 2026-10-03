@@ -41,8 +41,11 @@ public class TagInterpreter {
             String snippet = parts[0];
             String internalArgs = (parts.length > 1) ? parts[1] : "";
 
-            // Evaluate tag structure using the path locator system
-            String resolved = SnippetResolver.resolve(snippet, activeProject);
+            // Evaluate tag structure using the path locator system. ACLiC's
+            // suffix (macro.C+, macro.C++g) is not part of the file's name: the
+            // file is looked for without it and the suffix is kept for ROOT.
+            final String[] aclic = com.sphere.core.rootbackend.RootAclic.split(snippet);
+            String resolved = SnippetResolver.resolve(aclic[0], activeProject) + aclic[1];
 
             // The arguments stay inside the brackets. Everything downstream tells
             // a snippet argument from a command argument by which side of the

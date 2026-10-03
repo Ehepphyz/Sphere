@@ -78,8 +78,12 @@ public final class PythonKernelProcess {
         if (isRunning()) {
             return;
         }
+        // Looked for as "python", which also accepts python3 and python3.12:
+        // asked for as "python3", a PYTHON_EXEC ending in python.exe did not
+        // count as the tool, and some other Python on the PATH ran instead,
+        // without the user's packages.
         String executable = settings == null ? null
-                          : settings.resolveTool("PYTHON_EXEC", "python3");
+                          : settings.resolveTool("PYTHON_EXEC", "python");
         if (executable == null) {
             // A blank key is a decision the user wrote down; an absent tool is not.
             throw new IOException(settings != null && settings.isDeclaredEmpty("PYTHON_EXEC")
@@ -98,6 +102,10 @@ public final class PythonKernelProcess {
         if (backend != null && !backend.shmRegionPath().isEmpty()) {
             builder.environment().put("SPHERE_SHM_PATH", backend.shmRegionPath());
         }
+        com.sphere.core.bridge.Bridge.environment(builder.environment());
+        // The kernel collects the figures itself after each run and sends them
+        // on; plt.show() must leave them to it rather than take them first.
+        builder.environment().put("SPHERE_MPL_KEEP", "1");
         process = builder.start();
         toKernel = new BufferedWriter(new OutputStreamWriter(
             process.getOutputStream(), StandardCharsets.UTF_8));

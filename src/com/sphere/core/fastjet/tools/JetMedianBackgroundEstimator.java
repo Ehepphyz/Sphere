@@ -156,6 +156,11 @@ public class JetMedianBackgroundEstimator extends BackgroundEstimatorBase {
         cacheAvailable = false;
     }
 
+    /** The density class set, or null for the default pt / area4vector. */
+    public FunctionOfPseudoJet<Double> jetDensityClass() {
+        return jetDensityClass;
+    }
+
     @Override
     public void setRescalingClass(FunctionOfPseudoJet<Double> r) {
         super.setRescalingClass(r);

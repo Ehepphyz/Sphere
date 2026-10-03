@@ -30,6 +30,8 @@ public final class ImagePreviewPane extends JPanel {
     private final JLabel detail = new JLabel();
 
     private File current;
+    /** Date and size of the file shown, so the same name written again is read again. */
+    private String currentStamp;
     private SwingWorker<BufferedImage, Void> worker;
 
     public ImagePreviewPane() {
@@ -64,6 +66,7 @@ public final class ImagePreviewPane extends JPanel {
 
     public void clear() {
         current = null;
+        currentStamp = null;
         thumbnail.set(null);
         caption.setText("No image selected");
         detail.setText(" ");
@@ -76,10 +79,14 @@ public final class ImagePreviewPane extends JPanel {
             clear();
             return;
         }
-        if (file.equals(current)) {
+        // A ROOT canvas redrawn is written again under the same name: only the
+        // same name with the same date and size is the picture already shown.
+        final String stamp = file.lastModified() + ":" + file.length();
+        if (file.equals(current) && stamp.equals(currentStamp)) {
             return;
         }
         current = file;
+        currentStamp = stamp;
         caption.setText(file.getName());
         detail.setText("reading...");
         thumbnail.set(null);

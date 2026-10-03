@@ -260,7 +260,32 @@ public final class NotebookExecutor implements PythonKernelProcess.Listener {
         out.execution_count = count;
         cell.outputs.add(out);
         onEdt(() -> view.cellOutputsChanged(cell));
+        toPlots(execId, bundle);
     }
+
+    /**
+     * A figure also goes to the Plots tab, beside the cell that drew it: the
+     * tab is where every picture Sphere produces is kept and opened in the
+     * image editor, and a notebook's figure should be no exception. Named after
+     * the run, so running the cell again replaces rather than adds.
+     */
+    private void toPlots(int execId, Map<String, Object> bundle) {
+        final Object png = bundle.get("image/png");
+        if (png == null) {
+            return;
+        }
+        try {
+            final byte[] bytes = java.util.Base64.getMimeDecoder().decode(String.valueOf(png));
+            final int figure = figuresOf.merge(execId, 1, Integer::sum);
+            com.sphere.components.rootview.RootPlotsPanel.showEncoded(bytes,
+                "notebook_run" + execId + "_fig" + figure);
+        } catch (IllegalArgumentException undecodable) {
+            // The cell shows what it can; the tab just goes without.
+        }
+    }
+
+    /** Figures sent so far, per run, to name each one. */
+    private final Map<Integer, Integer> figuresOf = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Override
     public void onError(int execId, String ename, String evalue, List<String> traceback) {

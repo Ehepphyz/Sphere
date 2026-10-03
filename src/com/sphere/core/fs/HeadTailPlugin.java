@@ -160,7 +160,7 @@ public class HeadTailPlugin implements CommandRouter.CommandPlugin {
     /** Polls the file for growth. Stopped by :tail-stop or by the next :tail -f. */
     private void startFollowing(Path file) {
         stopFollowing(false);
-        AppLogger.info("Following " + file.getFileName() + ". Type  :tail-stop  to stop.");
+        AppLogger.result("Following " + file.getFileName() + ". Type  :tail-stop  to stop.");
 
         Thread thread = new Thread(() -> {
             long position = 0;
@@ -214,7 +214,7 @@ public class HeadTailPlugin implements CommandRouter.CommandPlugin {
             thread.interrupt();
             if (announce) AppLogger.success("Stopped following.");
         } else if (announce) {
-            AppLogger.info("Nothing is being followed.");
+            AppLogger.result("Nothing is being followed.");
         }
     }
 

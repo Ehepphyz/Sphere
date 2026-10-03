@@ -94,6 +94,17 @@ public final class RootProcessBridge implements AutoCloseable {
             if (this.environment != null && !this.environment.isEmpty()) {
                 pb.environment().putAll(this.environment);
             }
+            // ROOT_INCLUDE_PATH lets a macro #include "sphere_spx.hpp".
+            com.sphere.core.bridge.Bridge.environment(pb.environment());
+            // ACLiC inside the engine (":root script compile", ".x macro.C+")
+            // needs the compiler's environment, which a process only gets at
+            // start. Quiet: an engine that never compiles a macro should not
+            // warn about a compiler it does not need.
+            RootAclic.environment(pb.environment(), binaryFile, true);
+            // The formats its canvases reach the Plots tab in (':root canvas formats').
+            pb.environment().put("SPHERE_CANVAS_FORMATS",
+                String.join(" ", RootDemos.canvasFormats().isEmpty() ? java.util.List.of("none")
+                    : RootDemos.canvasFormats()));
             pb.redirectErrorStream(true);
             pb.redirectOutput(ProcessBuilder.Redirect.appendTo(errorLog));
 

@@ -137,12 +137,46 @@ public final class ImageEditorPanel extends JPanel {
             return;
         }
         // An SVG has no writer here, and neither has an untitled document, so both
-        // go through the dialog rather than failing at the last step.
-        if (doc.getFile() == null || "svg".equals(doc.getFormat())) {
+        // go through the dialog rather than failing at the last step. Nor does a
+        // 16-bit or multi-page TIFF: the editor holds an 8-bit copy of one page,
+        // and writing that over the original would throw the rest away.
+        if (doc.getFile() == null || "svg".equals(doc.getFormat()) || doc.getSourceNote() != null) {
+            if (doc.getSourceNote() != null) {
+                JOptionPane.showMessageDialog(this, doc.getFile().getName() + " holds " + doc.getSourceNote()
+                    + ".\nThe editor works on an 8-bit copy, so the original is kept: choose a new name.",
+                    "Save", JOptionPane.INFORMATION_MESSAGE);
+            }
             saveAs();
             return;
         }
         write(doc.getFile(), doc.getFormat());
+    }
+
+    /** The formats a picture can be written in, the chosen one first. */
+    private static void formatFilters(JFileChooser chooser) {
+        chooser.setFileFilter(new FileNameExtensionFilter("PNG image", "png"));
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter(
+            "TIFF image (LZW, " + ImageFileIO.TIFF_DPI + " dpi)", "tif", "tiff"));
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter("JPEG image", "jpg", "jpeg"));
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter("BMP image", "bmp"));
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter("GIF image", "gif"));
+    }
+
+    /**
+     * The file the dialog chose, with the extension of the filter it was
+     * chosen under when the name carries none: picking "TIFF" and typing "fig"
+     * means fig.tif, not fig.png.
+     */
+    private static File withExtension(JFileChooser chooser) {
+        File target = chooser.getSelectedFile();
+        if (ImageFileIO.extension(target.getName()).isEmpty()) {
+            String ext = "png";
+            if (chooser.getFileFilter() instanceof FileNameExtensionFilter filter) {
+                ext = filter.getExtensions()[0];
+            }
+            target = new File(target.getParentFile(), target.getName() + "." + ext);
+        }
+        return target;
     }
 
     public void saveAs() {
@@ -151,22 +185,20 @@ public final class ImageEditorPanel extends JPanel {
             return;
         }
         JFileChooser chooser = new JFileChooser();
-        chooser.setFileFilter(new FileNameExtensionFilter("PNG image", "png"));
-        chooser.addChoosableFileFilter(new FileNameExtensionFilter("JPEG image", "jpg", "jpeg"));
+        formatFilters(chooser);
         if (doc.getFile() != null) {
             String base = doc.getFile().getName().replaceFirst("\\.[^.]+$", "");
-            chooser.setSelectedFile(new File(doc.getFile().getParentFile(), base + ".png"));
+            // A TIFF edited stays a TIFF unless told otherwise; its 8-bit copy
+            // gets a name of its own so the original is not proposed.
+            final boolean tiff = "tiff".equals(doc.getFormat()) || "tif".equals(doc.getFormat());
+            chooser.setSelectedFile(new File(doc.getFile().getParentFile(),
+                base + (doc.getSourceNote() != null ? "_edited" : "") + (tiff ? ".tif" : ".png")));
         }
         if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
             return;
         }
-        File target = chooser.getSelectedFile();
-        String format = ImageFileIO.extension(target.getName());
-        if (format.isEmpty()) {
-            format = "png";
-            target = new File(target.getParentFile(), target.getName() + ".png");
-        }
-        write(target, format);
+        File target = withExtension(chooser);
+        write(target, ImageFileIO.extension(target.getName()));
     }
 
     private void write(File target, String format) {
@@ -191,12 +223,17 @@ public final class ImageEditorPanel extends JPanel {
             new SpinnerNumberModel(doc.getWidth(), 1, 30000, 1));
         JSpinner height = new JSpinner(
             new SpinnerNumberModel(doc.getHeight(), 1, 30000, 1));
+        // What a TIFF states as its resolution: the pixels are not changed, the
+        // print size is, and a journal reads the figure's size from it.
+        JSpinner dpi = new JSpinner(new SpinnerNumberModel(ImageFileIO.TIFF_DPI, 72, 2400, 50));
 
         JPanel form = new JPanel(new java.awt.GridLayout(0, 2, 6, 6));
         form.add(new JLabel("Width"));
         form.add(width);
         form.add(new JLabel("Height"));
         form.add(height);
+        form.add(new JLabel("Resolution, TIFF (dpi)"));
+        form.add(dpi);
         if (doc.isVector()) {
             JLabel note = new JLabel("Redrawn from the vector, so any size stays sharp.");
             note.setFont(ImagingTheme.uiFont(Font.PLAIN, 11f));
@@ -211,19 +248,16 @@ public final class ImageEditorPanel extends JPanel {
         }
 
         JFileChooser chooser = new JFileChooser();
-        chooser.setFileFilter(new FileNameExtensionFilter("PNG image", "png"));
+        formatFilters(chooser);
         if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
             return;
         }
-        File target = chooser.getSelectedFile();
+        File target = withExtension(chooser);
         String format = ImageFileIO.extension(target.getName());
-        if (format.isEmpty()) {
-            format = "png";
-            target = new File(target.getParentFile(), target.getName() + ".png");
-        }
         try {
             ImageFileIO.export(canvas.getDocument(), target, format,
-                               (Integer) width.getValue(), (Integer) height.getValue(), 0.92f);
+                               (Integer) width.getValue(), (Integer) height.getValue(), 0.92f,
+                               (Integer) dpi.getValue());
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this,
                 "Could not export: " + e.getMessage(), "Export", JOptionPane.ERROR_MESSAGE);
@@ -470,7 +504,8 @@ public final class ImageEditorPanel extends JPanel {
         sizeLabel.setText(doc.getWidth() + " x " + doc.getHeight() + " px"
             + (doc.isVector() ? "   vector" : "")
             + "   " + doc.getLayers().size() + " layer"
-            + (doc.getLayers().size() == 1 ? "" : "s"));
+            + (doc.getLayers().size() == 1 ? "" : "s")
+            + (doc.getSourceNote() != null ? "   file: " + doc.getSourceNote() + ", shown stretched to 8 bits" : ""));
         zoomLabel.setText(Math.round(canvas.getZoom() * 100) + "%");
         layers.reload();
         if (titleListener != null) {

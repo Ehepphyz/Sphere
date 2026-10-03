@@ -117,12 +117,14 @@ public final class RootGallery extends ViewSurface {
      * The same caption replaces its entry instead of piling up, so redrawing
      * one object leaves one thumbnail rather than a row of identical ones.
      */
-    public void remember(RootPlot plot, String caption) {
+    public Entry remember(RootPlot plot, String caption) {
         if (plot == null || caption == null || !plot.hasContent()) {
-            return;
+            return null;
         }
-        put(new Entry(caption, shrink(plot), plot.getHistogram(), plot.getGraph(),
-                      plot.getGraph2D(), plot.getStyle(), null));
+        final Entry entry = new Entry(caption, shrink(plot), plot.getHistogram(), plot.getGraph(),
+                                      plot.getGraph2D(), plot.getStyle(), null);
+        put(entry);
+        return entry;
     }
 
     /**
@@ -132,15 +134,28 @@ public final class RootGallery extends ViewSurface {
      * showing the latest drawing rather than a row of older ones.
      */
     public void rememberImage(java.io.File file) {
-        if (file == null) {
-            return;
-        }
-        java.awt.image.BufferedImage preview =
+        rememberImage(file, file == null ? null : thumbnailOf(file));
+    }
+
+    /**
+     * The thumbnail of a picture file, or null when it cannot be decoded.
+     *
+     * Read before reaching the event thread: a ROOT surface saved as SVG is
+     * thousands of polygons and takes a good part of a second to draw, which
+     * the interface would spend frozen at every redraw of the canvas.
+     */
+    public static java.awt.image.BufferedImage thumbnailOf(java.io.File file) {
+        final java.awt.image.BufferedImage preview =
             com.sphere.components.imaging.ImageFileIO.readPreview(file, THUMB_WIDTH);
-        if (preview == null) {
+        return preview == null ? null : fit(preview);
+    }
+
+    /** Keeps a picture whose thumbnail {@link #thumbnailOf} has already read. */
+    public void rememberImage(java.io.File file, java.awt.image.BufferedImage thumbnail) {
+        if (file == null || thumbnail == null) {
             return;
         }
-        put(new Entry(file.getName(), fit(preview), null, null, null,
+        put(new Entry(file.getName(), thumbnail, null, null, null,
                       RootPlot.Style.POINTS, file));
     }
 

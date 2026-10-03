@@ -48,6 +48,12 @@ public final class ImageDocument {
     private String format = "png";
     private SvgDocument vector;
     private boolean dirty;
+    /**
+     * What the file held beyond what the editor keeps, "16-bit grey" or
+     * "12 pages": the editor works on an 8-bit copy of one picture, so writing
+     * it back over such a file would lose data. Null for an ordinary picture.
+     */
+    private String sourceNote;
 
     public ImageDocument(int width, int height) {
         this.width = Math.max(1, width);
@@ -99,6 +105,14 @@ public final class ImageDocument {
 
     public boolean isVector() {
         return vector != null;
+    }
+
+    public String getSourceNote() {
+        return sourceNote;
+    }
+
+    public void setSourceNote(String note) {
+        this.sourceNote = note;
     }
 
     public boolean isDirty() {

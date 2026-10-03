@@ -131,12 +131,13 @@ public class CommandDefinitions {
         register(":root tree attach", "Bind a tree to an id, which the other tree commands then use. Usage: :root tree attach <tree_id> <file_id|name> <tree_path>", RootTreeCommands::rootTreeAttach);
         register(":root tree column", "Read one branch as a column (CMD_TTREE_READ_COLUMN). Usage: :root tree column <tree_id> <branch>", RootTreeCommands::rootTreeColumn);
         register(":root tree plot", "Draw one branch against another in the Plots tab. Usage: :root tree plot <tree_id> <x_branch> <y_branch>", RootTreeCommands::rootTreePlot);
-        register(":plots add", "Show a picture in the Plots tab. Usage: :plots add <file.png|jpg|svg>", Handlers::plotsAdd);
+        register(":plots add", "Show a picture in the Plots tab. Usage: :plots add <file.png|jpg|tif|svg>", Handlers::plotsAdd);
         register(":plots watch", "Watch a folder for new pictures, or list the folders watched. Usage: :plots watch [folder]", Handlers::plotsWatch);
         register(":plots unwatch", "Stop watching a folder. Usage: :plots unwatch <folder>", Handlers::plotsUnwatch);
         register(":plots folder", "Show or move the folder the Plots tab writes pictures into. Usage: :plots folder [folder]", Handlers::plotsFolder);
         register(":plots clear", "Empty the Plots tab", Handlers::plotsClear);
-        register(":julia start", "Open a Julia session that keeps what it defines",
+        register(":julia start", "Open a Julia session that keeps what it defines. "
+                 + "Usage: :julia start [julia flags, e.g. -t 4 --project=.]",
                  Handlers::juliaStart);
         register(":julia stop", "Close the Julia session", Handlers::juliaStop);
         register(":julia mode", "Send every line to the Julia session",
@@ -248,7 +249,15 @@ public class CommandDefinitions {
 
         // --- Jets (Sphere's Java FastJet) and parton distributions (LHAPDF-style) ---
         FastJetCommands.register();
+        // --- The FastJet contribs (fjcontrib), on the same events and definitions ---
+        FjContribCommands.register();
+        // --- ping, diag, mode and exit for the engines inside Sphere, as ROOT and Python have them ---
+        EngineCommands.register();
         LhapdfCommands.register();
+        // --- ROOT's prompt: .demo and the tutorials, the formats canvases reach the Plots tab in ---
+        RootDemoCommands.register();
+        // --- The bridge: every engine reads what the others export ---
+        BridgeCommands.register();
         register(":root cut new", "Name a selection so it can be reused and combined", RootGraphicsCommands::rootCutNew);
         register(":root cut and", "Both selections at once. Usage: :root cut and <out> <a> <b>", RootGraphicsCommands::rootCutAnd);
         register(":root cut or", "Either selection. Usage: :root cut or <out> <a> <b>", RootGraphicsCommands::rootCutOr);
