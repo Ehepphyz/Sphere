@@ -36,12 +36,14 @@
 #include "TPaveText.h"
 #include "TPaveLabel.h"
 #include "TPaveStats.h"
+#include "TProfile.h"
 #include "TStyle.h"
 #include "TText.h"
 #include "TTree.h"
 #include "TVirtualPad.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <string>
 
@@ -151,6 +153,57 @@ inline std::string Axis(TAxis *axis) {
 
 inline std::string Item(TObject *object, const char *option);
 
+/** What TAttAxis and TAxis keep besides the binning: the style the context menus of an axis change. */
+inline std::string Style(TAxis *a) {
+  if (a == nullptr) return "{}";
+  const Int_t nd = a->GetNdivisions();
+  return "{\"nd\":" + N(std::abs(nd) % 1000000) + ",\"opt\":" + B(nd > 0) + ",\"ac\":" + Color(a->GetAxisColor()) +
+         ",\"lc\":" + Color(a->GetLabelColor()) + ",\"lf\":" + N(a->GetLabelFont()) +
+         ",\"lo\":" + N(a->GetLabelOffset()) + ",\"ls\":" + N(a->GetLabelSize()) +
+         ",\"tl\":" + N(a->GetTickLength()) + ",\"to\":" + N(a->GetTitleOffset()) +
+         ",\"ts\":" + N(a->GetTitleSize()) + ",\"tc\":" + Color(a->GetTitleColor()) +
+         ",\"tf\":" + N(a->GetTitleFont()) + (a->GetMaxDigits() > 0 ? ",\"md\":" + N(a->GetMaxDigits()) : std::string()) +
+         ",\"mll\":" + B(a->GetMoreLogLabels()) + ",\"nexp\":" + B(a->GetNoExponent()) +
+         ",\"dec\":" + B(a->GetDecimals()) + ",\"time\":" + B(a->GetTimeDisplay()) +
+         ",\"tfmt\":" + Q(a->GetTimeFormat()) + ",\"rot\":" + B(a->GetRotateTitle()) +
+         ",\"ctr\":" + B(a->GetCenterTitle()) + ",\"clab\":" + B(a->GetCenterLabels()) +
+         ",\"ticks\":" + Q(a->GetTicks()) + "}";
+}
+
+/** A function's parameters, and what the statistics box shows of its fit: name, value, error, chi2, ndf, probability. */
+inline std::string FitOf(TF1 *f, bool rows) {
+  std::string out = ",\"par\":[";
+  for (Int_t i = 0; i < f->GetNpar(); ++i) out += (i > 0 ? "," : "") + N(f->GetParameter(i));
+  out += "]";
+  if (!rows) return out;
+  out += ",\"fr\":[";
+  for (Int_t i = 0; i < f->GetNpar(); ++i) {
+    out += (i > 0 ? "," : "") + std::string("[") + Q(f->GetParName(i)) + "," + Q(N(f->GetParameter(i))) + "," +
+           Q(N(f->GetParError(i))) + "]";
+  }
+  out += std::string(f->GetNpar() > 0 ? "," : "") + "[\"#chi2\"," + Q(N(f->GetChisquare())) + "," +
+         Q(N(f->GetNDF())) + "],[\"#prob\"," + Q(N(f->GetProb())) + "]]";
+  return out;
+}
+
+/** The functions fitted to an object, drawn with it, and the results of the last one. */
+inline std::string Fits(TList *functions) {
+  if (functions == nullptr) return "";
+  std::string fits;
+  TF1 *last = nullptr;
+  TIter next(functions);
+  while (TObject *o = next()) {
+    auto *f = dynamic_cast<TF1 *>(o);
+    if (f == nullptr || dynamic_cast<TF2 *>(o) != nullptr || f->TestBit(TF1::kNotDraw)) continue;
+    fits += (fits.empty() ? "" : ",") + Item(f, "C");
+    last = f;
+  }
+  if (fits.empty()) return "";
+  std::string rows = FitOf(last, true);
+  rows = rows.substr(rows.find(",\"fr\""));
+  return ",\"fits\":[" + fits + "]" + rows;
+}
+
 /** Any histogram, bins in the order x fastest; a function as the histogram it paints. */
 inline std::string Hist(TH1 *h, const char *option, const char *formula = nullptr) {
   const int dim = h->GetDimension();
@@ -185,7 +238,20 @@ inline std::string Hist(TH1 *h, const char *option, const char *formula = nullpt
       out += N(h->GetBinError(ix));
     }
     out += "]";
+    out += ",\"uf\":" + N(h->GetBinContent(0)) + ",\"of\":" + N(h->GetBinContent(nx + 1));
+  } else if (dim == 2 && h->GetSumw2N() > 0) {
+    out += ",\"err\":[";
+    for (int iy = 1; iy <= ny; ++iy) {
+      for (int ix = 1; ix <= nx; ++ix) out += (ix == 1 && iy == 1 ? "" : ",") + N(h->GetBinError(ix, iy));
+    }
+    out += "]";
   }
+  if (auto *profile = dynamic_cast<TProfile *>(h)) {
+    out += ",\"eo\":" + Q(profile->GetErrorOption()) + ",\"be\":[";
+    for (int ix = 1; ix <= nx; ++ix) out += (ix > 1 ? "," : "") + N(profile->GetBinEntries(ix));
+    out += "]";
+  }
+  if (h->IsHighlight()) out += ",\"hl\":true";
   if (h->GetMinimumStored() != -1111) out += ",\"min\":" + N(h->GetMinimumStored());
   if (h->GetMaximumStored() != -1111) out += ",\"max\":" + N(h->GetMaximumStored());
   out += ",\"stats\":" + B(!h->TestBit(TH1::kNoStats) && formula == nullptr);
@@ -193,16 +259,7 @@ inline std::string Hist(TH1 *h, const char *option, const char *formula = nullpt
   if (dim > 1) out += ",\"meany\":" + N(h->GetMean(2)) + ",\"stdy\":" + N(h->GetStdDev(2));
   if (formula != nullptr) out += ",\"fn\":" + Q(formula);
   // A fit lives in the histogram's own list of functions, not in the pad.
-  if (dim == 1 && formula == nullptr && h->GetListOfFunctions() != nullptr) {
-    std::string fits;
-    TIter next(h->GetListOfFunctions());
-    while (TObject *o = next()) {
-      auto *f = dynamic_cast<TF1 *>(o);
-      if (f == nullptr || dynamic_cast<TF2 *>(o) != nullptr || f->TestBit(TF1::kNotDraw)) continue;
-      fits += (fits.empty() ? "" : ",") + Item(f, "C");
-    }
-    if (!fits.empty()) out += ",\"fits\":[" + fits + "]";
-  }
+  if (dim == 1 && formula == nullptr) out += Fits(h->GetListOfFunctions());
   return out + "}";
 }
 
@@ -236,6 +293,9 @@ inline std::string Graph(TGraph *g, const char *option) {
   }
   if (g->GetMinimum() != -1111) out += ",\"min\":" + N(g->GetMinimum());
   if (g->GetMaximum() != -1111) out += ",\"max\":" + N(g->GetMaximum());
+  if (g->GetEditable()) out += ",\"ed\":true";
+  if (g->IsHighlight()) out += ",\"hl\":true";
+  out += Fits(g->GetListOfFunctions());
   return out + "}";
 }
 
@@ -256,6 +316,9 @@ inline std::string Graph2D(TGraph2D *g, const char *option) {
   out += ",\"xt\":" + Q(g->GetXaxis() ? g->GetXaxis()->GetTitle() : "") +
          ",\"yt\":" + Q(g->GetYaxis() ? g->GetYaxis()->GetTitle() : "") +
          ",\"zt\":" + Q(g->GetZaxis() ? g->GetZaxis()->GetTitle() : "");
+  out += ",\"npx\":" + N(g->GetNpx()) + ",\"npy\":" + N(g->GetNpy()) + ",\"margin\":" + N(g->GetMargin());
+  if (g->GetMinimum() != -1111) out += ",\"min\":" + N(g->GetMinimum());
+  if (g->GetMaximum() != -1111) out += ",\"max\":" + N(g->GetMaximum());
   return out + "}";
 }
 
@@ -263,13 +326,26 @@ inline std::string Text(TText *text, const char *option) {
   return Head("text", text, option) + ",\"x\":" + N(text->GetX()) + ",\"y\":" + N(text->GetY()) +
          ",\"ndc\":" + B(text->TestBit(TText::kTextNDC)) + ",\"s\":" + Q(text->GetTitle()) +
          ",\"sz\":" + N(text->GetTextSize()) + ",\"tc\":" + Color(text->GetTextColor()) +
-         ",\"al\":" + N(text->GetTextAlign()) + ",\"an\":" + N(text->GetTextAngle()) + "}";
+         ",\"al\":" + N(text->GetTextAlign()) + ",\"an\":" + N(text->GetTextAngle()) +
+         ",\"tf\":" + N(text->GetTextFont()) + "}";
 }
 
 inline std::string Pave(TPave *pave, const char *option) {
   std::string out = Head(dynamic_cast<TLegend *>(pave) ? "legend" : "pave", pave, option);
   out += ",\"x1\":" + N(pave->GetX1NDC()) + ",\"y1\":" + N(pave->GetY1NDC()) + ",\"x2\":" + N(pave->GetX2NDC()) +
          ",\"y2\":" + N(pave->GetY2NDC()) + ",\"bs\":" + N(pave->GetBorderSize());
+  out += ",\"cr\":" + N(pave->GetCornerRadius()) + ",\"shc\":" + Color(pave->GetShadowColor());
+  if (auto *att = dynamic_cast<TAttText *>(pave)) {
+    out += ",\"ptf\":" + N(att->GetTextFont()) + ",\"pta\":" + N(att->GetTextAlign()) + ",\"pts\":" + N(att->GetTextSize());
+  }
+  // A TPaveLabel's text size is a fraction of its own height, not of the pad's.
+  if (dynamic_cast<TPaveLabel *>(pave) != nullptr) out += ",\"pl\":true";
+  if (auto *legend = dynamic_cast<TLegend *>(pave)) {
+    out += ",\"mg\":" + N(legend->GetMargin()) + ",\"nc\":" + N(legend->GetNColumns());
+    if (legend->GetHeader() != nullptr && *legend->GetHeader() != '\0') out += ",\"hd\":" + Q(legend->GetHeader());
+  } else if (auto *pt = dynamic_cast<TPaveText *>(pave)) {
+    out += ",\"mg\":" + N(pt->GetMargin()) + ",\"lb\":" + Q(pt->GetLabel());
+  }
   out += ",\"lines\":[";
   bool first = true;
   if (auto *label = dynamic_cast<TPaveLabel *>(pave)) {
@@ -277,6 +353,8 @@ inline std::string Pave(TPave *pave, const char *option) {
   } else if (auto *legend = dynamic_cast<TLegend *>(pave)) {
     TIter next(legend->GetListOfPrimitives());
     while (auto *entry = dynamic_cast<TLegendEntry *>(next())) {
+      // The header is an entry of option "h", sent as the legend's header.
+      if (std::string(entry->GetOption()).find('h') != std::string::npos) continue;
       if (!first) out += ",";
       first = false;
       out += "{\"s\":" + Q(entry->GetLabel()) + ",\"o\":" + Q(entry->GetOption()) + Attributes(entry) + "}";
@@ -284,11 +362,24 @@ inline std::string Pave(TPave *pave, const char *option) {
   } else if (auto *paveText = dynamic_cast<TPaveText *>(pave)) {
     TIter next(paveText->GetListOfLines());
     while (TObject *line = next()) {
+      if (dynamic_cast<TLine *>(line) != nullptr) {
+        out += std::string(first ? "" : ",") + "{\"sep\":true}";
+        first = false;
+        continue;
+      }
       auto *text = dynamic_cast<TText *>(line);
       if (text == nullptr) continue;
       if (!first) out += ",";
       first = false;
-      out += "{\"s\":" + Q(text->GetTitle()) + ",\"tc\":" + Color(text->GetTextColor()) + "}";
+      // AddText leaves colour, font, size and alignment at 0: the pave's own, as PaintPrimitives reads them.
+      const Color_t color = text->GetTextColor() != 0 ? text->GetTextColor() : paveText->GetTextColor();
+      out += "{\"s\":" + Q(text->GetTitle()) + ",\"tc\":" + Color(color);
+      if (text->GetTextFont() != paveText->GetTextFont()) out += ",\"ef\":" + N(text->GetTextFont());
+      if (text->GetTextAlign() != 0 && text->GetTextAlign() != paveText->GetTextAlign()) {
+        out += ",\"eal\":" + N(text->GetTextAlign());
+      }
+      if (text->GetTextSize() != 0 && text->GetTextSize() != paveText->GetTextSize()) out += ",\"esz\":" + N(text->GetTextSize());
+      out += "}";
     }
   }
   return out + "]}";
@@ -315,6 +406,7 @@ inline std::string Item(TObject *object, const char *option) {
     TH1 *painted = f->GetHistogram();
     if (painted == nullptr) return Head("other", f, option) + "}";
     std::string json = Hist(painted, option, f->GetExpFormula().Data());
+    json.insert(json.size() - 1, FitOf(f, false));
     // Named after the function, not after the histogram it fills.
     const std::string was = std::string("\"n\":") + Q(painted->GetName());
     const std::size_t at = json.find(was);
@@ -347,7 +439,36 @@ inline std::string Pad(TVirtualPad *pad) {
                     ",\"gridy\":" + B(pad->GetGridy()) + ",\"theta\":" + N(pad->GetTheta()) +
                     ",\"phi\":" + N(pad->GetPhi()) + ",\"fc\":" + Color(pad->GetFillColor()) +
                     ",\"lm\":" + N(pad->GetLeftMargin()) + ",\"rm\":" + N(pad->GetRightMargin()) +
-                    ",\"bm\":" + N(pad->GetBottomMargin()) + ",\"tm\":" + N(pad->GetTopMargin());
+                    ",\"bm\":" + N(pad->GetBottomMargin()) + ",\"tm\":" + N(pad->GetTopMargin()) +
+                    ",\"tickx\":" + N(pad->GetTickx()) + ",\"ticky\":" + N(pad->GetTicky()) +
+                    ",\"bmode\":" + N(pad->GetBorderMode()) + ",\"bsize\":" + N(pad->GetBorderSize()) +
+                    ",\"cross\":" + B(pad->HasCrosshair()) + ",\"editable\":" + B(pad->IsEditable()) +
+                    ",\"fixed\":" + B(pad->HasFixedAspectRatio()) + ",\"ux1\":" + N(pad->GetX1()) +
+                    ",\"uy1\":" + N(pad->GetY1()) + ",\"ux2\":" + N(pad->GetX2()) + ",\"uy2\":" + N(pad->GetY2());
+  // The frame's fill (TFrame::SetFillColor): the frame is not sent as an object, the viewer draws it as the pad's.
+  if (TList *primitives = pad->GetListOfPrimitives()) {
+    for (TObjLink *link = primitives->FirstLink(); link != nullptr; link = link->Next()) {
+      TObject *o = link->GetObject();
+      auto *fill = dynamic_cast<TAttFill *>(o);
+      if (fill == nullptr || !o->InheritsFrom("TFrame")) continue;
+      out += ",\"ffc\":" + Color(fill->GetFillColor()) + ",\"ffs\":" + N(fill->GetFillStyle());
+      break;
+    }
+  }
+  // The axes of the frame: those of the first histogram, or of the histogram a graph or a stack draws its frame with.
+  if (TList *primitives = pad->GetListOfPrimitives()) {
+    TH1 *frame = nullptr;
+    for (TObjLink *link = primitives->FirstLink(); link != nullptr && frame == nullptr; link = link->Next()) {
+      TObject *o = link->GetObject();
+      if (auto *h = dynamic_cast<TH1 *>(o)) frame = h;
+      else if (auto *g = dynamic_cast<TGraph *>(o)) frame = g->GetHistogram();
+      else if (auto *s = dynamic_cast<THStack *>(o)) frame = s->GetHistogram();
+      else if (auto *m = dynamic_cast<TMultiGraph *>(o)) frame = m->GetHistogram();
+    }
+    if (frame != nullptr) {
+      out += ",\"ax\":[" + Style(frame->GetXaxis()) + "," + Style(frame->GetYaxis()) + "," + Style(frame->GetZaxis()) + "]";
+    }
+  }
   std::string items;
   std::string pads;
   if (TList *primitives = pad->GetListOfPrimitives()) {
@@ -367,6 +488,8 @@ inline std::string Canvas(TCanvas *canvas) {
   return "{\"k\":\"canvas\",\"n\":" + Q(canvas->GetName()) + ",\"t\":" + Q(canvas->GetTitle()) +
          ",\"w\":" + N(canvas->GetWw()) + ",\"h\":" + N(canvas->GetWh()) +
          ",\"optstat\":" + N(gStyle->GetOptStat()) + ",\"opttitle\":" + N(gStyle->GetOptTitle()) +
+         ",\"optfit\":" + N(gStyle->GetOptFit()) + ",\"statfmt\":" + Q(gStyle->GetStatFormat()) +
+         ",\"fitfmt\":" + Q(gStyle->GetFitFormat()) + ",\"gray\":" + B(canvas->IsGrayscale()) +
          ",\"palette\":" + Palette() + ",\"pad\":" + Pad(canvas) + "}";
 }
 

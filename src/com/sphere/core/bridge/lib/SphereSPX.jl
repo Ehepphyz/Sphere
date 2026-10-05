@@ -10,6 +10,8 @@
 #   xfxQ2(pdf, 21, 1e-3, 1e4)                 # member 0
 #   uncertainty(pdf, 21, 1e-3, 1e4)           # Hessian or replicas
 #   ev = SphereSPX.events("events")           # particles, jets, weights
+#   hep = SphereSPX.events("hepmc")           # ':hepmc bridge': the HepMC3 record too
+#   finalstate(hep, 1), vertices(hep, 1), mothers(hep, 1), SphereSPX.weights(hep, 1)
 #   SphereSPX.publish("pt", edges, counts)    # shows up in Sphere's Plots tab
 #
 # Inside Sphere's Julia session this module is already loaded, and
@@ -20,7 +22,9 @@ module SphereSPX
 using Mmap
 
 export SPXFile, PDFSet, Events, xfxQ2, xfxQ, alphasQ2, alphasQ, uncertainty, member_values,
-       inrange, npart, njets, particle, jet, jet_of, incoming, publish
+       inrange, npart, njets, particle, jet, jet_of, incoming, publish,
+       ishepmc, finalstate, genmass, vertices, prodvertex, endvertex, mothers, daughters, eventnumber,
+       weightnames, crosssection
 
 const F64 = Int32(1)
 const I64 = Int32(2)
@@ -458,6 +462,7 @@ events(name::AbstractString) = Events(SPXFile(resolve(name)))
 Base.length(ev::Events) = length(ev.offset) - 1
 Base.show(io::IO, ev::Events) =
     print(io, "Events(", length(ev), " events, ", length(ev.pdg), " particles",
+          ishepmc(ev) ? ", $(i64(ev.file, "vtx_offset")[end]) vertices (HepMC3)" : "",
           ev.jet_offset === nothing ? "" : ", $(ev.jet_offset[end]) jets", ")")
 
 npart(ev::Events, e::Integer) = Int(ev.offset[e+1] - ev.offset[e])
@@ -472,6 +477,44 @@ jet(ev::Events, e::Integer, k::Integer) = view(ev.jet_p4, 4(ev.jet_offset[e]+k-1
 jet_of(ev::Events, e::Integer) = view(ev.jet_of, ev.offset[e]+1:ev.offset[e+1]) .+ 1
 incoming(ev::Events, e::Integer) = (v = view(ev.incoming, 5(e-1)+1:5e);
     (id1 = Int(v[1]), id2 = Int(v[2]), x1 = v[3], x2 = v[4], scale = v[5]))
+
+# HepMC3 events (':hepmc bridge'): the whole record, as HepMC3 holds it. Indices
+# are 1-based here as everywhere in Julia: vertex k of event e, particle i.
+
+"""True when the sample holds HepMC3 events: statuses, vertices and the graph."""
+ishepmc(ev::Events) = haskey(ev.file, "links")
+_needhepmc(ev::Events) = ishepmc(ev) || error("$(ev.file.path) holds particles only, not a HepMC3 record")
+
+"""The HepMC status of each particle of event e (1: final state)."""
+status(ev::Events, e::Integer) = (_needhepmc(ev); view(i64(ev.file, "status"), ev.offset[e]+1:ev.offset[e+1]))
+"""The particles of status 1 of event e, as indices into particles(ev, e)."""
+finalstate(ev::Events, e::Integer) = findall(==(1), status(ev, e))
+"""The generated mass of each particle, NaN where none was set."""
+genmass(ev::Events, e::Integer) = (_needhepmc(ev); view(f64(ev.file, "gen_mass"), ev.offset[e]+1:ev.offset[e+1]))
+"""The vertices of event e as a 4×n matrix of x, y, z, t."""
+function vertices(ev::Events, e::Integer)
+    _needhepmc(ev)
+    vo = i64(ev.file, "vtx_offset")
+    reshape(view(f64(ev.file, "vtx_pos"), 4vo[e]+1:4vo[e+1]), 4, :)
+end
+"""The vertex each particle of event e comes from (1-based in the event), 0 for none."""
+prodvertex(ev::Events, e::Integer) = (_needhepmc(ev); view(i64(ev.file, "prod_vtx"), ev.offset[e]+1:ev.offset[e+1]) .+ 1)
+"""The vertex each particle of event e ends in (1-based in the event), 0 for none."""
+endvertex(ev::Events, e::Integer) = (_needhepmc(ev); view(i64(ev.file, "end_vtx"), ev.offset[e]+1:ev.offset[e+1]) .+ 1)
+"""HEPEVT's JMOHEP: a 2×n matrix of first and last mother, 1-based in the event, 0 for none."""
+mothers(ev::Events, e::Integer) = (_needhepmc(ev); reshape(view(i64(ev.file, "mothers"), 2ev.offset[e]+1:2ev.offset[e+1]), 2, :))
+"""HEPEVT's JDAHEP: a 2×n matrix of first and last daughter."""
+daughters(ev::Events, e::Integer) = (_needhepmc(ev); reshape(view(i64(ev.file, "daughters"), 2ev.offset[e]+1:2ev.offset[e+1]), 2, :))
+eventnumber(ev::Events, e::Integer) = haskey(ev.file, "event_number") ? Int(i64(ev.file, "event_number")[e]) : e
+"""Every weight of event e; their names are weightnames(ev)."""
+function weights(ev::Events, e::Integer)
+    haskey(ev.file, "wgt_offset") || return [ev.weight[e]]
+    wo = i64(ev.file, "wgt_offset")
+    view(f64(ev.file, "wgt_all"), wo[e]+1:wo[e+1])
+end
+weightnames(ev::Events) = (n = get(ev.meta, "WeightNames", ""); isempty(n) ? String[] : strip.(split(n, "|")))
+"""(cross-section, error) of event e in pb; NaN when the event has none."""
+crosssection(ev::Events, e::Integer) = (x = f64(ev.file, "xsec"); (x[2e-1], x[2e]))
 
 pt(p) = hypot(p[1], p[2])
 rapidity(p) = 0.5 * log((p[4] + p[3]) / (p[4] - p[3]))
@@ -569,6 +612,37 @@ function crosscheck(pdfpath::AbstractString, pointspath::AbstractString, outpath
     elapsed = (time_ns() - start) / (n * rounds)
     write_table(outpath, "crosscheck", ["xf" => xf, "as" => as, "ns_per_eval" => [elapsed]];
                 meta = "Engine: Julia $(VERSION)\nRounds: $rounds\nSink: $sink\n")
+end
+
+"""Per event of a HepMC3 sample: the checksums ':hepmc crosscheck' compares with Java's, bit for bit."""
+function hepmccheck(eventspath::AbstractString, outpath::AbstractString)
+    ev = Events(SPXFile(eventspath))
+    _needhepmc(ev)
+    f = ev.file
+    st, mo, vo = i64(f, "status"), i64(f, "mothers"), i64(f, "vtx_offset")
+    wo, wa, p4 = i64(f, "wgt_offset"), f64(f, "wgt_all"), ev.p4
+    n = length(ev)
+    np_, nfinal, nvtx, mosum = zeros(Int64, n), zeros(Int64, n), zeros(Int64, n), zeros(Int64, n)
+    efinal, pzfinal, wsum = zeros(Float64, n), zeros(Float64, n), zeros(Float64, n)
+    for e in 1:n
+        a, b = ev.offset[e], ev.offset[e+1]
+        nf, ms, ef, pzf, ws = 0, 0, 0.0, 0.0, 0.0
+        for i in a:b-1                       # the order Java sums in: no pairwise sum()
+            if st[i+1] == 1
+                nf += 1
+                ef += p4[4i+4]
+                pzf += p4[4i+3]
+            end
+            ms += mo[2i+1]
+        end
+        for k in wo[e]:wo[e+1]-1
+            ws += wa[k+1]
+        end
+        np_[e], nfinal[e], nvtx[e], mosum[e] = b - a, nf, vo[e+1] - vo[e], ms
+        efinal[e], pzfinal[e], wsum[e] = ef, pzf, ws
+    end
+    write_table(outpath, "hepmc_check", ["np" => np_, "nfinal" => nfinal, "nvtx" => nvtx, "mosum" => mosum,
+                "efinal" => efinal, "pzfinal" => pzfinal, "wsum" => wsum]; meta = "Engine: Julia $(VERSION)\n")
 end
 
 end # module

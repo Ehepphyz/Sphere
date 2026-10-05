@@ -45,6 +45,8 @@ final class RootPainter3D {
         double scale = 1;
         double cx;
         double cy;
+        /** TView3D::SetPerspective: how much nearer is larger; 0 is ROOT's parallel projection. */
+        double perspective;
 
         Projection(double thetaDeg, double phiDeg) {
             final double t = Math.toRadians(thetaDeg);
@@ -61,7 +63,8 @@ final class RootPainter3D {
             final double b = -x * sp + y * cp;
             final double sy = z * ct + b * st;
             final double depth = b * ct - z * st;
-            return new double[]{cx + scale * a, cy - scale * sy, depth};
+            final double f = perspective > 0 ? 1 / Math.max(0.2, 1 + perspective * depth) : 1;
+            return new double[]{cx + scale * a * f, cy - scale * sy * f, depth};
         }
 
         /** Whether a face with this outward normal looks toward the viewer. */
@@ -85,6 +88,7 @@ final class RootPainter3D {
         final double theta = Double.isNaN(view.theta) ? pad.theta : view.theta;
         final double phi = Double.isNaN(view.phi) ? pad.phi : view.phi;
         final Projection pr = new Projection(theta, phi);
+        pr.perspective = view.perspective ? 0.22 : 0;
         fit(pr, box, view.zoom);
 
         final boolean lz = RootPadPainter.log(view.logz, pad.logz);
@@ -118,7 +122,7 @@ final class RootPainter3D {
             }
         }
         g.setStroke(new BasicStroke(1f));
-        axes(g, box, pr, r, main, view);
+        if (!view.hideAxes3D) axes(g, box, pr, r, main, view);
         if (palette) paletteBar(g, area, box, colors, r.z0, r.z1, lz);
     }
 
@@ -182,7 +186,9 @@ final class RootPainter3D {
             if (g.x.length == 0) return null;
             final double[] xs = view.xr != null ? view.xr : span(g.x);
             final double[] ys = view.yr != null ? view.yr : span(g.y);
-            final double[] zs = view.zr != null ? view.zr : span(g.z);
+            final double[] zs = view.zr != null ? view.zr : span(g.z).clone();
+            if (view.zr == null && !Double.isNaN(g.min)) zs[0] = g.min;
+            if (view.zr == null && !Double.isNaN(g.max)) zs[1] = g.max;
             r.x0 = xs[0];
             r.x1 = xs[1];
             r.y0 = ys[0];

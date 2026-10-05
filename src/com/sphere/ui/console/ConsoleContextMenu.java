@@ -5,6 +5,7 @@ import com.sphere.core.cpp.CppDiagnosticsParser.Diagnostic;
 import com.sphere.core.cpp.CppIntellisenseBackend;
 import com.sphere.core.fastjet.Citations;
 import com.sphere.core.fjcontrib.ContribCitations;
+import com.sphere.core.hepmc3.HepMC3Citations;
 import com.sphere.core.rootbackend.LhapdfCitation;
 import com.sphere.core.rootbackend.RootBackend;
 import com.sphere.core.rootbackend.RootBridgeCompiler;
@@ -88,7 +89,12 @@ public final class ConsoleContextMenu {
     private final JMenuItem citeRoot      = ConsoleMenuFactory.item("Citation ROOT");
     private final JMenuItem citeFastJet   = ConsoleMenuFactory.item("Citation FastJet");
     private final JMenuItem citeContrib   = ConsoleMenuFactory.item("Citation fjcontrib");
+    private final JMenuItem citeHepMC3    = ConsoleMenuFactory.item("Citation HepMC3");
     private final JMenuItem citeLhapdf    = ConsoleMenuFactory.item("Citation LHAPDF");
+    private final JMenuItem citeMinuit2   = ConsoleMenuFactory.item("Citation Minuit2");
+
+    // :py settings, offered only when settings.conf declares a Python.
+    private final JMenuItem pythonManager = ConsoleMenuFactory.item("Python Manager");
 
     public ConsoleContextMenu(Host host,
                               SettingsManager settings,
@@ -151,7 +157,9 @@ public final class ConsoleContextMenu {
         citationsMenu.add(citeRoot);
         citationsMenu.add(citeFastJet);
         citationsMenu.add(citeContrib);
+        citationsMenu.add(citeHepMC3);
         citationsMenu.add(citeLhapdf);
+        citationsMenu.add(citeMinuit2);
     }
 
     private void assemble() {
@@ -175,6 +183,7 @@ public final class ConsoleContextMenu {
             host.openConfigFile("Edit Trusted Commands", "config/trusted_commands.src"));
         settingsMenu.add(editSettings);
         settingsMenu.add(editSessions);
+        settingsMenu.add(pythonManager);
         settingsMenu.add(ConsoleMenuFactory.separator());
         settingsMenu.add(editWhitelist);
         settingsMenu.add(editTrusted);
@@ -221,6 +230,7 @@ public final class ConsoleContextMenu {
         formatFile.addActionListener(e -> host.formatActiveFile(false));
         checkFormat.addActionListener(e -> host.formatActiveFile(true));
         renameSymbol.addActionListener(e -> host.renameSymbol());
+        pythonManager.addActionListener(e -> com.sphere.ui.PyEnvManagerDialog.open());
 
         // The old checkbox wrote into a JCheckBox field that was never assigned, so
         // it toggled nothing. The flag the rest of the code reads is AppLogger's.
@@ -262,6 +272,10 @@ public final class ConsoleContextMenu {
             CitationDialog.show(popup.getInvoker(), "Citation FastJet", Citations.fastjetText()));
         citeContrib.addActionListener(e ->
             CitationDialog.show(popup.getInvoker(), "Citation fjcontrib", ContribCitations.text()));
+        citeHepMC3.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation HepMC3", HepMC3Citations.text()));
+        citeMinuit2.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation Minuit2", com.sphere.core.minuit2.Minuit2Citations.text()));
         citeLhapdf.addActionListener(e ->
             CitationDialog.show(popup.getInvoker(), "Citation LHAPDF", LhapdfCitation.text()));
         // The release comes from root-config, which is a process: not on the EDT.
@@ -381,6 +395,10 @@ public final class ConsoleContextMenu {
         setState(rootEnv, root.usable(), root.reason());
         setState(rootMenu, true, null);
         setState(citationsMenu, true, null);
+
+        // Python: muted, in italics, when settings.conf declares none.
+        BackendAvailability.State python = availability.pythonConfigured();
+        setState(pythonManager, python.usable(), python.reason());
     }
 
     private static void setState(JMenuItem item, boolean enabled, String reasonWhenDisabled) {

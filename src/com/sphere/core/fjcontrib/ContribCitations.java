@@ -18,8 +18,8 @@ import java.util.Map;
  */
 public final class ContribCitations {
 
-    /** The fjcontrib release this translation follows. */
-    public static final String RELEASE = "1.104";
+    /** The fjcontrib release this translation follows (kept in Sphere.java with every other version). */
+    public static final String RELEASE = com.sphere.Sphere.FJCONTRIB_VERSION;
 
     private static Reference ref(String key, String authors, String title, String journal, String volume,
                                  String year, String pages, String eprint) {

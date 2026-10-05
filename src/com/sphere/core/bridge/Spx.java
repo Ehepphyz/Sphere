@@ -56,7 +56,7 @@ import java.util.Map;
 public final class Spx {
 
     public static final String MAGIC = "SPHRSPX1";
-    public static final int VERSION = 1;
+    public static final int VERSION = com.sphere.Sphere.SPX_VERSION;
     public static final int HEADER = 64;
     public static final int ENTRY = 64;
     public static final int ALIGN = 64;

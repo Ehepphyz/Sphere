@@ -49,8 +49,8 @@ public final class RootBackend implements AutoCloseable, Backend {
     // 5 since heap payloads moved to SIMD_ALIGNMENT: the metadata block that
     // precedes them grew, so every chunk offset moved. An older region is laid
     // out again rather than read with the wrong offsets.
-    public static final int SHM_VERSION = 5;
-    public static final int PROTO_VERSION = 3;
+    public static final int SHM_VERSION = com.sphere.Sphere.ROOT_SHM_VERSION;
+    public static final int PROTO_VERSION = com.sphere.Sphere.ROOT_PROTO_VERSION;
 
     // ---- ShmHeader (inc/shm_layout.h), 1408 bytes at region offset 0 --------
     public static final long HDR_MAGIC            = 0L;

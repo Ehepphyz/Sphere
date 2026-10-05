@@ -12,6 +12,9 @@
 !   call spx_open_pdf(ct, 'CT18NLO')               ! $SPHERE_BRIDGE/CT18NLO.spx
 !   g = spx_xfxq2(ct, 21, 1d-3, 1d4)                ! member 0
 !   call spx_publish('pt', edges, counts)           ! shows up in Sphere's Plots tab
+!   type(spx_events) :: hep
+!   call spx_open_events(hep, 'hepmc')              ! ':hepmc bridge': the HepMC3 record
+!   call spx_hepevt(hep, 0)                         ! event 0 into COMMON /HEPEVT/
 !
 ! Code written for LHAPDF's Fortran interface (InitPDFsetByName, InitPDF,
 ! evolvePDF, alphasPDF) needs no change at all: sphere_lhaglue.f90 provides
@@ -27,7 +30,7 @@ module sphere_spx
 
   public :: spx_pdf, spx_events, spx_open_pdf, spx_open_events, spx_xfxq2, spx_xfxq, spx_alphasq2, &
             spx_alphasq, spx_inrange, spx_members, spx_publish, spx_bridge_folder, spx_resolve, &
-            spx_crosscheck, spx_meta, spx_column
+            spx_crosscheck, spx_meta, spx_column, spx_hepevt, spx_nmxhep, spx_hepmc_check
 
   integer, parameter :: F64 = 1, I64 = 2, TEXT = 3
 
@@ -49,7 +52,20 @@ module sphere_spx
     integer :: n = 0
     integer(int64), allocatable :: offset(:), pdg(:), jet_offset(:), jet_of(:)
     real(real64), allocatable :: p4(:), weight(:), incoming(:), jet_p4(:)
+    ! HepMC3 events (':hepmc bridge'): hepmc is true when the record is there.
+    ! Per particle: status, gen_mass, prod_vtx/end_vtx (vertex from 0 in the event,
+    ! -1 for none), mothers/daughters (HEPEVT's JMOHEP/JDAHEP, 2 per particle, from 1
+    ! in the event). Per vertex: vtx_pos (x,y,z,t), vtx_status, with vtx_offset.
+    ! Per event: event_number, wgt_offset into wgt_all, xsec (value, error).
+    logical :: hepmc = .false.
+    integer(int64), allocatable :: status(:), prod_vtx(:), end_vtx(:), mothers(:), daughters(:)
+    integer(int64), allocatable :: vtx_offset(:), vtx_status(:), event_number(:), wgt_offset(:)
+    real(real64), allocatable :: gen_mass(:), vtx_pos(:), wgt_all(:), xsec(:)
   end type spx_events
+
+  !> The size of the /HEPEVT/ common block spx_hepevt fills: 4000, as Pythia 6 and
+  !> Herwig declare it. A program declaring another size changes it here.
+  integer, parameter :: spx_nmxhep = 4000
 
   type :: section
     character(len=24) :: name
@@ -681,11 +697,75 @@ contains
     call read_i64(unit, sections, 'jet_offset', ev%jet_offset)
     call read_f64(unit, sections, 'jet_p4', ev%jet_p4)
     call read_i64(unit, sections, 'jet_of', ev%jet_of)
+    ev%hepmc = find(sections, 'links') >= 0
+    if (ev%hepmc) then
+      call read_i64(unit, sections, 'status', ev%status)
+      call read_f64(unit, sections, 'gen_mass', ev%gen_mass)
+      call read_i64(unit, sections, 'prod_vtx', ev%prod_vtx)
+      call read_i64(unit, sections, 'end_vtx', ev%end_vtx)
+      call read_i64(unit, sections, 'mothers', ev%mothers)
+      call read_i64(unit, sections, 'daughters', ev%daughters)
+      call read_i64(unit, sections, 'vtx_offset', ev%vtx_offset)
+      call read_f64(unit, sections, 'vtx_pos', ev%vtx_pos)
+      call read_i64(unit, sections, 'vtx_status', ev%vtx_status)
+      call read_i64(unit, sections, 'event_number', ev%event_number)
+      call read_i64(unit, sections, 'wgt_offset', ev%wgt_offset)
+      call read_f64(unit, sections, 'wgt_all', ev%wgt_all)
+      call read_f64(unit, sections, 'xsec', ev%xsec)
+    end if
     close(unit)
     ev%n = size(ev%offset) - 1
     ev%loaded = .true.
     if (present(ok)) ok = .true.
   end subroutine spx_open_events
+
+  !> Fills the standard /HEPEVT/ common block with event e (from 0) of a sample,
+  !> as a Fortran generator or analysis expects it: NEVHEP, NHEP, ISTHEP, IDHEP,
+  !> JMOHEP, JDAHEP, PHEP (px, py, pz, E, m), VHEP (x, y, z, t of the production
+  !> vertex). Statuses, mothers and daughters need the HepMC3 record (':hepmc
+  !> bridge'); a sample of particles alone gives them status 1 and no parents.
+  !> ok is false when the event does not fit in spx_nmxhep entries.
+  subroutine spx_hepevt(ev, e, ok)
+    type(spx_events), intent(in) :: ev
+    integer, intent(in) :: e
+    logical, intent(out), optional :: ok
+    integer :: nevhep, nhep, isthep, idhep, jmohep, jdahep
+    double precision :: phep, vhep
+    common /HEPEVT/ nevhep, nhep, isthep(spx_nmxhep), idhep(spx_nmxhep), jmohep(2, spx_nmxhep), &
+                    jdahep(2, spx_nmxhep), phep(5, spx_nmxhep), vhep(4, spx_nmxhep)
+    integer :: i, n, v
+    integer(int64) :: at
+    real(real64) :: m2
+    if (present(ok)) ok = .false.
+    if (e < 0 .or. e >= ev%n) return
+    n = int(ev%offset(e + 1) - ev%offset(e))
+    if (n > spx_nmxhep) return
+    nevhep = e
+    if (ev%hepmc) nevhep = int(ev%event_number(e))
+    nhep = n
+    do i = 1, n
+      at = ev%offset(e) + i - 1
+      idhep(i) = int(ev%pdg(at))
+      phep(1:4, i) = ev%p4(4 * at:4 * at + 3)
+      m2 = phep(4, i)**2 - phep(1, i)**2 - phep(2, i)**2 - phep(3, i)**2
+      phep(5, i) = sign(sqrt(abs(m2)), m2)
+      isthep(i) = 1
+      jmohep(:, i) = 0
+      jdahep(:, i) = 0
+      vhep(:, i) = 0
+      if (ev%hepmc) then
+        isthep(i) = int(ev%status(at))
+        if (ev%gen_mass(at) == ev%gen_mass(at)) phep(5, i) = ev%gen_mass(at)
+        jmohep(:, i) = int(ev%mothers(2 * at:2 * at + 1))
+        jdahep(:, i) = int(ev%daughters(2 * at:2 * at + 1))
+        if (ev%prod_vtx(at) >= 0) then
+          v = int(ev%vtx_offset(e) + ev%prod_vtx(at))
+          vhep(:, i) = ev%vtx_pos(4 * v:4 * v + 3)
+        end if
+      end if
+    end do
+    if (present(ok)) ok = .true.
+  end subroutine spx_hepevt
 
   ! ---------------------------------------------------------------------------
   ! Writing results back
@@ -851,5 +931,57 @@ contains
                      achar(10), names, columns, [n, na, 1])
     if (sink /= sink) write(*, *) 'NaN seen'
   end subroutine spx_crosscheck
+
+  !> Per event of a HepMC3 sample, read through COMMON /HEPEVT/ as a Fortran
+  !> program sees it: the checksums ':hepmc crosscheck' compares with Java's.
+  subroutine spx_hepmc_check(eventspath, outpath)
+    character(len=*), intent(in) :: eventspath, outpath
+    type(spx_events) :: ev
+    integer :: nevhep, nhep, isthep, idhep, jmohep, jdahep
+    double precision :: phep, vhep
+    common /HEPEVT/ nevhep, nhep, isthep(spx_nmxhep), idhep(spx_nmxhep), jmohep(2, spx_nmxhep), &
+                    jdahep(2, spx_nmxhep), phep(5, spx_nmxhep), vhep(4, spx_nmxhep)
+    real(real64), allocatable :: columns(:, :)
+    character(len=24) :: names(7)
+    integer :: e, i, nf
+    integer(int64) :: ms, k
+    real(real64) :: ef, pzf, ws
+    logical :: fine
+    call spx_open_events(ev, eventspath, fine)
+    if (.not. fine .or. .not. ev%hepmc) stop 2
+    allocate(columns(max(ev%n, 1), 7))
+    columns = 0
+    do e = 0, ev%n - 1
+      call spx_hepevt(ev, e, fine)
+      if (.not. fine) stop 3
+      nf = 0
+      ms = 0
+      ef = 0
+      pzf = 0
+      do i = 1, nhep
+        if (isthep(i) == 1) then
+          nf = nf + 1
+          ef = ef + phep(4, i)
+          pzf = pzf + phep(3, i)
+        end if
+        ms = ms + jmohep(1, i)
+      end do
+      ws = 0
+      do k = ev%wgt_offset(e), ev%wgt_offset(e + 1) - 1
+        ws = ws + ev%wgt_all(k)
+      end do
+      columns(e + 1, 1) = nhep
+      columns(e + 1, 2) = nf
+      columns(e + 1, 3) = real(ev%vtx_offset(e + 1) - ev%vtx_offset(e), real64)
+      columns(e + 1, 4) = real(ms, real64)
+      columns(e + 1, 5) = ef
+      columns(e + 1, 6) = pzf
+      columns(e + 1, 7) = ws
+    end do
+    names(1) = 'np'; names(2) = 'nfinal'; names(3) = 'nvtx'; names(4) = 'mosum'
+    names(5) = 'efinal'; names(6) = 'pzfinal'; names(7) = 'wsum'
+    call write_table(outpath, 'hepmc_check', 'Engine: Fortran (COMMON /HEPEVT/)' // achar(10), names, columns, &
+                     [ev%n, ev%n, ev%n, ev%n, ev%n, ev%n, ev%n])
+  end subroutine spx_hepmc_check
 
 end module sphere_spx

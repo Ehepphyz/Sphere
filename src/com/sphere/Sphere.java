@@ -40,6 +40,101 @@ import com.sphere.core.rootbackend.RootBridgeCompiler;
  */
 public class Sphere extends JFrame {
 
+    /* ==== Versions ===============================================================
+     * Every version number of Sphere, of the codes it ports and of the formats
+     * and protocols it reads and writes, in one place: the classes that print,
+     * write or check a version take it from here. All are compile-time
+     * constants, so using one does not load this window class.
+     */
+
+    /** Sphere itself (:version). */
+    public static final String VERSION = "2026.1.0.0";
+
+    // ---- FastJet, SISCone and fjcontrib, ported to Java ----------------------------
+    /** The FastJet release the Java port follows. */
+    public static final String FASTJET_VERSION = "3.5.2";
+    /** Sphere's Java port of FastJet. */
+    public static final String FASTJET_JAVA_PORT_VERSION = "1.0.0.0";
+    /** SISCone as FastJet ships it. */
+    public static final String SISCONE_VERSION = "3.1.3";
+    /** The fjcontrib release the Java port follows. */
+    public static final String FJCONTRIB_VERSION = "1.104";
+    /* Each contrib of that release. */
+    public static final String FJCONTRIB_VARIABLE_R_VERSION = "1.2.1";
+    public static final String FJCONTRIB_VALENCIA_PLUGIN_VERSION = "2.0.2";
+    public static final String FJCONTRIB_CENTAURO_VERSION = "1.0.0";
+    public static final String FJCONTRIB_DIS_GENKT_VERSION = "1.1.0";
+    public static final String FJCONTRIB_KT_CLUS_CXX_VERSION = "1.0.1";
+    public static final String FJCONTRIB_SC_JET_VERSION = "1.1.0";
+    public static final String FJCONTRIB_CLUSTERING_VETO_PLUGIN_VERSION = "1.0.0";
+    public static final String FJCONTRIB_DYNAMIC_R_VERSION = "1.0.2";
+    public static final String FJCONTRIB_NSUBJETTINESS_VERSION = "2.3.2";
+    public static final String FJCONTRIB_QCD_AWARE_PLUGIN_VERSION = "2.0.0";
+    public static final String FJCONTRIB_FLAVOR_CONE_VERSION = "1.0.0";
+    public static final String FJCONTRIB_IFN_PLUGIN_VERSION = "1.0.4";
+    public static final String FJCONTRIB_CMP_PLUGIN_VERSION = "1.0.0";
+    public static final String FJCONTRIB_GHS_ALGO_VERSION = "1.0.0";
+    public static final String FJCONTRIB_SDF_PLUGIN_VERSION = "1.0.1";
+    public static final String FJCONTRIB_RECURSIVE_TOOLS_VERSION = "2.0.4";
+    public static final String FJCONTRIB_ENERGY_CORRELATOR_VERSION = "1.3.2";
+    public static final String FJCONTRIB_LUND_PLANE_VERSION = "2.1.2";
+    public static final String FJCONTRIB_SUBJET_COUNTING_VERSION = "1.0.1";
+    public static final String FJCONTRIB_JET_FF_MOMENTS_VERSION = "1.0.0";
+    public static final String FJCONTRIB_CONSTITUENT_SUBTRACTOR_VERSION = "1.4.7";
+    public static final String FJCONTRIB_SOFT_KILLER_VERSION = "1.0.0";
+    public static final String FJCONTRIB_GENERIC_SUBTRACTOR_VERSION = "1.3.1";
+    public static final String FJCONTRIB_JET_CLEANSER_VERSION = "1.0.1";
+    public static final String FJCONTRIB_SIGNAL_FREE_BACKGROUND_ESTIMATOR_VERSION = "1.0.1";
+    public static final String FJCONTRIB_JETS_WITHOUT_JETS_VERSION = "1.0.0";
+
+    // ---- HepMC3, ported to Java ----------------------------------------------------
+    /** The HepMC3 release translated, as its HEPMC3_VERSION says it. */
+    public static final String HEPMC3_VERSION = "3.03.01";
+    /** HEPMC3_VERSION_CODE of that release: 1000000*major + 1000*minor + patch. */
+    public static final int HEPMC3_VERSION_CODE = 3003001;
+    /** Sphere's Java port of HepMC3. */
+    public static final String HEPMC3_JAVA_PORT_VERSION = "1.0.0";
+
+    // ---- Minuit2, ported to Java ---------------------------------------------------
+    /** The ROOT sources whose math/minuit2 is translated (the root-master of ROOT_SOURCES_VERSION). */
+    public static final String MINUIT2_SOURCES_VERSION = "6.41/01";
+    /** Sphere's Java port of Minuit2: bit for bit the C++ on Windows (MinGW) and Linux (g++). */
+    public static final String MINUIT2_JAVA_PORT_VERSION = "1.0.0";
+
+    // ---- LHAPDF ------------------------------------------------------------------------
+    /** Sphere's Java reader of LHAPDF sets. */
+    public static final String LHAPDF_JAVA_PORT_VERSION = "1.0.0.0";
+
+    // ---- ROOT files, read and written by Sphere without ROOT ----------------------
+    /** The ROOT sources (root-master) Sphere's ROOT reader and writer follow. */
+    public static final String ROOT_SOURCES_VERSION = "6.41/01";
+    /**
+     * The ROOT version Sphere writes files as (TFile's fVersion): 6.20/04, the
+     * release that wrote HepMC3's reference files, whose layout and class
+     * versions Sphere reproduces.
+     */
+    public static final int ROOT_FILE_VERSION = 62004;
+    /** The version ROOT 6.20 gives the STL collections it streams. */
+    public static final int ROOT_STL_VERSION = 9;
+
+    // ---- Sphere's own formats and protocols ------------------------------------------
+    /** SPX, the files of events Sphere hands its engines. */
+    public static final int SPX_VERSION = 1;
+    /** The layout of the shared memory with the ROOT backend (inc/shm_layout.h). */
+    public static final int ROOT_SHM_VERSION = 5;
+    /** The messages exchanged with the ROOT backend. */
+    public static final int ROOT_PROTO_VERSION = 3;
+    /** The manifest of a ROOT pipeline. */
+    public static final int ROOT_PIPELINE_MANIFEST_VERSION = 2;
+    /** The Julia driver Sphere writes; bumped whenever its source changes, so a stale copy is rewritten. */
+    public static final int JULIA_DRIVER_VERSION = 4;
+    /** The JupyterLab kernel driver Sphere writes; bumped whenever its source changes. */
+    public static final int JUPYTER_KERNEL_VERSION = 3;
+    /** The kernel's shared-memory module; bumped whenever its source changes. */
+    public static final int JUPYTER_SHM_MODULE_VERSION = 2;
+    /** The debugger script Sphere writes; bumped whenever its source changes. */
+    public static final int DEBUG_SCRIPT_VERSION = 1;
+
     // UI components
     private ConsoleUI console;
     private JPanel statusBar;

@@ -149,6 +149,7 @@ public class Handlers {
             case "python" -> "py";
             case "fjcontrib", "contrib", "contribs", "fastjet-contrib" -> "fjco";
             case "fastjet", "jets" -> "fjet";
+            case "hepmc3", "hepmc2", "hepevt", "lhef", "events" -> "hepmc";
             case "fortran" -> "fort";
             case "javascript" -> "js";
             case "c++", "cxx" -> "cpp";
@@ -181,7 +182,7 @@ public class Handlers {
     }
 
     public static void version(String input, CommandExecutionContext c) {
-        AppLogger.result("Sphere version 2026.1.0.0");
+        AppLogger.result("Sphere version " + com.sphere.Sphere.VERSION);
     }
 
     public static void quit(String input, CommandExecutionContext c) {
@@ -804,13 +805,7 @@ public class Handlers {
 
     // --- Python Engine ---
     public static void pySettings(String input, CommandExecutionContext c) {
-        SwingUtilities.invokeLater(() -> {
-            com.sphere.ui.PyEnvManagerDialog dlg = new com.sphere.ui.PyEnvManagerDialog();
-            dlg.setDefaultCloseOperation(javax.swing.JDialog.DISPOSE_ON_CLOSE);
-            dlg.pack();
-            dlg.setLocationRelativeTo(null);
-            dlg.setVisible(true);
-        });
+        com.sphere.ui.PyEnvManagerDialog.open();
     }
 
     public static void pyMode(String input, CommandExecutionContext c) { 
@@ -828,6 +823,18 @@ public class Handlers {
 
     public static void pyDiag(String input, CommandExecutionContext c) {
         reportTool("python", "PYTHON_EXEC", "python3", "--version");
+    }
+
+    public static void pyDoctor(String input, CommandExecutionContext c) {
+        com.sphere.core.python.env.PyConsole.doctor();
+    }
+
+    public static void pyOutdated(String input, CommandExecutionContext c) {
+        com.sphere.core.python.env.PyConsole.outdated();
+    }
+
+    public static void pyAudit(String input, CommandExecutionContext c) {
+        com.sphere.core.python.env.PyConsole.audit();
     }
 
     public static void pyVars(String input, CommandExecutionContext c) {

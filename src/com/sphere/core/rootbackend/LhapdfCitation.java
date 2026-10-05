@@ -11,7 +11,7 @@ import java.util.Map;
  */
 public final class LhapdfCitation {
 
-    public static final String VERSION = "1.0.0.0";
+    public static final String VERSION = com.sphere.Sphere.LHAPDF_JAVA_PORT_VERSION;
     public static final String VERSION_LINE = "LHAPDF Java Sphere v" + VERSION;
 
     private static final String LHAPDF6 = "A. Buckley, J. Ferrando, S. Lloyd, K. Nordstr\u00f6m, B. Page, M. R\u00fcfenacht,"

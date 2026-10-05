@@ -11,6 +11,8 @@ the bit: ":bridge crosscheck" shows it.
     pdf.xfxQ2(21, 1e-3, 1e4)                # member 0
     pdf.uncertainty(21, 1e-3, 1e4)          # Hessian or replicas
     ev = spx.events("events")               # particles, jets, weights
+    hep = spx.events("hepmc")               # ':hepmc bridge': the HepMC3 record too
+    hep.final_state(0), hep.vertices(0), hep.mothers(0), hep.weights(0)
     spx.publish("pt", edges, counts)        # shows up in Sphere's Plots tab
 """
 
@@ -410,7 +412,8 @@ class Events:
 
     def __repr__(self):
         jets = ", %d jets" % self.jet_offset[-1] if self.has_jets else ""
-        return "Events(%d events, %d particles%s)" % (len(self), len(self.pdg), jets)
+        graph = ", %d vertices (HepMC3)" % self.file.i64("vtx_offset")[-1] if self.hepmc else ""
+        return "Events(%d events, %d particles%s%s)" % (len(self), len(self.pdg), graph, jets)
 
     def particles(self, e):
         """The particles of event e as a list of (px, py, pz, E)."""
@@ -428,6 +431,114 @@ class Events:
     def incoming(self, e):
         v = self.incoming_[5 * e:5 * e + 5]
         return int(v[0]), int(v[1]), v[2], v[3], v[4]
+
+    # -- HepMC3 events (':hepmc bridge'): the whole record, as HepMC3 holds it --
+
+    @property
+    def hepmc(self):
+        """True when the file holds HepMC3 events: statuses, vertices and the graph."""
+        return "links" in self.file
+
+    def _need_hepmc(self):
+        if not self.hepmc:
+            raise ValueError(self.file.path + " holds particles only, not a HepMC3 record")
+
+    def status(self, e):
+        """The HepMC status of each particle of event e (1: final state)."""
+        self._need_hepmc()
+        return list(self.file.i64("status")[self.offset[e]:self.offset[e + 1]])
+
+    def final_state(self, e):
+        """The indices (from 0, in the event) of the particles of status 1."""
+        return [i for i, s in enumerate(self.status(e)) if s == 1]
+
+    def generated_mass(self, e):
+        """The generated mass of each particle, NaN where none was set."""
+        self._need_hepmc()
+        return list(self.file.f64("gen_mass")[self.offset[e]:self.offset[e + 1]])
+
+    def vertices(self, e):
+        """The vertices of event e as (x, y, z, t, status)."""
+        self._need_hepmc()
+        vo, pos, st = self.file.i64("vtx_offset"), self.file.f64("vtx_pos"), self.file.i64("vtx_status")
+        return [(pos[4 * k], pos[4 * k + 1], pos[4 * k + 2], pos[4 * k + 3], int(st[k]))
+                for k in range(vo[e], vo[e + 1])]
+
+    def production_vertex(self, e):
+        """The vertex (from 0 in the event) each particle comes from, -1 for none."""
+        self._need_hepmc()
+        return list(self.file.i64("prod_vtx")[self.offset[e]:self.offset[e + 1]])
+
+    def end_vertex(self, e):
+        """The vertex (from 0 in the event) each particle ends in, -1 for none."""
+        self._need_hepmc()
+        return list(self.file.i64("end_vtx")[self.offset[e]:self.offset[e + 1]])
+
+    def mothers(self, e):
+        """HEPEVT's JMOHEP: (first, last) mother of each particle, from 1 in the event, (0, 0) for none."""
+        self._need_hepmc()
+        m = self.file.i64("mothers")
+        return [(int(m[2 * i]), int(m[2 * i + 1])) for i in range(self.offset[e], self.offset[e + 1])]
+
+    def daughters(self, e):
+        """HEPEVT's JDAHEP: (first, last) daughter of each particle, from 1 in the event."""
+        self._need_hepmc()
+        d = self.file.i64("daughters")
+        return [(int(d[2 * i]), int(d[2 * i + 1])) for i in range(self.offset[e], self.offset[e + 1])]
+
+    def event_number(self, e):
+        return int(self.file.i64("event_number")[e]) if "event_number" in self.file else e
+
+    def weights(self, e):
+        """Every weight of event e (the names are weight_names)."""
+        if "wgt_offset" not in self.file:
+            return [self.weight[e]]
+        wo, w = self.file.i64("wgt_offset"), self.file.f64("wgt_all")
+        return list(w[wo[e]:wo[e + 1]])
+
+    @property
+    def weight_names(self):
+        names = self.meta.get("WeightNames", "")
+        return [n.strip() for n in names.split("|")] if names else []
+
+    def cross_section(self, e):
+        """(cross-section, error) of event e in pb; NaN when the event has none."""
+        x = self.file.f64("xsec")
+        return x[2 * e], x[2 * e + 1]
+
+    def to_pyhepmc(self, e):
+        """Event e as a pyhepmc.GenEvent (pip install pyhepmc), vertices and all."""
+        import pyhepmc
+        self._need_hepmc()
+        units = self.file.i64("units")
+        ev = pyhepmc.GenEvent(pyhepmc.Units.GEV if units[2 * e] == 0 else pyhepmc.Units.MEV,
+                              pyhepmc.Units.MM if units[2 * e + 1] == 0 else pyhepmc.Units.CM)
+        ev.event_number = self.event_number(e)
+        status, mass, mset = self.status(e), self.generated_mass(e), self.file.i64("mass_set")
+        parts = []
+        for i, (px, py, pz, en) in enumerate(self.particles(e)):
+            p = pyhepmc.GenParticle(pyhepmc.FourVector(px, py, pz, en), int(self.pdg[self.offset[e] + i]), status[i])
+            if mset[self.offset[e] + i]:
+                p.generated_mass = mass[i]
+            parts.append(p)
+        verts = []
+        for (x, y, z, t, st) in self.vertices(e):
+            v = pyhepmc.GenVertex(pyhepmc.FourVector(x, y, z, t))
+            v.status = st
+            verts.append(v)
+        lo, links = self.file.i64("link_offset"), self.file.i64("links")
+        for k in range(lo[e], lo[e + 1]):
+            a, b = int(links[2 * k]), int(links[2 * k + 1])
+            if a > 0:
+                verts[-b - 1].add_particle_in(parts[a - 1])
+            else:
+                verts[-a - 1].add_particle_out(parts[b - 1])
+        for p in parts:
+            ev.add_particle(p)
+        for v in verts:
+            ev.add_vertex(v)
+        ev.weights = self.weights(e)
+        return ev
 
 
 def events(name):
@@ -516,8 +627,43 @@ def crosscheck(pdf_path, points_path, out_path):
                 "Engine: Python %d.%d\nRounds: %d\n" % (sys.version_info[0], sys.version_info[1], rounds))
 
 
+def hepmc_check(events_path, out_path, engine="Python"):
+    """Per event of a HepMC3 sample: particles, final-state particles, vertices, the sum of
+    the first mothers, and the final-state E and pz and the weights summed in order.
+    ':hepmc crosscheck' compares them with Java's, bit for bit."""
+    ev = Events(SPXFile(events_path))
+    ev._need_hepmc()
+    f = ev.file
+    st, mo, vo = f.i64("status"), f.i64("mothers"), f.i64("vtx_offset")
+    wo, wa, p4 = f.i64("wgt_offset"), f.f64("wgt_all"), ev.p4
+    cols = {k: [] for k in ("np", "nfinal", "nvtx", "mosum", "efinal", "pzfinal", "wsum")}
+    for e in range(len(ev)):
+        a, b = ev.offset[e], ev.offset[e + 1]
+        nf, ms, ef, pzf, ws = 0, 0, 0.0, 0.0, 0.0
+        for i in range(a, b):
+            if st[i] == 1:
+                nf += 1
+                ef += p4[4 * i + 3]
+                pzf += p4[4 * i + 2]
+            ms += mo[2 * i]
+        for k in range(wo[e], wo[e + 1]):
+            ws += wa[k]
+        cols["np"].append(int(b - a))
+        cols["nfinal"].append(nf)
+        cols["nvtx"].append(int(vo[e + 1] - vo[e]))
+        cols["mosum"].append(int(ms))
+        cols["efinal"].append(float(ef))
+        cols["pzfinal"].append(float(pzf))
+        cols["wsum"].append(float(ws))
+    return write_table(out_path, "hepmc_check", [(k, v) for k, v in cols.items()],
+                       "Engine: %s %d.%d\n" % (engine, sys.version_info[0], sys.version_info[1]))
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 5 and sys.argv[1] == "crosscheck":
         crosscheck(sys.argv[2], sys.argv[3], sys.argv[4])
+    elif len(sys.argv) == 4 and sys.argv[1] == "hepmc_check":
+        hepmc_check(sys.argv[2], sys.argv[3])
     else:
         print("usage: python sphere_spx.py crosscheck <pdf.spx> <points.spx> <out.spx>")
+        print("       python sphere_spx.py hepmc_check <events.spx> <out.spx>")

@@ -17,7 +17,7 @@ import java.nio.file.Path;
 public final class JuliaScript {
 
     /** Bumped whenever the source below changes, so a stale copy is rewritten. */
-    public static final int VERSION = 4;
+    public static final int VERSION = com.sphere.Sphere.JULIA_DRIVER_VERSION;
 
     public static final String FILE_NAME = "sphere_julia.jl";
 
@@ -43,12 +43,12 @@ public final class JuliaScript {
             }
             AppLogger.info("Julia driver refreshed to version " + VERSION + ".");
         }
-        Files.writeString(script, SOURCE, StandardCharsets.UTF_8);
+        Files.writeString(script, SOURCE.replace("@SPHERE_JULIA_VERSION@", String.valueOf(VERSION)), StandardCharsets.UTF_8);
         return script;
     }
 
     private static final String SOURCE = """
-        # SPHERE_JULIA_VERSION = 4
+        # SPHERE_JULIA_VERSION = @SPHERE_JULIA_VERSION@
         #
         # Sphere's Julia session. It reads one command per line on its standard
         # input and answers with a single control line, so that everything else it

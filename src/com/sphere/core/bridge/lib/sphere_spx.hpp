@@ -11,7 +11,13 @@
 //   double g = pdf.xfxQ2(21, 1e-3, 1e4);            // member 0
 //   auto band = pdf.uncertainty(21, 1e-3, 1e4);    // Hessian or replicas
 //   auto ev = spx::Events::open("events");         // particles, jets, weights
+//   auto hep = spx::Events::open("hepmc");         // ':hepmc bridge': the HepMC3 record too
+//   hep.status(0, i); hep.vertex(0, k); hep.mothers(0, i); hep.weights(0);
 //   spx::publish("pt_spectrum", edges, counts);    // shows up in Sphere's Plots tab
+//
+// With HepMC3's headers included first, spx::hepmc3::fill(hep, e, genEvent)
+// makes a HepMC3::GenEvent of the C++ library from event e, and
+// spx::hepmc3::runInfo(hep) the GenRunInfo (with ReaderAscii.h included).
 //
 // Under ROOT (Cling, or with SPHERE_SPX_ROOT defined) spx::root:: turns the
 // same files into TH1D, TGraph and TTree objects.
@@ -33,8 +39,10 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -665,6 +673,26 @@ public:
             jetP4_ = f.f64("jet_p4");
             jetOf_ = f.i64("jet_of");
         }
+        if (f.has("links")) {
+            status_ = f.i64("status");
+            genMass_ = f.f64("gen_mass");
+            massSet_ = f.i64("mass_set");
+            prodVtx_ = f.i64("prod_vtx");
+            endVtx_ = f.i64("end_vtx");
+            mothers_ = f.i64("mothers");
+            daughters_ = f.i64("daughters");
+            vtxOffset_ = f.i64("vtx_offset");
+            vtxPos_ = f.f64("vtx_pos");
+            vtxStatus_ = f.i64("vtx_status");
+            linkOffset_ = f.i64("link_offset");
+            links_ = f.i64("links");
+            eventNumber_ = f.i64("event_number");
+            eventPos_ = f.f64("event_pos");
+            units_ = f.i64("units");
+            wgtOffset_ = f.i64("wgt_offset");
+            wgtAll_ = f.f64("wgt_all");
+            xsec_ = f.f64("xsec");
+        }
     }
     static Events open(const std::string& name) { return Events(File(resolve(name))); }
 
@@ -692,6 +720,56 @@ public:
     /** The jet a particle ended up in, -1 when none. */
     std::int64_t jetOf(std::int64_t e, std::int64_t i) const { return jetOf_[offset_[e] + i]; }
 
+    // -- HepMC3 events (':hepmc bridge'): the whole record, as HepMC3 holds it --
+
+    /** True when the sample holds HepMC3 events: statuses, vertices and the graph. */
+    bool hasGraph() const { return links_ != nullptr; }
+    /** The HepMC status (1: final state). */
+    std::int64_t status(std::int64_t e, std::int64_t i) const { return status_[offset_[e] + i]; }
+    /** The generated mass, NaN where none was set. */
+    double generatedMass(std::int64_t e, std::int64_t i) const { return genMass_[offset_[e] + i]; }
+    bool isGeneratedMassSet(std::int64_t e, std::int64_t i) const { return massSet_[offset_[e] + i] != 0; }
+    /** The vertex (from 0 in the event) a particle comes from / ends in, -1 for none. */
+    std::int64_t productionVertex(std::int64_t e, std::int64_t i) const { return prodVtx_[offset_[e] + i]; }
+    std::int64_t endVertex(std::int64_t e, std::int64_t i) const { return endVtx_[offset_[e] + i]; }
+    /** HEPEVT's JMOHEP and JDAHEP: first and last, from 1 in the event, 0 for none. */
+    std::pair<std::int64_t, std::int64_t> mothers(std::int64_t e, std::int64_t i) const {
+        const std::int64_t* m = mothers_ + 2 * (offset_[e] + i);
+        return {m[0], m[1]};
+    }
+    std::pair<std::int64_t, std::int64_t> daughters(std::int64_t e, std::int64_t i) const {
+        const std::int64_t* d = daughters_ + 2 * (offset_[e] + i);
+        return {d[0], d[1]};
+    }
+    struct Vertex {
+        double x, y, z, t;
+        int status;
+    };
+    std::int64_t vertices(std::int64_t e) const { return vtxOffset_[e + 1] - vtxOffset_[e]; }
+    Vertex vertex(std::int64_t e, std::int64_t k) const {
+        const double* p = vtxPos_ + 4 * (vtxOffset_[e] + k);
+        return {p[0], p[1], p[2], p[3], static_cast<int>(vtxStatus_[vtxOffset_[e] + k])};
+    }
+    std::int64_t eventNumber(std::int64_t e) const { return eventNumber_ ? eventNumber_[e] : e; }
+    /** Every weight of event e; the names are in meta()["WeightNames"], separated by " | ". */
+    std::vector<double> weights(std::int64_t e) const {
+        if (!wgtOffset_) return {weight_[e]};
+        return std::vector<double>(wgtAll_ + wgtOffset_[e], wgtAll_ + wgtOffset_[e + 1]);
+    }
+    /** (cross-section, error) in pb; NaN when the event has none. */
+    std::pair<double, double> crossSection(std::int64_t e) const { return {xsec_[2 * e], xsec_[2 * e + 1]}; }
+    /** 0 GeV / 1 MeV and 0 mm / 1 cm. */
+    std::pair<int, int> units(std::int64_t e) const {
+        return {static_cast<int>(units_[2 * e]), static_cast<int>(units_[2 * e + 1])};
+    }
+    std::int64_t links(std::int64_t e) const { return linkOffset_[e + 1] - linkOffset_[e]; }
+    /** HepMC3's link k of event e: (particle id, vertex id) entering, (vertex id, particle id) leaving. */
+    std::pair<std::int64_t, std::int64_t> link(std::int64_t e, std::int64_t k) const {
+        const std::int64_t* l = links_ + 2 * (linkOffset_[e] + k);
+        return {l[0], l[1]};
+    }
+    const double* eventPosition(std::int64_t e) const { return eventPos_ + 4 * e; }
+
     const File& file() const { return file_; }
 
 private:
@@ -699,7 +777,93 @@ private:
     std::int64_t n_ = 0;
     const std::int64_t *offset_ = nullptr, *pdg_ = nullptr, *jetOffset_ = nullptr, *jetOf_ = nullptr;
     const double *p4_ = nullptr, *weight_ = nullptr, *incoming_ = nullptr, *jetP4_ = nullptr;
+    const std::int64_t *status_ = nullptr, *massSet_ = nullptr, *prodVtx_ = nullptr, *endVtx_ = nullptr,
+                       *mothers_ = nullptr, *daughters_ = nullptr, *vtxOffset_ = nullptr, *vtxStatus_ = nullptr,
+                       *linkOffset_ = nullptr, *links_ = nullptr, *eventNumber_ = nullptr, *units_ = nullptr,
+                       *wgtOffset_ = nullptr;
+    const double *genMass_ = nullptr, *vtxPos_ = nullptr, *eventPos_ = nullptr, *wgtAll_ = nullptr, *xsec_ = nullptr;
 };
+
+#if defined(HEPMC3_VERSION_CODE) || defined(HEPMC3_GENEVENT_H)
+// With HepMC3's own headers included first (#include "HepMC3/GenEvent.h"), the
+// events become HepMC3::GenEvent of the C++ library: ids, vertices, weights
+// and attributes as Sphere had them, ready for WriterAscii, Rivet or a ROOT IO.
+namespace hepmc3 {
+
+inline std::string unescape(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '\\' || i + 1 == s.size()) { out += s[i]; continue; }
+        const char n = s[++i];
+        out += n == 't' ? '\t' : n == 'n' ? '\n' : n == 'r' ? '\r' : n;
+    }
+    return out;
+}
+
+/** Event e of the sample, as a HepMC3::GenEvent. */
+inline void fill(const Events& ev, std::int64_t e, HepMC3::GenEvent& out) {
+    if (!ev.hasGraph()) throw std::runtime_error(ev.file().path() + " holds particles only, not a HepMC3 record");
+    HepMC3::GenEventData d;
+    d.event_number = static_cast<int>(ev.eventNumber(e));
+    const auto u = ev.units(e);
+    d.momentum_unit = u.first == 0 ? HepMC3::Units::GEV : HepMC3::Units::MEV;
+    d.length_unit = u.second == 0 ? HepMC3::Units::MM : HepMC3::Units::CM;
+    const double* pos = ev.eventPosition(e);
+    d.event_pos = HepMC3::FourVector(pos[0], pos[1], pos[2], pos[3]);
+    for (std::int64_t i = 0; i < ev.particles(e); ++i) {
+        const FourMomentum p = ev.particle(e, i);
+        HepMC3::GenParticleData pd;
+        pd.pid = static_cast<int>(ev.pdg(e, i));
+        pd.status = static_cast<int>(ev.status(e, i));
+        pd.is_mass_set = ev.isGeneratedMassSet(e, i);
+        pd.mass = pd.is_mass_set ? ev.generatedMass(e, i) : 0.0;
+        pd.momentum = HepMC3::FourVector(p.px, p.py, p.pz, p.E);
+        d.particles.push_back(pd);
+    }
+    for (std::int64_t k = 0; k < ev.vertices(e); ++k) {
+        const Events::Vertex v = ev.vertex(e, k);
+        HepMC3::GenVertexData vd;
+        vd.status = v.status;
+        vd.position = HepMC3::FourVector(v.x, v.y, v.z, v.t);
+        d.vertices.push_back(vd);
+    }
+    for (std::int64_t k = 0; k < ev.links(e); ++k) {
+        const auto l = ev.link(e, k);
+        d.links1.push_back(static_cast<int>(l.first));
+        d.links2.push_back(static_cast<int>(l.second));
+    }
+    d.weights = ev.weights(e);
+    const std::string all = ev.file().text("attributes");
+    size_t start = 0;
+    while (start < all.size()) {
+        size_t end = all.find('\n', start);
+        if (end == std::string::npos) end = all.size();
+        const std::string line = all.substr(start, end - start);
+        start = end + 1;
+        const size_t a = line.find('\t'), b = line.find('\t', a + 1), c = line.find('\t', b + 1);
+        if (a == std::string::npos || b == std::string::npos || c == std::string::npos) continue;
+        if (std::stoll(line.substr(0, a)) != e) continue;
+        d.attribute_id.push_back(std::stoi(line.substr(a + 1, b - a - 1)));
+        d.attribute_name.push_back(unescape(line.substr(b + 1, c - b - 1)));
+        d.attribute_string.push_back(unescape(line.substr(c + 1)));
+    }
+    out.read_data(d);
+}
+
+#if defined(HEPMC3_READERASCII_H)
+/** The run information Sphere wrote with the events (weight names, tools, attributes). */
+inline std::shared_ptr<HepMC3::GenRunInfo> runInfo(const Events& ev) {
+    if (!ev.file().has("run_info")) return nullptr;
+    std::istringstream text(ev.file().text("run_info"));
+    HepMC3::ReaderAscii reader(text);
+    HepMC3::GenEvent none;
+    reader.read_event(none);
+    return reader.run_info();
+}
+#endif
+
+}  // namespace hepmc3
+#endif
 
 // ---------------------------------------------------------------------------
 // Writing results back
@@ -848,6 +1012,41 @@ inline void crosscheck(const std::string& pdfPath, const std::string& pointsPath
     t.write(outPath);
 }
 
+/**
+ * Per event of a HepMC3 sample: particles, final-state particles, vertices,
+ * the sum of the first mothers, and the final-state E and pz and the weights
+ * summed in order. ':hepmc crosscheck' compares them with Java's, bit for bit.
+ */
+inline void hepmcCheck(const std::string& eventsPath, const std::string& outPath, const std::string& engine = "C++") {
+    const Events ev{File(eventsPath)};
+    if (!ev.hasGraph()) throw std::runtime_error(eventsPath + " holds particles only, not a HepMC3 record");
+    std::vector<std::int64_t> np, nfinal, nvtx, mosum;
+    std::vector<double> efinal, pzfinal, wsum;
+    for (std::int64_t e = 0; e < ev.size(); ++e) {
+        std::int64_t nf = 0, ms = 0;
+        double ef = 0, pzf = 0, ws = 0;
+        for (std::int64_t i = 0; i < ev.particles(e); ++i) {
+            if (ev.status(e, i) == 1) {
+                const FourMomentum p = ev.particle(e, i);
+                ++nf;
+                ef += p.E;
+                pzf += p.pz;
+            }
+            ms += ev.mothers(e, i).first;
+        }
+        for (double w : ev.weights(e)) ws += w;
+        np.push_back(ev.particles(e));
+        nfinal.push_back(nf);
+        nvtx.push_back(ev.vertices(e));
+        mosum.push_back(ms);
+        efinal.push_back(ef);
+        pzfinal.push_back(pzf);
+        wsum.push_back(ws);
+    }
+    Table("hepmc_check").meta("Engine", engine).column("np", np).column("nfinal", nfinal).column("nvtx", nvtx)
+        .column("mosum", mosum).column("efinal", efinal).column("pzfinal", pzfinal).column("wsum", wsum).write(outPath);
+}
+
 }  // namespace spx
 
 // ---------------------------------------------------------------------------
@@ -946,6 +1145,66 @@ inline TTree* eventsTree(const Events& ev, const char* name = "events") {
             }
         }
         weight = ev.weight(k);
+        tree->Fill();
+    }
+    tree->ResetBranchAddresses();
+    return tree;
+}
+
+/**
+ * HepMC3 events (':hepmc bridge') as a tree of vectors, one entry per event:
+ * the particles with their status and HEPEVT mothers and daughters, the
+ * vertices, every weight. eventsTree gives the particles alone.
+ */
+inline TTree* hepmcTree(const Events& ev, const char* name = "hepmc") {
+    if (!ev.hasGraph()) return eventsTree(ev, name);
+    auto* tree = new TTree(name, "Sphere HepMC3 events");
+    std::vector<double> px, py, pz, e, mass, vx, vy, vz, vt, weights;
+    std::vector<int> pdg, status, mo1, mo2, da1, da2, prod, end, vstatus;
+    Long64_t number = 0;
+    tree->Branch("event_number", &number);
+    tree->Branch("px", &px);
+    tree->Branch("py", &py);
+    tree->Branch("pz", &pz);
+    tree->Branch("E", &e);
+    tree->Branch("generated_mass", &mass);
+    tree->Branch("pdg", &pdg);
+    tree->Branch("status", &status);
+    tree->Branch("mother1", &mo1);
+    tree->Branch("mother2", &mo2);
+    tree->Branch("daughter1", &da1);
+    tree->Branch("daughter2", &da2);
+    tree->Branch("prod_vtx", &prod);
+    tree->Branch("end_vtx", &end);
+    tree->Branch("vx", &vx);
+    tree->Branch("vy", &vy);
+    tree->Branch("vz", &vz);
+    tree->Branch("vt", &vt);
+    tree->Branch("vertex_status", &vstatus);
+    tree->Branch("weights", &weights);
+    for (std::int64_t k = 0; k < ev.size(); ++k) {
+        for (auto* v : {&px, &py, &pz, &e, &mass, &vx, &vy, &vz, &vt}) v->clear();
+        for (auto* v : {&pdg, &status, &mo1, &mo2, &da1, &da2, &prod, &end, &vstatus}) v->clear();
+        number = ev.eventNumber(k);
+        for (std::int64_t i = 0; i < ev.particles(k); ++i) {
+            const FourMomentum p = ev.particle(k, i);
+            px.push_back(p.px); py.push_back(p.py); pz.push_back(p.pz); e.push_back(p.E);
+            mass.push_back(ev.generatedMass(k, i));
+            pdg.push_back(static_cast<int>(ev.pdg(k, i)));
+            status.push_back(static_cast<int>(ev.status(k, i)));
+            const auto m = ev.mothers(k, i);
+            const auto d = ev.daughters(k, i);
+            mo1.push_back(static_cast<int>(m.first)); mo2.push_back(static_cast<int>(m.second));
+            da1.push_back(static_cast<int>(d.first)); da2.push_back(static_cast<int>(d.second));
+            prod.push_back(static_cast<int>(ev.productionVertex(k, i)));
+            end.push_back(static_cast<int>(ev.endVertex(k, i)));
+        }
+        for (std::int64_t v = 0; v < ev.vertices(k); ++v) {
+            const Events::Vertex x = ev.vertex(k, v);
+            vx.push_back(x.x); vy.push_back(x.y); vz.push_back(x.z); vt.push_back(x.t);
+            vstatus.push_back(x.status);
+        }
+        weights = ev.weights(k);
         tree->Fill();
     }
     tree->ResetBranchAddresses();

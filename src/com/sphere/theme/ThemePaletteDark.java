@@ -241,7 +241,7 @@ public final class ThemePaletteDark implements ThemePalette {
     private static final Color CANVAS_PAPER        = new Color(36, 38, 41);
     private static final Color CANVAS_INK          = TEXT_PRIMARY;
     private static final Color CANVAS_INK_MUTED    = TEXT_SECOND;
-    private static final Color CANVAS_GRID         = new Color(66, 69, 75);
+    private static final Color CANVAS_GRID         = new Color(86, 90, 98);
     private static final Color CANVAS_BOX_FILL     = new Color(48, 51, 55);
     private static final Color CANVAS_BOX_BORDER   = new Color(112, 115, 121);
     private static final Color CANVAS_SELECTION    = new Color(89, 166, 255);
@@ -283,6 +283,29 @@ public final class ThemePaletteDark implements ThemePalette {
     @Override public Color getSpace3DEdge()         { return SPACE3D_EDGE; }
     @Override public Color getSpace3DLabel()        { return SPACE3D_LABEL; }
     @Override public Color getSpace3DTitle()        { return SPACE3D_TITLE; }
+
+    // Python environment manager
+    private static final Color PY_OK           = new Color(76, 175, 110);
+    private static final Color PY_PATCH        = new Color(86, 156, 214);
+    private static final Color PY_MINOR        = new Color(220, 170, 60);
+    private static final Color PY_MAJOR        = new Color(230, 125, 60);
+    private static final Color PY_DANGER       = new Color(225, 85, 85);
+    private static final Color PY_INFO         = new Color(140, 150, 170);
+    private static final Color PY_BADGE_TEXT   = new Color(20, 22, 25);
+    private static final Color PY_CHIP         = new Color(50, 53, 58);
+    private static final Color PY_CHIP_ON      = new Color(53, 116, 220);
+    private static final Color PY_ROW_STRIPE   = new Color(36, 38, 41);
+
+    @Override public Color getPyOk()           { return PY_OK; }
+    @Override public Color getPyPatch()        { return PY_PATCH; }
+    @Override public Color getPyMinor()        { return PY_MINOR; }
+    @Override public Color getPyMajor()        { return PY_MAJOR; }
+    @Override public Color getPyDanger()       { return PY_DANGER; }
+    @Override public Color getPyInfo()         { return PY_INFO; }
+    @Override public Color getPyBadgeText()    { return PY_BADGE_TEXT; }
+    @Override public Color getPyChip()         { return PY_CHIP; }
+    @Override public Color getPyChipSelected() { return PY_CHIP_ON; }
+    @Override public Color getPyRowStripe()    { return PY_ROW_STRIPE; }
 
 
 

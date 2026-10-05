@@ -71,7 +71,7 @@ public final class RootPipelineManifest {
      * costs nothing to whoever already has pipelines on disk.
      */
     private static final String PREFIX = "// sphere-pipeline ";
-    private static final int VERSION = 2;
+    private static final int VERSION = com.sphere.Sphere.ROOT_PIPELINE_MANIFEST_VERSION;
     private static final String MARKER = PREFIX + VERSION + " :: ";
     private static final String SEPARATOR = " :: ";
 

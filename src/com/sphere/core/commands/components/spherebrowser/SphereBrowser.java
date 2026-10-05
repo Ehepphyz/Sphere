@@ -6,6 +6,7 @@ import com.sphere.components.rootview.RootFile;
 import com.sphere.components.rootview.RootGraph;
 import com.sphere.components.rootview.RootGraph2D;
 import com.sphere.components.rootview.RootHistogram;
+import com.sphere.components.rootview.RootHost;
 import com.sphere.components.rootview.RootNode;
 import com.sphere.components.rootview.RootPlotsPanel;
 import com.sphere.components.rootview.RootScene;
@@ -115,6 +116,7 @@ public final class SphereBrowser extends JFrame {
     private final Map<Path, ImageIcon> thumbs = new ConcurrentHashMap<>();
     private final Timer watch;
     private long plotsStamp;
+    private final BrowserHost host = new BrowserHost();
 
     /* ------------------------------------------------------------------ */
     /* Entry points                                                        */
@@ -206,7 +208,28 @@ public final class SphereBrowser extends JFrame {
         tree.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) openSelected();
+                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) openSelected();
+            }
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                popup(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                popup(e);
+            }
+
+            private void popup(MouseEvent e) {
+                if (!e.isPopupTrigger()) return;
+                final TreePath at = tree.getPathForLocation(e.getX(), e.getY());
+                if (at == null) return;
+                tree.setSelectionPath(at);
+                final Entry en = selectedEntry();
+                if (en == null) return;
+                final javax.swing.JPopupMenu menu = BrowserMenus.treeMenu(SphereBrowser.this, en);
+                if (menu != null) menu.show(tree, e.getX(), e.getY());
             }
         });
         tree.getInputMap().put(javax.swing.KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "sphere-open");
@@ -286,6 +309,7 @@ public final class SphereBrowser extends JFrame {
             }
         });
         getContentPane().setLayout(new BorderLayout());
+        setJMenuBar(BrowserMenus.browserBar(this));
         getContentPane().add(toolbar(), BorderLayout.NORTH);
         getContentPane().add(split, BorderLayout.CENTER);
         getContentPane().add(status, BorderLayout.SOUTH);
@@ -387,8 +411,129 @@ public final class SphereBrowser extends JFrame {
         return p;
     }
 
-    private void status(String s) {
+    void status(String s) {
         status.setText(s);
+    }
+
+    void showStatusBar(boolean on) {
+        status.setVisible(on);
+        revalidate();
+    }
+
+    /** The window as ROOT's canvases see it: where new canvases, printouts and messages go. */
+    RootHost host() {
+        return host;
+    }
+
+    /** File > New Canvas: an empty c1, as new TCanvas makes it. */
+    void newCanvas() {
+        final RootScene s = new RootScene();
+        int n = 1;
+        while (hasTab("c" + n)) n++;
+        s.name = "c" + n;
+        s.title = s.name;
+        s.pad.name = s.name;
+        openMade(s, s.name);
+    }
+
+    private boolean hasTab(String title) {
+        for (int i = 0; i < tabs.getTabCount(); i++) if (title.equals(tabs.getTitleAt(i))) return true;
+        return false;
+    }
+
+    void closeSelectedTab() {
+        final int i = tabs.getSelectedIndex();
+        if (i >= 0) closeTab(i);
+    }
+
+    /** Browser > Clone: the canvas of the tab shown, as it is now, in a tab of its own. */
+    void cloneSelectedTab() {
+        if (tabs.getSelectedComponent() instanceof SceneDoc d && d.canvas.getScene() != null) {
+            host.open(com.sphere.components.rootview.RootSceneJson.copy(d.canvas.getScene()), d.title + " (clone)");
+        } else {
+            status("Clone copies a canvas: show one first");
+        }
+    }
+
+    /** Browser > New Editor: a macro editor whose macro ROOT's engine runs. */
+    void newEditor() {
+        int n = 1;
+        while (hasTab("Editor " + n)) n++;
+        addTab("Editor " + n, new com.sphere.components.rootview.RootMacroPane(), "a macro for ROOT's engine");
+    }
+
+    void expandEntry(Entry e) {
+        final TreePath p = tree.getSelectionPath();
+        if (p != null) tree.expandPath(p);
+    }
+
+    void openEntry(Entry e) {
+        openSelected();
+    }
+
+    RootFile rootFileOf(Entry e) throws IOException {
+        return e.file != null ? e.file : rootFile(e.path);
+    }
+
+    /** TFile::Close: the file let go, its node gone from the tree. */
+    void closeRootFile(Entry e) {
+        final Path key = e.path.toAbsolutePath().normalize();
+        final RootFile f = openFiles.remove(key);
+        if (f != null) {
+            try {
+                f.close();
+            } catch (IOException ignored) {
+                // closed anyway
+            }
+        }
+        final TreePath p = tree.getSelectionPath();
+        if (p != null && p.getLastPathComponent() instanceof DefaultMutableTreeNode n && n.getParent() == files) {
+            files.remove(n);
+            model.nodeStructureChanged(files);
+        }
+        status("closed " + e.path.getFileName());
+    }
+
+    /** What the canvases ask of the browser: a tab for a new canvas, a tab for a printout, the status line. */
+    private final class BrowserHost implements RootHost {
+        @Override
+        public void open(RootScene scene, String title) {
+            String t = title == null || title.isBlank() ? "canvas" : title;
+            if (hasTab(t)) {
+                int n = 2;
+                while (hasTab(t + " (" + n + ")")) n++;
+                t = t + " (" + n + ")";
+            }
+            openMade(scene, t);
+        }
+
+        @Override
+        public void show(String title, String text) {
+            addTab(title, new TextDoc(title, text), title);
+        }
+
+        @Override
+        public void status(String text) {
+            SphereBrowser.this.status(text);
+        }
+
+        /** The histograms and graphs of the other tabs, for TProfile::Add(h1, h2) and the like. */
+        @Override
+        public Map<String, Object> objects(String baseClass) {
+            final Map<String, Object> out = new LinkedHashMap<>();
+            for (int i = 0; i < tabs.getTabCount(); i++) {
+                if (!(tabs.getComponentAt(i) instanceof SceneDoc d)) continue;
+                for (Pad p : d.canvas.getScene().pad.flatten()) {
+                    for (Item it : p.items) {
+                        final String cls = it.className == null || it.className.isBlank() ? "TObject" : it.className;
+                        if (com.sphere.components.rootview.RootMethod.inherits(cls, baseClass)) {
+                            out.put(cls + "::" + it.name + "  [" + tabs.getTitleAt(i) + "]", it);
+                        }
+                    }
+                }
+            }
+            return out;
+        }
     }
 
     /* ------------------------------------------------------------------ */
@@ -795,7 +940,7 @@ public final class SphereBrowser extends JFrame {
     /* Opening                                                             */
     /* ------------------------------------------------------------------ */
 
-    private void chooseFiles() {
+    void chooseFiles() {
         final JFileChooser chooser = new JFileChooser(com.sphere.core.fs.WorkingDirectory.get().toFile());
         chooser.setMultiSelectionEnabled(true);
         if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
@@ -1029,6 +1174,10 @@ public final class SphereBrowser extends JFrame {
         readable(filter);
         restyleTabs();
         status.setForeground(ImagingTheme.subduedText());
+        BrowserMenus.style(getJMenuBar());
+        for (int i = 0; i < tabs.getTabCount(); i++) {
+            if (tabs.getComponentAt(i) instanceof SceneDoc d) BrowserMenus.style(d.menuBar);
+        }
         repaint();
     }
 
@@ -1128,15 +1277,26 @@ public final class SphereBrowser extends JFrame {
     }
 
     /** A canvas: live, in 3D, analysed, as its picture, as its bins. */
-    private final class SceneDoc extends Doc {
-        final RootScene scene;
+    private final class SceneDoc extends Doc implements BrowserMenus.CanvasDoc {
+        RootScene scene;
         final RootCanvasView canvas = new RootCanvasView();
+        final String title;
+        javax.swing.JMenuBar menuBar;
         Pad spacePad;
 
         SceneDoc(RootScene scene, String title, Path picture) {
             this.scene = scene;
+            this.title = title;
             canvas.setScene(scene);
             canvas.setStatusListener(SphereBrowser.this::status);
+            canvas.setHost(host);
+            canvas.setChangeListener(this::changed);
+            final JPanel top = ImagingTheme.panelOf(new BorderLayout());
+            remove(strip);
+            menuBar = BrowserMenus.canvasBar(SphereBrowser.this, this);
+            top.add(menuBar, BorderLayout.NORTH);
+            top.add(strip, BorderLayout.CENTER);
+            add(top, BorderLayout.NORTH);
             // In a dark theme the pads are drawn on the theme's paper; one click shows ROOT's white.
             canvas.setThemePaper(true);
             final List<Pad> drawn = new ArrayList<>();
@@ -1185,6 +1345,41 @@ public final class SphereBrowser extends JFrame {
             return h != null ? h : Scenes.firstHist(scene.pad);
         }
 
+        /** After a function of ROOT's menus, an undo or ROOT's engine changed the canvas: the other views follow. */
+        private void changed() {
+            final RootScene now = canvas.getScene();
+            if (now != scene) {
+                final int k = scene.pad.flatten().indexOf(spacePad);
+                scene = now;
+                final List<Pad> pads = now.pad.flatten();
+                spacePad = k >= 0 && k < pads.size() ? pads.get(k) : now.pad;
+            }
+            final String shown = buttons.entrySet().stream().filter(b -> b.getValue().isSelected())
+                .map(Map.Entry::getKey).findFirst().orElse("Canvas");
+            for (String v : new String[]{"3D Space", "Analysis", "Data"}) if (!v.equals(shown)) forget(v);
+        }
+
+        @Override
+        public RootCanvasView canvas() {
+            return canvas;
+        }
+
+        @Override
+        public String title() {
+            return title;
+        }
+
+        @Override
+        public void close() {
+            final int k = tabs.indexOfComponent(this);
+            if (k >= 0) closeTab(k);
+        }
+
+        @Override
+        public void showView(String name) {
+            if (lazy.containsKey(name)) show(name);
+        }
+
         private JComponent space() {
             final Pad pad = spacePad;
             final double theta = pad.viewLat == pad.viewLat ? pad.viewLat : pad.theta;
@@ -1211,6 +1406,35 @@ public final class SphereBrowser extends JFrame {
             table.setAutoCreateRowSorter(true);
             table.setFillsViewportHeight(true);
             return new JScrollPane(table);
+        }
+    }
+
+    /** What a function printed (Dump, Print, Map, a fit's result), as ROOT prints it in its terminal. */
+    private final class TextDoc extends JPanel {
+        TextDoc(String title, String text) {
+            super(new BorderLayout());
+            final javax.swing.JTextArea area = new javax.swing.JTextArea(text);
+            area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+            area.setEditable(false);
+            area.setBackground(ImagingTheme.surface());
+            area.setForeground(readableOn(ImagingTheme.surface()));
+            area.setCaretPosition(0);
+            final JPanel bar = ImagingTheme.panelOf(new FlowLayout(FlowLayout.LEFT, 4, 4));
+            bar.add(button("Copy", "Copy the text", () -> Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new java.awt.datatransfer.StringSelection(text), null)));
+            bar.add(button("Save…", "Save the text in a file", () -> {
+                final JFileChooser chooser = new JFileChooser(com.sphere.core.fs.WorkingDirectory.get().toFile());
+                chooser.setSelectedFile(new File(title.replaceAll("[^\\w.-]", "_") + ".txt"));
+                if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+                    try {
+                        Files.writeString(chooser.getSelectedFile().toPath(), text);
+                    } catch (IOException e) {
+                        status("not saved: " + e.getMessage());
+                    }
+                }
+            }));
+            add(bar, BorderLayout.NORTH);
+            add(new JScrollPane(area), BorderLayout.CENTER);
         }
     }
 

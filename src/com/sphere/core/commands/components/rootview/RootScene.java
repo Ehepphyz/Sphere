@@ -12,6 +12,80 @@ import java.util.Locale;
  */
 public final class RootScene {
 
+    /**
+     * What TAttAxis and TAxis keep besides the binning: divisions, label and
+     * title fonts, sizes, offsets and colours, the tick side, and the flags
+     * of the axis's context menu (more log labels, no exponent, time display...).
+     * ROOT's defaults; a null colour is the canvas ink.
+     */
+    public static final class AxisStyle {
+        public int ndivisions = 510;
+        public boolean optimize = true;
+        public java.awt.Color axisColor;
+        public java.awt.Color labelColor;
+        public int labelFont = 42;
+        public double labelOffset = 0.005;
+        public double labelSize = 0.035;
+        public double tickLength = 0.03;
+        public double titleOffset = 1;
+        public double titleSize = 0.035;
+        public java.awt.Color titleColor;
+        public int titleFont = 42;
+        public int maxDigits = 5;
+        public boolean moreLogLabels;
+        public boolean noExponent;
+        public boolean decimals;
+        public boolean timeDisplay;
+        public String timeFormat = "";
+        public boolean rotateTitle;
+        public boolean centerTitle;
+        public boolean centerLabels;
+        /** "+" ticks inside the frame, "-" outside, "+-" both. */
+        public String ticks = "+";
+        /** LabelsOption: "h" horizontal, "v" vertical, "u" up, "d" down, "a" alphabetic, ">" "<" by content. */
+        public String labelsOption = "h";
+        public double lineWidth = 1;
+
+        /** ROOT's first-order divisions: the units of ndivisions. */
+        public int primary() {
+            return Math.max(1, Math.abs(ndivisions) % 100);
+        }
+
+        /** The second-order divisions inside each primary one. */
+        public int secondary() {
+            return Math.abs(ndivisions) / 100 % 100;
+        }
+
+        public AxisStyle copy() {
+            final AxisStyle c = new AxisStyle();
+            c.ndivisions = ndivisions;
+            c.optimize = optimize;
+            c.axisColor = axisColor;
+            c.labelColor = labelColor;
+            c.labelFont = labelFont;
+            c.labelOffset = labelOffset;
+            c.labelSize = labelSize;
+            c.tickLength = tickLength;
+            c.titleOffset = titleOffset;
+            c.titleSize = titleSize;
+            c.titleColor = titleColor;
+            c.titleFont = titleFont;
+            c.maxDigits = maxDigits;
+            c.moreLogLabels = moreLogLabels;
+            c.noExponent = noExponent;
+            c.decimals = decimals;
+            c.timeDisplay = timeDisplay;
+            c.timeFormat = timeFormat;
+            c.rotateTitle = rotateTitle;
+            c.centerTitle = centerTitle;
+            c.centerLabels = centerLabels;
+            c.ticks = ticks;
+            c.labelsOption = labelsOption;
+            c.lineWidth = lineWidth;
+            return c;
+        }
+    }
+
     /** A TAxis: the binning, the title, and the range the user zoomed to in ROOT. */
     public static final class Axis {
         public int n;
@@ -68,6 +142,12 @@ public final class RootScene {
         public int fillStyle;
         public int markerStyle = 1;
         public double markerSize = 1;
+        /** TH1::SetHighlight, TGraph::SetHighlight: the bin or point under the mouse is shown. */
+        public boolean highlight;
+        /** TGraph::SetEditable: its points follow the mouse. */
+        public boolean editable;
+        /** Removed from its pad by TObject::Delete, kept for an undo. */
+        public boolean deleted;
 
         /** The option in capitals, "SAME" taken out: what the painter reads. */
         public String opt() {
@@ -94,13 +174,24 @@ public final class RootScene {
         public double max = Double.NaN;
         public boolean stats;
         public double entries;
+        /** The contents of the underflow and overflow bins, which OptStat's u and o show. */
+        public double underflow;
+        public double overflow;
         public double mean;
         public double std;
         public double meanY;
         public double stdY;
         /** The formula, for a function. */
         public String formula;
+        /** A function's parameters, in the order of its formula's [0], [1]...; null when not sent. */
+        public double[] parameters;
         public final List<Hist> fits = new ArrayList<>();
+        /** TProfile::SetErrorOption: "" error of the mean, "s" spread, "i" integer, "g" Gaussian. */
+        public String errorOption = "";
+        /** The fit results shown in the statistics box (TPaveStats::SetOptFit): name, value, error. */
+        public final List<String[]> fitResults = new ArrayList<>();
+        /** A profile's entries in each bin (TProfile::GetBinEntries), null when not sent. */
+        public double[] binEntries;
 
         public boolean isFunction() {
             return formula != null;
@@ -154,12 +245,24 @@ public final class RootScene {
         public String yTitle = "";
         public double min = Double.NaN;
         public double max = Double.NaN;
+        /** The functions fitted to the graph (TGraph::Fit), and their results. */
+        public final List<Hist> fits = new ArrayList<>();
+        public final List<String[]> fitResults = new ArrayList<>();
     }
 
     public static final class Graph2D extends Item {
         public double[] x = new double[0];
         public double[] y = new double[0];
         public double[] z = new double[0];
+        /** TGraph2D::SetNpx, SetNpy: the grid it is interpolated on. */
+        public int npx = 40;
+        public int npy = 40;
+        /** TGraph2D::SetMargin, SetMarginBinsContent, SetMaxIter. */
+        public double margin = 0.1;
+        public double marginZ;
+        public int maxIter = 100000;
+        public double min = Double.NaN;
+        public double max = Double.NaN;
         public String xTitle = "";
         public String yTitle = "";
         public String zTitle = "";
@@ -168,6 +271,9 @@ public final class RootScene {
     /** A THStack or a TMultiGraph: members drawn together. */
     public static final class Group extends Item {
         public final List<Item> items = new ArrayList<>();
+        /** THStack::SetMaximum, SetMinimum. */
+        public double min = Double.NaN;
+        public double max = Double.NaN;
     }
 
     public static final class Text extends Item {
@@ -179,6 +285,8 @@ public final class RootScene {
         public Color color = Color.BLACK;
         public int align = 11;
         public double angle;
+        /** TAttText's font: 10 * family + precision. */
+        public int font = 42;
     }
 
     /** One line of a TPaveText or a TLegend. */
@@ -191,6 +299,13 @@ public final class RootScene {
         public Color marker;
         public int fillStyle;
         public int markerStyle = 1;
+        /** TPaveText::InsertLine: a line drawn across the pave rather than a text. */
+        public boolean separator;
+        /** TPaveText::SetAllWith "font" and "size": 0 when the pave's own. */
+        public int font;
+        public double size;
+        /** The line's own TAttText alignment, 0 when the pave's. */
+        public int align;
     }
 
     public static final class Pave extends Item {
@@ -205,8 +320,32 @@ public final class RootScene {
             return "legend".equals(kind);
         }
 
+        /** TPave::SetCornerRadius, a fraction of the pave's height; rounded corners when the option has "arc". */
+        public double cornerRadius;
+        /** TPave::SetShadowColor. */
+        public java.awt.Color shadowColor;
+        /** TPaveText::SetMargin, TLegend::SetMargin. */
+        public double margin = 0.05;
+        /** TPaveText::SetLabel: a small label on the top edge. */
+        public String label = "";
+        /** TLegend::SetNColumns. */
+        public int nColumns = 1;
+        /** TLegend::SetHeader and its option ("C" centred, "R" right). */
+        public String header;
+        public String headerOption = "";
+        public int textFont = 42;
+        public int textAlign = 22;
+        public double textSize;
+
         public boolean isTitle() {
             return "title".equals(name);
+        }
+
+        /** Whether it is a TPaveLabel, whose text size is a fraction of its own height. */
+        public boolean paveLabel;
+
+        public boolean isLabel() {
+            return paveLabel || "TPaveLabel".equals(className) || "TPaveClass".equals(className);
         }
     }
 
@@ -241,6 +380,13 @@ public final class RootScene {
         public boolean ndc;
         public double arrowSize = 0.05;
         public String arrowOption = "|>";
+        /** TArrow::SetAngle, in degrees. */
+        public double arrowAngle = 60;
+        /** TEllipse::SetNoEdges: an arc without its two radii. */
+        public boolean noEdges;
+        /** TWbox::SetBorderMode, SetBorderSize. */
+        public int borderMode;
+        public int borderSize;
     }
 
     /** What ROOT draws through a TView: a TPolyMarker3D ("pm3") or a TPolyLine3D ("pl3"), x y z interleaved. */
@@ -265,6 +411,8 @@ public final class RootScene {
         public float[] p = new float[0];
         public int[] pol = new int[0];
         public int[] seg = new int[0];
+        /** TGeoVolume::SetVisibility. */
+        public boolean visible = true;
     }
 
     /** A TGeo geometry as meshes, which ROOT in batch cannot draw and Sphere's 3D space can. */
@@ -275,6 +423,22 @@ public final class RootScene {
     }
 
     public static final class Pad {
+        /** The style of the frame's X, Y and Z axes (TAttAxis and TAxis of the histogram that frames them). */
+        public final AxisStyle[] axes = {new AxisStyle(), new AxisStyle(), new AxisStyle()};
+        /** TPad::SetTickx, SetTicky: ticks on the opposite side too (2: with labels). */
+        public int tickx;
+        public int ticky;
+        public int borderMode;
+        public int borderSize = 2;
+        /** TPad::SetCrosshair: lines that follow the mouse across the pad. */
+        public boolean crosshair;
+        /** TPad::SetEditable: false refuses every change. */
+        public boolean editable = true;
+        public boolean fixedAspect;
+        /** TH2::SetShowProjectionX/Y/XY and TH3::SetShowProjection: bins summed, 0 when off. */
+        public int showProjectionX;
+        public int showProjectionY;
+        public String showProjection3D;
         public String name = "";
         public String title = "";
         public double px;
@@ -289,6 +453,9 @@ public final class RootScene {
         public double theta = 30;
         public double phi = 30;
         public Color fill = Color.WHITE;
+        /** TFrame::SetFillColor and SetFillStyle: the ground inside the axes; null when the pad's. */
+        public Color frameFill;
+        public int frameFillStyle = 1001;
         public double lm = 0.1;
         public double rm = 0.1;
         public double bm = 0.1;
@@ -348,6 +515,16 @@ public final class RootScene {
     public int height = 500;
     public int optStat = 1111;
     public int optTitle = 1;
+    /** gStyle's OptFit, and the formats of TPaveStats::SetStatFormat and SetFitFormat. */
+    public int optFit;
+    public String statFormat = "6.4g";
+    public String fitFormat = "5.4g";
+    /** TPaveStats::SetOption: where the box sits, "br" by default (ROOT's top right in NDC terms). */
+    public String statOption = "br";
+    /** TCanvas::SetGrayscale. */
+    public boolean grayscale;
+    /** TCanvas::SetFixedAspectRatio. */
+    public boolean fixedAspect;
     public Color[] palette = defaultPalette();
     public Pad pad = new Pad();
     /** Set when the engine refused. */
@@ -376,6 +553,12 @@ public final class RootScene {
         }
         scene.optStat = (int) Json.number(root, "optstat", 1111);
         scene.optTitle = (int) Json.number(root, "opttitle", 1);
+        scene.optFit = (int) Json.number(root, "optfit", 0);
+        scene.statFormat = Json.text(root, "statfmt", scene.statFormat);
+        scene.fitFormat = Json.text(root, "fitfmt", scene.fitFormat);
+        scene.statOption = Json.text(root, "statopt", scene.statOption);
+        scene.grayscale = bool(root, "gray");
+        scene.fixedAspect = bool(root, "fixed");
         final List<Object> palette = Json.list(root, "palette");
         if (!palette.isEmpty()) {
             final Color[] colors = new Color[palette.size()];
@@ -434,11 +617,34 @@ public final class RootScene {
             for (Object o : Json.list(e, "items")) {
                 final Item extra = item(o);
                 if (extra == null || extra instanceof Other) continue;
-                pad.items.removeIf(i -> i instanceof Other && i.name.equals(extra.name)
-                    && i.className.equals(extra.className));
-                pad.items.add(extra);
+                // The frame is the pad's, drawn by the painter: as a filled box over the histogram
+                // it hid every bin and curve (scenes written before the exporter skipped it). Its fill is kept.
+                if ("TFrame".equals(extra.className)) {
+                    if (pad.frameFill == null) {
+                        pad.frameFill = extra.fill;
+                        pad.frameFillStyle = extra.fillStyle;
+                    }
+                    continue;
+                }
+                final int at = standIn(pad.items, extra);
+                if (at >= 0) pad.items.set(at, extra);
+                else pad.items.add(extra);
             }
         }
+    }
+
+    /**
+     * The item sphere_view.hpp wrote for the object an extra describes: one it
+     * could only name, or the line it made of an arrow. The extra takes its
+     * place, so that the pad's objects keep the order ROOT paints them in.
+     */
+    private static int standIn(List<Item> items, Item extra) {
+        for (int k = 0; k < items.size(); k++) {
+            final Item i = items.get(k);
+            if (!i.className.equals(extra.className) || !i.name.equals(extra.name)) continue;
+            if (i instanceof Other || i instanceof Segment && "arrow".equals(extra.kind)) return k;
+        }
+        return -1;
     }
 
     /** The last line that is a JSON object, or null. */
@@ -469,16 +675,70 @@ public final class RootScene {
         p.theta = num(o, "theta", 30);
         p.phi = num(o, "phi", 30);
         p.fill = color(Json.get(o, "fc"), Color.WHITE);
+        p.frameFill = color(Json.get(o, "ffc"), null);
+        p.frameFillStyle = (int) num(o, "ffs", 1001);
         p.lm = num(o, "lm", 0.1);
         p.rm = num(o, "rm", 0.1);
         p.bm = num(o, "bm", 0.1);
         p.tm = num(o, "tm", 0.1);
+        if (Json.get(o, "tickx") != null) {
+            p.tickx = (int) num(o, "tickx", 0);
+            p.ticky = (int) num(o, "ticky", 0);
+            p.borderMode = (int) num(o, "bmode", 0);
+            p.borderSize = (int) num(o, "bsize", 2);
+            p.crosshair = bool(o, "cross");
+            p.editable = Json.get(o, "editable") == null || bool(o, "editable");
+            p.fixedAspect = bool(o, "fixed");
+            p.showProjectionX = (int) num(o, "spx", 0);
+            p.showProjectionY = (int) num(o, "spy", 0);
+            p.ux1 = num(o, "ux1", Double.NaN);
+            p.uy1 = num(o, "uy1", Double.NaN);
+            p.ux2 = num(o, "ux2", Double.NaN);
+            p.uy2 = num(o, "uy2", Double.NaN);
+        }
+        if (Json.get(o, "vmin") != null) {
+            p.viewMin = numbers(Json.list(o, "vmin"));
+            p.viewMax = numbers(Json.list(o, "vmax"));
+            p.viewLat = num(o, "vlat", Double.NaN);
+            p.viewLon = num(o, "vlon", Double.NaN);
+        }
+        final List<Object> ax = Json.list(o, "ax");
+        for (int a = 0; a < Math.min(3, ax.size()); a++) style(ax.get(a), p.axes[a]);
         for (Object i : Json.list(o, "items")) {
             final Item item = item(i);
             if (item != null) p.items.add(item);
         }
         for (Object s : Json.list(o, "pads")) p.pads.add(pad(s));
         return p;
+    }
+
+    /** An axis's style, as sphere_view.hpp and RootSceneJson write it; what is absent keeps ROOT's default. */
+    static void style(Object o, AxisStyle st) {
+        if (o == null) return;
+        st.ndivisions = (int) num(o, "nd", st.ndivisions);
+        if (Json.get(o, "opt") != null) st.optimize = bool(o, "opt");
+        st.axisColor = color(Json.get(o, "ac"), st.axisColor);
+        st.labelColor = color(Json.get(o, "lc"), st.labelColor);
+        st.labelFont = (int) num(o, "lf", st.labelFont);
+        st.labelOffset = num(o, "lo", st.labelOffset);
+        st.labelSize = num(o, "ls", st.labelSize);
+        st.tickLength = num(o, "tl", st.tickLength);
+        st.titleOffset = num(o, "to", st.titleOffset);
+        st.titleSize = num(o, "ts", st.titleSize);
+        st.titleColor = color(Json.get(o, "tc"), st.titleColor);
+        st.titleFont = (int) num(o, "tf", st.titleFont);
+        st.maxDigits = (int) num(o, "md", st.maxDigits);
+        st.moreLogLabels = bool(o, "mll");
+        st.noExponent = bool(o, "nexp");
+        st.decimals = bool(o, "dec");
+        st.timeDisplay = bool(o, "time");
+        st.timeFormat = Json.text(o, "tfmt", st.timeFormat);
+        st.rotateTitle = bool(o, "rot");
+        st.centerTitle = bool(o, "ctr");
+        st.centerLabels = bool(o, "clab");
+        st.ticks = Json.text(o, "ticks", st.ticks);
+        st.labelsOption = Json.text(o, "lopt", st.labelsOption);
+        st.lineWidth = num(o, "lw", st.lineWidth);
     }
 
     static Item item(Object o) {
@@ -492,7 +752,7 @@ public final class RootScene {
             case "text" -> text(o);
             case "pave", "legend" -> pave(o);
             case "line" -> segment(o);
-            case "box", "ellipse", "polyline", "marker", "arrow" -> shape(o);
+            case "box", "ellipse", "polyline", "marker", "arrow", "pm" -> shape(o);
             case "pm3", "pl3" -> cloud(o);
             case "geo" -> geometry(o);
             default -> new Other();
@@ -510,6 +770,8 @@ public final class RootScene {
         item.fillStyle = (int) num(o, "fs", 0);
         item.markerStyle = (int) num(o, "mst", 1);
         item.markerSize = num(o, "msz", 1);
+        item.highlight = bool(o, "hl");
+        item.editable = bool(o, "ed");
         return item;
     }
 
@@ -533,6 +795,20 @@ public final class RootScene {
         h.meanY = num(o, "meany", 0);
         h.stdY = num(o, "stdy", 0);
         h.formula = Json.text(o, "fn", null);
+        h.underflow = num(o, "uf", 0);
+        h.overflow = num(o, "of", 0);
+        h.errorOption = Json.text(o, "eo", "");
+        final List<Object> be = Json.list(o, "be");
+        if (!be.isEmpty()) h.binEntries = numbers(be);
+        final List<Object> par = Json.list(o, "par");
+        if (!par.isEmpty()) h.parameters = numbers(par);
+        for (Object r : Json.list(o, "fr")) {
+            if (r instanceof List<?> l) {
+                final String[] row = new String[l.size()];
+                for (int k = 0; k < row.length; k++) row[k] = String.valueOf(l.get(k));
+                h.fitResults.add(row);
+            }
+        }
         for (Object f : Json.list(o, "fits")) {
             if (item(f) instanceof Hist fit) h.fits.add(fit);
         }
@@ -551,6 +827,16 @@ public final class RootScene {
         g.yTitle = Json.text(o, "yt", "");
         g.min = num(o, "min", Double.NaN);
         g.max = num(o, "max", Double.NaN);
+        for (Object r : Json.list(o, "fr")) {
+            if (r instanceof List<?> l) {
+                final String[] row = new String[l.size()];
+                for (int k = 0; k < row.length; k++) row[k] = String.valueOf(l.get(k));
+                g.fitResults.add(row);
+            }
+        }
+        for (Object f : Json.list(o, "fits")) {
+            if (item(f) instanceof Hist fit) g.fits.add(fit);
+        }
         return g;
     }
 
@@ -562,11 +848,20 @@ public final class RootScene {
         g.xTitle = Json.text(o, "xt", "");
         g.yTitle = Json.text(o, "yt", "");
         g.zTitle = Json.text(o, "zt", "");
+        g.npx = (int) num(o, "npx", 40);
+        g.npy = (int) num(o, "npy", 40);
+        g.margin = num(o, "margin", 0.1);
+        g.marginZ = num(o, "zout", 0);
+        g.maxIter = (int) num(o, "maxiter", 100000);
+        g.min = num(o, "min", Double.NaN);
+        g.max = num(o, "max", Double.NaN);
         return g;
     }
 
     private static Group group(Object o) {
         final Group g = new Group();
+        g.min = num(o, "min", Double.NaN);
+        g.max = num(o, "max", Double.NaN);
         for (Object i : Json.list(o, "items")) {
             final Item member = item(i);
             if (member != null) g.items.add(member);
@@ -584,6 +879,7 @@ public final class RootScene {
         t.color = color(Json.get(o, "tc"), Color.BLACK);
         t.align = (int) num(o, "al", 11);
         t.angle = num(o, "an", 0);
+        t.font = (int) num(o, "tf", 42);
         return t;
     }
 
@@ -594,6 +890,17 @@ public final class RootScene {
         p.x2 = num(o, "x2", 1);
         p.y2 = num(o, "y2", 1);
         p.border = (int) num(o, "bs", 1);
+        p.cornerRadius = num(o, "cr", 0);
+        p.shadowColor = color(Json.get(o, "shc"), null);
+        p.margin = num(o, "mg", 0.05);
+        p.label = Json.text(o, "lb", "");
+        p.nColumns = (int) num(o, "nc", 1);
+        p.header = Json.text(o, "hd", null);
+        p.headerOption = Json.text(o, "ho", "");
+        p.textFont = (int) num(o, "ptf", 42);
+        p.textAlign = (int) num(o, "pta", "legend".equals(Json.text(o, "k", "")) ? 12 : 22);
+        p.textSize = num(o, "pts", 0);
+        p.paveLabel = bool(o, "pl");
         for (Object l : Json.list(o, "lines")) {
             final Entry e = new Entry();
             e.text = Json.text(l, "s", "");
@@ -604,6 +911,10 @@ public final class RootScene {
             e.marker = color(Json.get(l, "mc"), null);
             e.fillStyle = (int) num(l, "fs", 0);
             e.markerStyle = (int) num(l, "mst", 1);
+            e.separator = bool(l, "sep");
+            e.font = (int) num(l, "ef", 0);
+            e.size = num(l, "esz", 0);
+            e.align = (int) num(l, "eal", 0);
             p.lines.add(e);
         }
         return p;
@@ -635,6 +946,10 @@ public final class RootScene {
         s.ndc = bool(o, "ndc");
         s.arrowSize = num(o, "as", 0.05);
         s.arrowOption = Json.text(o, "ao", "|>");
+        s.arrowAngle = num(o, "aa", 60);
+        s.noEdges = bool(o, "noedges");
+        s.borderMode = (int) num(o, "bmode", 0);
+        s.borderSize = (int) num(o, "bsize", 0);
         if (Json.get(o, "x") instanceof List<?>) {
             s.xs = numbers(Json.list(o, "x"));
             s.ys = numbers(Json.list(o, "y"));
@@ -661,6 +976,7 @@ public final class RootScene {
             mesh.p = floats(Json.list(m, "p"));
             mesh.pol = ints(Json.list(m, "pol"));
             mesh.seg = ints(Json.list(m, "seg"));
+            mesh.visible = Json.get(m, "vis") == null || bool(m, "vis");
             g.meshes.add(mesh);
         }
         return g;

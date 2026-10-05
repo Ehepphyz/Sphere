@@ -56,6 +56,24 @@ public final class BackendAvailability {
         return rootRunning() ? "Status: running" : "Status: stopped";
     }
 
+    // ---- Python ------------------------------------------------------------
+
+    /**
+     * Whether settings.conf declares a Python (PYTHON_EXEC). Read from the file
+     * each time rather than from the settings loaded at startup: the Python
+     * manager's "Use for Sphere" writes the key while Sphere runs.
+     */
+    public State pythonConfigured() {
+        if (settings == null) {
+            return State.no("no settings.conf is loaded.");
+        }
+        String exec = com.sphere.core.python.PythonEnvService.loadPythonExecFromConfig(settings.getConfigFilePath());
+        if (exec == null || exec.isBlank()) {
+            return State.no("PYTHON_EXEC is not declared in settings.conf, which disables Python.");
+        }
+        return State.ok();
+    }
+
     // ---- clangd ------------------------------------------------------------
 
     public boolean clangdRunning() {

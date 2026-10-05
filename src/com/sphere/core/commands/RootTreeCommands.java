@@ -409,6 +409,10 @@ public final class RootTreeCommands {
         }
         String fileToken = Handlers.head(rest);
         String treePath = Handlers.tail(rest);
+        if (!NativeTrees.backendRunning(c)) {
+            NativeTrees.attach(Handlers.asInt(id, 0), fileToken, treePath);
+            return;
+        }
         Handlers.send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_INSPECT,
              Handlers.asInt(id, 0), fileToken + "\t" + treePath);
     }
@@ -417,6 +421,11 @@ public final class RootTreeCommands {
         String a = Handlers.args(i, ":root tree branches");
         if (a.isEmpty()) {
             Handlers.usage(":root tree branches <tree_id>");
+            return;
+        }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(a, 0));
+        if (nt != null) {
+            NativeTrees.branches(nt);
             return;
         }
         Handlers.send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_SCAN_BRANCHES, Handlers.asInt(a, 0), null);
@@ -430,6 +439,14 @@ public final class RootTreeCommands {
         String a = Handlers.args(i, ":root tree column");
         if (a.isEmpty() || Handlers.tail(a).isEmpty()) {
             Handlers.usage(":root tree column <tree_id> <branch>");
+            return;
+        }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(Handlers.head(a), 0));
+        if (nt != null) {
+            final double[] values = NativeTrees.column(nt, Handlers.tail(a));
+            if (values == null) return;
+            com.sphere.components.rootview.RootPlotsPanel.instance().showColumn(Handlers.tail(a), values);
+            AppLogger.result(Handlers.summarize(Handlers.tail(a), values));
             return;
         }
         com.sphere.core.rootbackend.RootBackend b = Handlers.backend(c);
@@ -475,6 +492,11 @@ public final class RootTreeCommands {
             Handlers.usage(":root tree entries <tree_id>");
             return;
         }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(a, 0));
+        if (nt != null) {
+            AppLogger.result(String.format(java.util.Locale.ROOT, "%s: %,d entries", nt.name(), nt.entries()));
+            return;
+        }
         Handlers.send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_QUERY_ENTRIES, Handlers.asInt(a, 0), null);
     }
 
@@ -494,6 +516,11 @@ public final class RootTreeCommands {
             Handlers.usage(":root tree getentry <tree_id> <entry>");
             return;
         }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(Handlers.head(a), 0));
+        if (nt != null) {
+            NativeTrees.entry(nt, Handlers.asInt(Handlers.tail(a), 0));
+            return;
+        }
         Handlers.send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_GET_ENTRY,
              Handlers.asInt(Handlers.head(a), 0), Handlers.tail(a));
     }
@@ -502,6 +529,11 @@ public final class RootTreeCommands {
         String a = Handlers.args(i, ":root tree leaves");
         if (a.isEmpty()) {
             Handlers.usage(":root tree leaves <tree_id>");
+            return;
+        }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(a, 0));
+        if (nt != null) {
+            NativeTrees.branches(nt);
             return;
         }
         Handlers.send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_SCAN_BRANCHES, Handlers.asInt(a, 0), null);
@@ -514,6 +546,22 @@ public final class RootTreeCommands {
         String rest = Handlers.tail(a);
         if (id.isEmpty() || rest.isEmpty() || Handlers.tail(rest).isEmpty()) {
             Handlers.usage(":root tree plot <tree_id> <x_branch> <y_branch>");
+            return;
+        }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(id, 0));
+        if (nt != null) {
+            final String x = Handlers.head(rest);
+            final String y = Handlers.head(Handlers.tail(rest));
+            final double[] xv = NativeTrees.column(nt, x);
+            final double[] yv = xv == null ? null : NativeTrees.column(nt, y);
+            if (xv == null || yv == null) return;
+            if (xv.length != yv.length) {
+                AppLogger.error(String.format(java.util.Locale.ROOT, "%s and %s do not hold as many values (%,d and %,d).",
+                    x, y, xv.length, yv.length));
+                return;
+            }
+            com.sphere.components.rootview.RootPlotsPanel.instance().showCurve(x, y, xv, yv);
+            AppLogger.result(String.format(java.util.Locale.ROOT, "%s vs %s drawn in the Plots tab, %d points", y, x, xv.length));
             return;
         }
         com.sphere.core.rootbackend.RootBackend b = Handlers.backend(c);
@@ -541,6 +589,11 @@ public final class RootTreeCommands {
         String a = Handlers.args(i, ":root tree print");
         if (a.isEmpty()) {
             Handlers.usage(":root tree print <tree_id>");
+            return;
+        }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(a, 0));
+        if (nt != null) {
+            NativeTrees.print(nt);
             return;
         }
         Handlers.send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_INSPECT, Handlers.asInt(a, 0), null);
@@ -583,6 +636,11 @@ public final class RootTreeCommands {
         String a = Handlers.args(i, ":root tree stats");
         if (a.isEmpty() || Handlers.tail(a).isEmpty()) {
             Handlers.usage(":root tree stats <tree_id> <branch>");
+            return;
+        }
+        final com.sphere.core.rootio.RTree nt = NativeTrees.get(Handlers.asInt(Handlers.head(a), 0));
+        if (nt != null) {
+            NativeTrees.stats(nt, Handlers.tail(a));
             return;
         }
         Handlers.send(c, com.sphere.core.rootbackend.RootBackend.CMD_TTREE_COMPUTE_STATS,

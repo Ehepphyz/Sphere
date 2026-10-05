@@ -73,6 +73,9 @@ public class CommandDefinitions {
         register(":py exit", "Exit interactive Python mode and return to default console", Handlers::pyExit);
         register(":py diag", "Run diagnostic checks on the local Python interpreter", Handlers::pyDiag);
         register(":py vars", "List defined global and local Python memory variables", Handlers::pyVars);
+        register(":py doctor", "Health of Sphere's Python: vulnerabilities, conflicts, leftovers, with their fixes", Handlers::pyDoctor);
+        register(":py outdated", "Updates of Sphere's Python, with the newest version each can safely take", Handlers::pyOutdated);
+        register(":py audit", "Known vulnerabilities of the installed Python packages (PyPI / OSV)", Handlers::pyAudit);
         register(":cpp vars", "Inspect registered C++ memory variables and structures", Handlers::cppVars);
         register(":cpp diag", "Run toolchain and compiler diagnostics for the C++ backend", Handlers::cppDiag);
         register(":cpp mode", "Enter the interactive C++ interpreter shell mode", Handlers::cppMode);
@@ -128,7 +131,7 @@ public class CommandDefinitions {
         register(":root sys uptime", "Engine uptime (CMD_SYS_UPTIME)", RootEngineCommands::rootSysUptime);
         register(":root sys config", "root-config value. Usage: :root sys config <key>, no key lists them (cflags libs incdir libdir prefix arch ncpu cxx-standard ...)", RootEngineCommands::rootSysConfig);
         register(":root schema discover", "Describe a TTree schema (CMD_SCHEMA_DISCOVER). Usage: :root schema discover <tree_id>", RootTreeCommands::rootSchemaDiscover);
-        register(":root tree attach", "Bind a tree to an id, which the other tree commands then use. Usage: :root tree attach <tree_id> <file_id|name> <tree_path>", RootTreeCommands::rootTreeAttach);
+        register(":root tree attach", "Bind a tree to an id, which the other tree commands then use; without the ROOT backend, Sphere's own reader binds the tree of a file named by its path (branches, leaves, entries, column, plot, stats, getentry, print). Usage: :root tree attach <tree_id> <file_id|name> <tree_path>", RootTreeCommands::rootTreeAttach);
         register(":root tree column", "Read one branch as a column (CMD_TTREE_READ_COLUMN). Usage: :root tree column <tree_id> <branch>", RootTreeCommands::rootTreeColumn);
         register(":root tree plot", "Draw one branch against another in the Plots tab. Usage: :root tree plot <tree_id> <x_branch> <y_branch>", RootTreeCommands::rootTreePlot);
         register(":plots add", "Show a picture in the Plots tab. Usage: :plots add <file.png|jpg|tif|svg>", Handlers::plotsAdd);
@@ -251,6 +254,10 @@ public class CommandDefinitions {
         FastJetCommands.register();
         // --- The FastJet contribs (fjcontrib), on the same events and definitions ---
         FjContribCommands.register();
+        // --- HepMC3, the event record, in Java: read, look, search, write, hand to every engine ---
+        HepMCCommands.register();
+        // --- Minuit2, ROOT's minimizer, in Java bit for bit: minimize, Hesse, Minos, contours, the viewer's fits ---
+        Minuit2Commands.register();
         // --- ping, diag, mode and exit for the engines inside Sphere, as ROOT and Python have them ---
         EngineCommands.register();
         LhapdfCommands.register();

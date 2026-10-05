@@ -1,5 +1,6 @@
 package com.sphere.core.fastjet.plugins.siscone;
 
+import com.sphere.Sphere;
 import com.sphere.core.fastjet.Fmt;
 
 import java.util.ArrayList;
@@ -14,7 +15,7 @@ import java.util.function.Consumer;
  */
 public final class Siscone extends StableCones {
 
-    public static final String VERSION = "3.1.3";
+    public static final String VERSION = Sphere.SISCONE_VERSION;
     public static final String PACKAGE_NAME = "SISCone";
 
     private static boolean initDone;

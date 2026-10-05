@@ -40,7 +40,7 @@ public final class Bridge {
     /** The reader libraries, carried inside Sphere and written out on first use. */
     public static final List<String> LIBRARIES = List.of(
         "sphere_spx.hpp", "SphereSPX.jl", "sphere_spx.f90", "sphere_lhaglue.f90", "sphere_spx.py",
-        "sphere_mpl.py", "sphere_view.hpp", "sphere_view3d.hpp");
+        "sphere_mpl.py", "sphere_view.hpp", "sphere_view3d.hpp", "sphere_minuit2.hpp");
 
     private static volatile boolean materialized;
 

@@ -160,6 +160,7 @@ public final class BridgeCommands {
         AppLogger.result("The bridge: one binary format (SPX) that Java, Julia, Fortran, C++, ROOT and Python read in place.");
         AppLogger.raw("  hand over   :bridge pdf <handle>        a PDF set, every member, for any engine");
         AppLogger.raw("              :bridge events              the :fjet events with their jets and incoming partons");
+        AppLogger.raw("              :hepmc bridge               HepMC3 events, the whole record (vertices, statuses, weights)");
         AppLogger.raw("  bind        :bridge julia pdf ct as ct   ct is then a SphereSPX.PDFSet in the Julia session");
         AppLogger.raw("              :bridge root events          a TTree of vectors, jets included; pdf <h> gives a TGraph");
         AppLogger.raw("  in code     C++/ROOT  #include \"sphere_spx.hpp\"   spx::PDF::open(\"CT18NLO\").xfxQ2(21, x, Q2)");
@@ -311,6 +312,13 @@ public final class BridgeCommands {
                     : file.getFileName().toString().replace(".spx", "").replaceAll("[^A-Za-z0-9_]", "_");
                 boolean band;
                 try (Spx.Reader r = new Spx.Reader(file)) {
+                    if (r.kind() == Spx.Kind.EVENTS) {
+                        // an event sample (':bridge events', ':hepmc bridge'): a tree of vectors,
+                        // the HepMC3 record included when the file holds it
+                        Handlers.cling(c, Handlers.keep(name, "TTree", "spx::root::hepmcTree(spx::Events::open(\""
+                            + slash(file) + "\"), \"" + name + "\")"));
+                        return;
+                    }
                     if (!r.has("edges")) {
                         // a table of columns (':fjco bridge', ':fjco export x.spx'): a flat tree
                         Handlers.cling(c, Handlers.keep(name, "TTree", "spx::root::tableTree(\"" + slash(file)

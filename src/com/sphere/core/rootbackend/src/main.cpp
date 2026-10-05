@@ -17,6 +17,7 @@
 
 #include <RVersion.h>
 #include <TROOT.h>
+#include <Math/MinimizerOptions.h>
 #include "diagnostics.h"
 #include <ROOT/RNTupleReader.hxx>
 
@@ -679,6 +680,9 @@ int main(int argc, char **argv) {
     (void)gROOT->GetVersion();
     ROOT::EnableThreadSafety();
     Sphere::cmd::sys::warm_up();
+    // ROOT's fits through Minuit2 and Migrad, as Sphere's own fits (its Java
+    // Minuit2, bit for bit the same): said here, whatever system.rootrc says.
+    ROOT::Math::MinimizerOptions::SetDefaultMinimizer("Minuit2", "Migrad");
   }
   Sphere::cmd::sys::register_all();
   Sphere::cmd::file::register_all();

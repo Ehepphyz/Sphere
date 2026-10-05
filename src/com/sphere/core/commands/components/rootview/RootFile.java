@@ -187,6 +187,24 @@ public final class RootFile implements AutoCloseable {
         return new String(text, StandardCharsets.UTF_8);
     }
 
+    /** Bytes of the file as they sit on disk: a basket's key header, say. */
+    public byte[] rawAt(long at, int length) throws IOException {
+        ByteBuffer buffer = read(at, length);
+        byte[] bytes = new byte[length];
+        buffer.get(bytes);
+        return bytes;
+    }
+
+    /** The key at an offset (a TTree basket, which no directory lists), or null. */
+    public RootKey keyAt(long at) throws IOException {
+        return readKey(at);
+    }
+
+    /** The list of class descriptions, inflated: the TList of TStreamerInfo. */
+    public RootKey streamerInfoKey() throws IOException {
+        return seekInfo > 0 ? readKey(seekInfo) : null;
+    }
+
     // ---- keys --------------------------------------------------------------
 
     /** The key header at an offset. Returns null when it cannot be one. */

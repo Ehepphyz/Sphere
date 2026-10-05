@@ -317,6 +317,7 @@ public final class RootViewerPanel extends ViewSurface {
     }
 
     public void close() {
+        closeTreeReader();
         if (file != null) {
             try {
                 file.close();
@@ -538,20 +539,36 @@ public final class RootViewerPanel extends ViewSurface {
         }
     }
 
-    // ---- what only the ROOT backend can read --------------------------------
+    // ---- trees, read by Sphere's own ROOT reader ------------------------------
 
-    private static com.sphere.core.rootbackend.RootBackend backend() {
-        com.sphere.core.rootbackend.RootBackend backend =
-            com.sphere.core.rootbackend.RootBackend.getInstance();
-        return backend != null && backend.isAvailable() ? backend : null;
+    /** The file opened a second time for its trees, so that reading baskets in the background leaves the viewer's reads alone. */
+    private com.sphere.core.rootio.RootIO treeReader;
+    private final Object treeLock = new Object();
+
+    private com.sphere.core.rootio.RootIO treeReader() throws IOException {
+        synchronized (treeLock) {
+            if (treeReader == null) treeReader = com.sphere.core.rootio.RootIO.open(file.getPath());
+            return treeReader;
+        }
+    }
+
+    private void closeTreeReader() {
+        synchronized (treeLock) {
+            if (treeReader != null) {
+                try {
+                    treeReader.close();
+                } catch (IOException ignored) {
+                    // the file is being closed anyway
+                }
+                treeReader = null;
+            }
+        }
     }
 
     /**
-     * Asks the engine for a tree's branches and hangs them under its node.
-     *
-     * A TTree's baskets need ROOT itself, so this is the one place the viewer
-     * stops reading the file on its own and asks the backend instead. The
-     * branches become children of the tree, and selecting one draws it.
+     * Reads a tree with Sphere's own reader and hangs its branches under its
+     * node, sub-branches under theirs; selecting one draws it. Only when the
+     * tree cannot be read so does the viewer ask the ROOT backend.
      */
     private void openTree(RootNode node) {
         if (!node.children.isEmpty()) {
@@ -560,10 +577,94 @@ public final class RootViewerPanel extends ViewSurface {
                 + node.children.size() + " branches. Select one to draw it.");
             return;
         }
+        final String treePath = node.pathFrom(root);
+        final String inner = treePath.contains("/")
+            ? treePath.substring(treePath.indexOf('/') + 1) : node.name;
+        final int jobId = nextJobId++;
+        node.jobId = jobId;
+        plot.showMessage("Reading " + node.name + "...");
+        setStatus("reading " + inner);
+
+        new javax.swing.SwingWorker<Object, Void>() {
+            @Override
+            protected Object doInBackground() {
+                try {
+                    synchronized (treeLock) {
+                        return treeReader().tree(inner);
+                    }
+                } catch (IOException | RuntimeException failed) {
+                    return failed.getMessage() == null ? failed.getClass().getSimpleName() : failed.getMessage();
+                }
+            }
+
+            @Override
+            protected void done() {
+                Object answer;
+                try {
+                    answer = get();
+                } catch (Exception failed) {
+                    answer = failed.getMessage();
+                }
+                if (answer instanceof com.sphere.core.rootio.RTree t) {
+                    fillNativeBranches(node, t, jobId);
+                } else {
+                    openTreeWithBackend(node, String.valueOf(answer));
+                }
+            }
+        }.execute();
+    }
+
+    /** The branches of a tree read here, as nodes under it. */
+    private void fillNativeBranches(RootNode node, com.sphere.core.rootio.RTree t, int jobId) {
+        for (com.sphere.core.rootio.RTree.RBranch b : t.branches()) node.children.add(branchNode(b, jobId));
+        applyFilter();
+        TreePath path = pathTo(node);
+        if (path != null) {
+            tree.expandPath(path);
+            tree.setSelectionPath(path);
+        }
+        final String message = String.format(Locale.ROOT,
+            "%s: %,d entries, %d branches, read by Sphere. Select one to draw it.",
+            node.name, t.entries(), t.allBranches().size());
+        plot.showMessage(message);
+        inspector.showMessage(message);
+        setStatus(message);
+    }
+
+    private static RootNode branchNode(com.sphere.core.rootio.RTree.RBranch b, int jobId) {
+        String type = b.typeName();
+        RootNode child = new RootNode(b.name(), b.title(), type == null || type.isEmpty() ? "branch" : type, null);
+        child.branch = true;
+        child.jobId = jobId;
+        child.treeBranch = b;
+        for (com.sphere.core.rootio.RTree.RBranch c : b.children()) child.children.add(branchNode(c, jobId));
+        return child;
+    }
+
+    /** Every value of a branch read here, over all the entries. */
+    private double[] nativeColumn(com.sphere.core.rootio.RTree.RBranch b) throws IOException {
+        synchronized (treeLock) {
+            return b.column();
+        }
+    }
+
+    // ---- what the ROOT backend reads when Sphere's reader cannot --------------
+
+    private static com.sphere.core.rootbackend.RootBackend backend() {
+        com.sphere.core.rootbackend.RootBackend backend =
+            com.sphere.core.rootbackend.RootBackend.getInstance();
+        return backend != null && backend.isAvailable() ? backend : null;
+    }
+
+    /**
+     * Asks the engine for a tree's branches and hangs them under its node,
+     * when Sphere's reader could not read the tree.
+     */
+    private void openTreeWithBackend(RootNode node, String why) {
         com.sphere.core.rootbackend.RootBackend engine = backend();
         if (engine == null) {
-            final String message = node.name + " is a TTree: reading its branches "
-                + "needs the ROOT backend, which is not running.";
+            final String message = node.name + ": Sphere's reader could not read this tree (" + why
+                + ") and the ROOT backend is not running.";
             plot.showMessage(message);
             inspector.showMessage(message);
             setStatus(message);
@@ -674,8 +775,12 @@ public final class RootViewerPanel extends ViewSurface {
         return true;
     }
 
-    /** Reads both branches through the engine and draws the second against the first. */
+    /** Reads both branches and draws the second against the first. */
     private void drawBranchPair(RootNode xNode, RootNode yNode) {
+        if (xNode.treeBranch != null && yNode.treeBranch != null) {
+            drawNativePair(xNode, yNode);
+            return;
+        }
         com.sphere.core.rootbackend.RootBackend engine = backend();
         if (engine == null) {
             final String message = "the backend is no longer there.";
@@ -728,8 +833,56 @@ public final class RootViewerPanel extends ViewSurface {
         }.execute();
     }
 
-    /** Reads one branch through the engine and bins it into a histogram. */
+    /** Both branches read here: one point per pair of values. */
+    private void drawNativePair(RootNode xNode, RootNode yNode) {
+        final String xName = xNode.name;
+        final String yName = yNode.name;
+        plot.showMessage("Reading " + xName + " and " + yName + "...");
+        setStatus("reading " + xName + " and " + yName);
+        new javax.swing.SwingWorker<double[][], Void>() {
+            @Override
+            protected double[][] doInBackground() throws IOException {
+                return new double[][] {nativeColumn(xNode.treeBranch), nativeColumn(yNode.treeBranch)};
+            }
+
+            @Override
+            protected void done() {
+                double[][] columns;
+                try {
+                    columns = get();
+                } catch (Exception failed) {
+                    final String message = yName + " against " + xName + ": " + failed.getMessage();
+                    plot.showMessage(message);
+                    setStatus(message);
+                    return;
+                }
+                if (columns[0].length == 0 || columns[1].length == 0 || columns[0].length != columns[1].length) {
+                    final String message = yName + " against " + xName + ": "
+                        + (columns[0].length == 0 || columns[1].length == 0
+                        ? "one of them holds no numbers."
+                        : String.format(Locale.ROOT, "they do not hold as many values (%,d and %,d).",
+                        columns[0].length, columns[1].length));
+                    plot.showMessage(message);
+                    inspector.showMessage(message);
+                    setStatus(message);
+                    return;
+                }
+                RootGraph g = RootGraph.fromColumns(xName, yName, columns[0], columns[1]);
+                plot.showGraph(g);
+                points.setSelected(true);
+                inspector.showGraph(g);
+                RootPlotsPanel.instance().showGraph(g, g.name);
+                setStatus(String.format(Locale.ROOT, "%s  --  %,d points read by Sphere", g.name, g.size()));
+            }
+        }.execute();
+    }
+
+    /** Reads one branch and bins it into a histogram. */
     private void drawBranch(RootNode node) {
+        if (node.treeBranch != null) {
+            drawNativeBranch(node);
+            return;
+        }
         com.sphere.core.rootbackend.RootBackend engine = backend();
         if (engine == null || node.jobId == 0) {
             final String message = node.name + ": the backend is no longer there.";
@@ -774,6 +927,56 @@ public final class RootViewerPanel extends ViewSurface {
                 setStatus(String.format(Locale.ROOT,
                     "%s  --  %,d values read through the backend",
                     branch, values.length));
+            }
+        }.execute();
+    }
+
+    /** A branch read here: its values over all entries, binned. */
+    private void drawNativeBranch(RootNode node) {
+        final com.sphere.core.rootio.RTree.RBranch b = node.treeBranch;
+        if (!b.hasData()) {
+            final String message = node.name + " holds " + node.children.size()
+                + " branches: select one to draw it.";
+            plot.showMessage(message);
+            inspector.showMessage(message);
+            setStatus(message);
+            return;
+        }
+        final String branch = node.name;
+        plot.showMessage("Reading " + branch + "...");
+        setStatus("reading " + branch);
+        new javax.swing.SwingWorker<double[], Void>() {
+            @Override
+            protected double[] doInBackground() throws IOException {
+                return nativeColumn(b);
+            }
+
+            @Override
+            protected void done() {
+                double[] values;
+                try {
+                    values = get();
+                } catch (Exception failed) {
+                    final String message = branch + ": " + failed.getMessage();
+                    plot.showMessage(message);
+                    inspector.showMessage(message);
+                    setStatus(message);
+                    return;
+                }
+                if (values.length == 0) {
+                    final String message = branch + " (" + node.className + ") holds no numbers to bin.";
+                    plot.showMessage(message);
+                    inspector.showMessage(message);
+                    setStatus(message);
+                    return;
+                }
+                RootHistogram h = RootHistogram.fromValues(
+                    branch, branch + "  (" + values.length + " entries)", values, 100);
+                plot.showHistogram(h);
+                plot.setStyle(currentStyle());
+                inspector.showHistogram(h);
+                RootPlotsPanel.instance().showHistogram(h, branch);
+                setStatus(String.format(Locale.ROOT, "%s  --  %,d values read by Sphere", branch, values.length));
             }
         }.execute();
     }

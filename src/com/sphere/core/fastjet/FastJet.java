@@ -1,14 +1,16 @@
 package com.sphere.core.fastjet;
 
+import com.sphere.Sphere;
+
 /**
  * Version of the Java port. Its credits and references are in Citations.
  */
 public final class FastJet {
 
-    /** The FastJet release this port follows. */
-    public static final String FASTJET_VERSION = "3.5.2";
+    /** The FastJet release this port follows (kept in Sphere.java with every other version). */
+    public static final String FASTJET_VERSION = Sphere.FASTJET_VERSION;
     /** The version of the port itself. */
-    public static final String JAVA_PORT_VERSION = "1.0.0.0";
+    public static final String JAVA_PORT_VERSION = Sphere.FASTJET_JAVA_PORT_VERSION;
     /** All that Sphere prints about FastJet; the references are in Citations. */
     public static final String VERSION_LINE = "FastJet Java Sphere v" + JAVA_PORT_VERSION;
 

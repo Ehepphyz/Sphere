@@ -19,6 +19,8 @@ public final class RootNode {
     public boolean branch;
     /** The job id the engine bound this node's tree to, 0 when none. */
     public int jobId;
+    /** The branch as Sphere's own reader holds it, when it read the tree. */
+    public com.sphere.core.rootio.RTree.RBranch treeBranch;
 
     public RootNode(String name, String title, String className, RootKey key) {
         this.name = name == null ? "" : name;

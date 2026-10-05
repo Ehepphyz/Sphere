@@ -17,8 +17,9 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * What every engine answers, for the two that run inside Sphere: ':fjet' and
- * ':fjco' take ping, diag, mode and exit as ':root', ':py' and ':julia' do.
+ * What every engine answers, for the three that run inside Sphere: ':fjet',
+ * ':fjco' and ':hepmc' take ping, diag, mode and exit as ':root', ':py' and
+ * ':julia' do.
  */
 final class EngineCommands {
 
@@ -33,7 +34,7 @@ final class EngineCommands {
         for (InProcessEngine e : InProcessEngine.values()) {
             final String p = ":" + e.key();
             CommandDefinitions.register(p + " ping", "Probe " + e.label()
-                + ": real clusterings checked against what the physics requires; PONG when right", (i, c) -> ping(e));
+                + ": real work checked against what the physics requires; PONG when right", (i, c) -> ping(e));
             CommandDefinitions.register(p + " diag", "What " + e.label()
                 + " is, whether it computes correctly, and the C++ installation beside it", (i, c) -> diag(e));
             CommandDefinitions.register(p + " mode", "Every line is a " + p + " command written without '" + p
@@ -54,13 +55,13 @@ final class EngineCommands {
         AppLogger.result(e.description());
         row("probe", (p.ok() ? "PONG" : "FAILED") + String.format(Locale.ROOT, " in %.1f ms: ", p.millis()) + p.detail());
         if (e == InProcessEngine.FASTJET) fastjet();
-        else fjcontrib();
+        else if (e == InProcessEngine.FJCONTRIB) fjcontrib();
+        else if (e == InProcessEngine.HEPMC3) HepMCCommands.diagRows();
+        else if (e == InProcessEngine.MINUIT2) Minuit2Commands.diagRows();
         final InProcessEngine.Native cpp = e.findNative();
-        row("C++", cpp == null ? "no installation found (fastjet-config not on the PATH, FASTJET unset)"
+        row("C++", cpp == null ? e.nativeHint()
             : cpp.prefix() + (cpp.version() == null ? "" : ", version " + cpp.version()) + "; " + cpp.detail());
-        row("mode", ":" + e.key() + " mode, then " + (e == InProcessEngine.FASTJET
-            ? "'read <file>', 'jets 20', 'def ak4 antikt:0.4'" : "'obs tau21', 'groom sd 0 0.1', 'flavour'")
-            + " ...; 'exit' leaves");
+        row("mode", ":" + e.key() + " mode, then " + e.modeExamples() + " ...; 'exit' leaves");
         if (p.ok()) AppLogger.success(e.label() + " is ready.");
         else AppLogger.error(e.label() + " gives wrong answers: " + p.detail());
     }
@@ -106,7 +107,7 @@ final class EngineCommands {
         row("citations", "console menu > Citations > Citation fjcontrib; ':fjco bib <file.bib>'");
     }
 
-    private static void row(String label, String text) {
+    static void row(String label, String text) {
         AppLogger.raw(String.format("  %-11s %s", label, text));
     }
 }

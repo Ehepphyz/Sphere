@@ -31,6 +31,7 @@
 #include "TPolyLine3D.h"
 #include "TPolyMarker3D.h"
 #include "TView.h"
+#include "TWbox.h"
 
 #include <cstdio>
 #include <string>
@@ -189,18 +190,23 @@ inline std::string Extra(TObject *object, const char *option) {
     return SphereView::Head("arrow", arrow, option) + ",\"x1\":" + N(arrow->GetX1()) + ",\"y1\":" +
            N(arrow->GetY1()) + ",\"x2\":" + N(arrow->GetX2()) + ",\"y2\":" + N(arrow->GetY2()) +
            ",\"as\":" + N(arrow->GetArrowSize()) + ",\"ao\":" + Q(arrow->GetOption()) +
+           ",\"aa\":" + N(arrow->GetAngle()) +
            ",\"ndc\":" + B(arrow->TestBit(TLine::kLineNDC)) + "}";
   }
   if (dynamic_cast<TPave *>(object) != nullptr) return "";
   if (auto *box = dynamic_cast<TBox *>(object)) {
+    std::string wbox;
+    if (auto *w = dynamic_cast<TWbox *>(box)) {
+      wbox = ",\"bmode\":" + N(w->GetBorderMode()) + ",\"bsize\":" + N(w->GetBorderSize());
+    }
     return SphereView::Head("box", box, option) + ",\"x1\":" + N(box->GetX1()) + ",\"y1\":" + N(box->GetY1()) +
-           ",\"x2\":" + N(box->GetX2()) + ",\"y2\":" + N(box->GetY2()) + "}";
+           ",\"x2\":" + N(box->GetX2()) + ",\"y2\":" + N(box->GetY2()) + wbox + "}";
   }
   if (auto *ellipse = dynamic_cast<TEllipse *>(object)) {
     return SphereView::Head("ellipse", ellipse, option) + ",\"x1\":" + N(ellipse->GetX1()) + ",\"y1\":" +
            N(ellipse->GetY1()) + ",\"r1\":" + N(ellipse->GetR1()) + ",\"r2\":" + N(ellipse->GetR2()) +
            ",\"phimin\":" + N(ellipse->GetPhimin()) + ",\"phimax\":" + N(ellipse->GetPhimax()) +
-           ",\"theta\":" + N(ellipse->GetTheta()) + "}";
+           ",\"theta\":" + N(ellipse->GetTheta()) + ",\"noedges\":" + B(ellipse->GetNoEdges()) + "}";
   }
   if (auto *poly = dynamic_cast<TPolyLine *>(object)) {
     std::string out = SphereView::Head("polyline", poly, option) + ",\"ndc\":" +
@@ -227,6 +233,8 @@ inline void Pads(TVirtualPad *pad, int &index, std::string &out) {
     for (TObjLink *link = primitives->FirstLink(); link != nullptr; link = link->Next()) {
       TObject *object = link->GetObject();
       if (dynamic_cast<TVirtualPad *>(object) != nullptr) continue;
+      // The frame is a TWbox, but the viewer draws it as the pad's; a box of it would cover the histogram.
+      if (object == nullptr || object->InheritsFrom("TFrame")) continue;
       const std::string extra = Extra(object, link->GetOption());
       if (!extra.empty()) items += (items.empty() ? "" : ",") + extra;
     }

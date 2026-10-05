@@ -138,6 +138,18 @@ public interface ThemePalette {
     Color getSpace3DLabel();
     Color getSpace3DTitle();
 
+    // Python environment manager (PyEnvManagerDialog): states of packages and findings
+    Color getPyOk();            // up to date, healthy, a safe change
+    Color getPyPatch();         // a patch update
+    Color getPyMinor();         // a minor update, a warning
+    Color getPyMajor();         // a major update
+    Color getPyDanger();        // a vulnerability, a conflict, a broken install
+    Color getPyInfo();          // information, a dependency, a hint
+    Color getPyBadgeText();     // text on the coloured badges above
+    Color getPyChip();          // filter chips and the details card
+    Color getPyChipSelected();  // a chip turned on
+    Color getPyRowStripe();     // every other row of the package table
+
 
 
 }

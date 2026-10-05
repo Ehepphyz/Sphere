@@ -65,9 +65,14 @@ final class RootPadPainter {
         double theta = Double.NaN;
         double phi = Double.NaN;
         double zoom = 1;
+        /** TView3D::SetPerspective, and TView3D::ShowAxis turned off. */
+        boolean perspective;
+        boolean hideAxes3D;
 
         // How the pad was last painted, for the mouse.
         Mode mode = Mode.EMPTY;
+        /** Where each object of the pad was drawn, in painting order: a right click looks from the last. */
+        final List<Zone> zones = new ArrayList<>();
         final Rectangle frame = new Rectangle();
         double x0;
         double x1;
@@ -97,6 +102,42 @@ final class RootPadPainter {
     }
 
     private RootPadPainter() {
+    }
+
+    /**
+     * Where an object was drawn, and what a click there means: the object,
+     * its ROOT class, and for an axis which one ('x', 'y', 'z').
+     */
+    record Zone(java.awt.Shape area, Object target, String cls, char role) {
+    }
+
+    /** An axis of a pad's frame, as the target of TAxis's menu. */
+    record AxisRef(Pad pad, Item owner, int axis) {
+    }
+
+    /** The statistics box of a histogram, as the target of TPaveStats's menu. */
+    record StatsRef(Pad pad, Hist hist) {
+    }
+
+    /** The title of a pad, as the target of TPaveText's menu ("title"). */
+    record TitleRef(Pad pad, Item owner) {
+    }
+
+    /** The palette of a COLZ histogram, as the target of TPaletteAxis's menu. */
+    record PaletteRef(Pad pad, Hist hist) {
+    }
+
+    private static String classOf(Item i, String fallback) {
+        return i.className == null || i.className.isBlank() ? fallback : i.className;
+    }
+
+    private static void zone(View view, java.awt.Shape area, Object target, String cls, char role) {
+        if (area != null && target != null) view.zones.add(new Zone(area, target, cls, role));
+    }
+
+    /** A thin line made wide enough for the mouse. */
+    private static java.awt.Shape near(java.awt.Shape line) {
+        return new BasicStroke(9f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND).createStrokedShape(line);
     }
 
     /* ------------------------------------------------------------------ */
@@ -138,22 +179,59 @@ final class RootPadPainter {
     }
 
     /**
-     * The ink that reads on a ground: the palette's when it does (a contrast
-     * of 3:1), else whichever of ROOT's black and the dark theme's ink reads
-     * better there.
+     * The ink that reads on a ground: on the palette's own paper and boxes the
+     * palette's when it does (a contrast of 3:1); on a fill of the author's,
+     * and wherever the palette's does not read, whichever of ROOT's black and
+     * the dark theme's ink reads better there: black on a diagram's mid-tone
+     * boxes, as ROOT draws it, where the theme's ink barely passed.
      */
     static Color inkOn(Color under) {
         final Color mine = palette.getCanvasInk();
         final double g = luminance(under);
-        if (contrast(luminance(mine), g) >= 3) return mine;
+        final boolean theirs = under.getRGB() == palette.getCanvasPaper().getRGB()
+            || under.getRGB() == palette.getCanvasBoxFill().getRGB();
+        if (theirs && contrast(luminance(mine), g) >= 3) return mine;
         final Color black = ThemePaletteLight.INSTANCE.getCanvasInk();
         final Color light = ThemePaletteDark.INSTANCE.getCanvasInk();
         return contrast(luminance(black), g) >= contrast(luminance(light), g) ? black : light;
     }
 
-    /** ROOT's ink (black, or no colour) is the ink of the ground; any other colour carries data and is kept. */
+    /**
+     * ROOT's ink (black, or no colour) is the ink of the ground; any other
+     * colour carries data and is kept, except on the theme's dark paper, where
+     * ROOT's dark colours (602, kBlue, kBlack+n) vanish: there it is lightened
+     * toward the ink, its hue kept, just enough to read (a contrast of 3:1).
+     */
     static Color ink(Color c) {
-        return c == null || isBlack(c) ? inkColor() : c;
+        if (c == null || isBlack(c)) return inkColor();
+        return onDarkPaper() ? readable(c, ground, 3) : c;
+    }
+
+    /** Whether the pad being drawn shows the theme's own paper and that paper is dark. */
+    static boolean onDarkPaper() {
+        final Color paper = palette.getCanvasPaper();
+        return ground != null && ground.getRGB() == paper.getRGB() && luminance(paper) < 0.18;
+    }
+
+    /** The least mix of a colour with the ink of a ground that reads there with the contrast asked. */
+    static Color readable(Color c, Color under, double wanted) {
+        final double g = luminance(under);
+        if (contrast(luminance(c), g) >= wanted) return c;
+        final Color toward = inkOn(under);
+        double lo = 0;
+        double hi = 1;
+        for (int k = 0; k < 12; k++) {
+            final double t = (lo + hi) / 2;
+            if (contrast(luminance(mix(c, toward, t)), g) >= wanted) hi = t;
+            else lo = t;
+        }
+        return mix(c, toward, hi);
+    }
+
+    private static Color mix(Color c, Color toward, double t) {
+        return new Color((int) Math.round(c.getRed() + (toward.getRed() - c.getRed()) * t),
+            (int) Math.round(c.getGreen() + (toward.getGreen() - c.getGreen()) * t),
+            (int) Math.round(c.getBlue() + (toward.getBlue() - c.getBlue()) * t), c.getAlpha());
     }
 
     /** A text's colour on the pad being drawn. */
@@ -245,6 +323,11 @@ final class RootPadPainter {
             (int) Math.round((1 - pad.lm - pad.rm) * area.width),
             (int) Math.round((1 - pad.tm - pad.bm) * area.height));
         view.frame.setBounds(frame);
+        view.zones.clear();
+        final Item mainItem = pad.main();
+        if (mainItem != null && view.mode != Mode.EMPTY) {
+            zone(view, frame, mainItem, classOf(mainItem, "TObject"), 'm');
+        }
         switch (view.mode) {
             case ONE_D -> paintOneD(g, area, frame, pad, view, scene);
             case FLAT -> paintFlat(g, area, frame, pad, view, scene);
@@ -253,7 +336,7 @@ final class RootPadPainter {
             }
         }
         if (view.mode != Mode.EMPTY) {
-            title(g, area, pad, scene);
+            title(g, area, pad, view, scene);
             stats(g, area, pad, view, scene);
         }
         overlays(g, area, frame, pad, view);
@@ -280,9 +363,11 @@ final class RootPadPainter {
         view.lx = lx;
         view.ly = ly;
 
+        final Color padGround = ground;
+        ground = frameGround(pad);
         g.setColor(ground);
         g.fill(frame);
-        grid(g, frame, view, log(view.gridx, pad.gridx), log(view.gridy, pad.gridy));
+        grid(g, frame, view, pad, log(view.gridx, pad.gridx), log(view.gridy, pad.gridy));
 
         final Shape clip = g.getClip();
         g.clip(frame);
@@ -291,19 +376,61 @@ final class RootPadPainter {
             final String o = item == main ? mainOption : item.opt();
             if (item instanceof Hist h && h.dim == 1) {
                 hist1(g, h, first && item == main ? mainOption : o, view);
-                for (Hist fit : h.fits) hist1(g, fit, "C", view);
+                zone(view, near(curve(h, view)), h, classOf(h, h.isFunction() ? "TF1" : "TH1D"), 'c');
+                for (Hist fit : h.fits) {
+                    hist1(g, fit, "C", view);
+                    zone(view, near(curve(fit, view)), fit, "TF1", 'c');
+                }
             } else if (item instanceof Graph gr) {
                 graph(g, gr, o, view);
+                zone(view, near(curve(gr, view)), gr, classOf(gr, "TGraph"), 'c');
+                for (Hist fit : gr.fits) {
+                    hist1(g, fit, "C", view);
+                    zone(view, near(curve(fit, view)), fit, "TF1", 'c');
+                }
             } else if (item instanceof Group group) {
                 group(g, group, o, view);
+                for (Item m : group.items) {
+                    if (m instanceof Hist mh && mh.dim == 1) zone(view, near(curve(mh, view)), mh, classOf(mh, "TH1D"), 'c');
+                    else if (m instanceof Graph mg) zone(view, near(curve(mg, view)), mg, classOf(mg, "TGraph"), 'c');
+                }
             }
             if (item == main) first = false;
         }
         g.setClip(clip);
+        ground = padGround;
 
         frameBox(g, frame);
-        axisX(g, frame, view.x0, view.x1, lx, titleX(main, view), axisLabels(main));
-        axisY(g, frame, view.y0, view.y1, ly, titleY(main, view), true);
+        axis(g, area, frame, pad, view, true, view.x0, view.x1, lx, titleX(main, view), axisLabels(main), main);
+        axis(g, area, frame, pad, view, false, view.y0, view.y1, ly, titleY(main, view), null, main);
+    }
+
+    /** A histogram's or a function's curve through its bins, for the mouse. */
+    private static java.awt.Shape curve(Hist h, View view) {
+        final Path2D path = new Path2D.Double();
+        for (int i = 0; i < h.nx(); i++) {
+            final double v = h.at(i, 0);
+            final double y = view.ly && v <= 0 ? view.y0 : v;
+            if (h.isFunction()) {
+                if (i == 0) path.moveTo(px(view, h.x.center(i)), py(view, y));
+                else path.lineTo(px(view, h.x.center(i)), py(view, y));
+            } else {
+                if (i == 0) path.moveTo(px(view, h.x.edge(0)), py(view, y));
+                else path.lineTo(px(view, h.x.edge(i)), py(view, y));
+                path.lineTo(px(view, h.x.edge(i + 1)), py(view, y));
+            }
+        }
+        return path;
+    }
+
+    private static java.awt.Shape curve(Graph gr, View view) {
+        final Path2D path = new Path2D.Double();
+        for (int i = 0; i < gr.x.length; i++) {
+            if (i == 0) path.moveTo(px(view, gr.x[i]), py(view, gr.y[i]));
+            else path.lineTo(px(view, gr.x[i]), py(view, gr.y[i]));
+        }
+        if (gr.x.length == 1) path.lineTo(px(view, gr.x[0]) + 1, py(view, gr.y[0]));
+        return path;
     }
 
     static double[] xRange(Item main) {
@@ -365,6 +492,16 @@ final class RootPadPainter {
         if (!(lo < hi)) {
             lo = Double.isFinite(lo) ? lo - 1 : 0;
             hi = Double.isFinite(hi) ? hi + 1 : 1;
+        }
+        // TGraph::SetMinimum/SetMaximum, THStack::SetMinimum/SetMaximum: the frame as set.
+        final double setMin = main instanceof Graph gm ? gm.min : main instanceof Group gp ? gp.min : Double.NaN;
+        final double setMax = main instanceof Graph gm ? gm.max : main instanceof Group gp ? gp.max : Double.NaN;
+        if (!Double.isNaN(setMin) || !Double.isNaN(setMax)) {
+            final double[] auto = histogram ? new double[]{lo >= 0 ? 0 : lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo)}
+                : new double[]{lo - 0.1 * (hi - lo), hi + 0.1 * (hi - lo)};
+            final double a = Double.isNaN(setMin) ? auto[0] : setMin;
+            final double b = Double.isNaN(setMax) ? auto[1] : setMax;
+            if (b > a && (!log || a > 0)) return new double[]{a, b};
         }
         if (log) {
             final double bottom = Double.isFinite(positive) ? positive * 0.5 : Math.max(1e-3, hi * 1e-3);
@@ -445,8 +582,10 @@ final class RootPadPainter {
                 steps.lineTo(px(view, h.x.edge(i + 1)), py(view, v));
             }
             steps.lineTo(px(view, h.x.edge(n)), py(view, base));
-            if (h.hasFill()) {
-                g.setColor(fillColor(h));
+            // THistPainter::PaintHist fills only for a fill colour other than 0, which arrives as white:
+            // filled as paper it put a dark slab under the curve on a coloured frame.
+            if (h.hasFill() && !isWhite(h.fill)) {
+                g.setPaint(fillPaint(h));
                 g.fill(steps);
             }
             // The outline without the drops to the axis at both ends, as ROOT draws it.
@@ -558,7 +697,7 @@ final class RootPadPainter {
                 else path.lineTo(px(view, gr.x[i]), py(view, gr.y[i]));
             }
             if (fill) {
-                g.setColor(gr.hasFill() ? fillColor(gr) : translucent(lc, 80));
+                g.setPaint(gr.hasFill() ? fillPaint(gr) : translucent(lc, 80));
                 final Path2D closed = (Path2D) path.clone();
                 closed.closePath();
                 g.fill(closed);
@@ -638,6 +777,8 @@ final class RootPadPainter {
         view.ly = ly && yr[0] > 0;
         final double[] zr = view.zr != null ? view.zr.clone() : zRange(h, lz);
 
+        final Color padGround = ground;
+        ground = frameGround(pad);
         g.setColor(ground);
         g.fill(frame);
         final Shape clip = g.getClip();
@@ -724,10 +865,16 @@ final class RootPadPainter {
             }
         }
         g.setClip(clip);
+        ground = padGround;
         frameBox(g, frame);
-        axisX(g, frame, view.x0, view.x1, view.lx, titleX(h, view), h.x.labels);
-        axisY(g, frame, view.y0, view.y1, view.ly, titleY(h, view), false);
-        if (palette) paletteBar(g, area, frame, colors, zr, lz, view.zTitle != null ? view.zTitle : h.zTitle);
+        axis(g, area, frame, pad, view, true, view.x0, view.x1, view.lx, titleX(h, view), h.x.labels, h);
+        axis(g, area, frame, pad, view, false, view.y0, view.y1, view.ly, titleY(h, view), h.y.labels, h);
+        if (palette) {
+            paletteBar(g, area, frame, colors, zr, lz, view.zTitle != null ? view.zTitle : h.zTitle, pad);
+            final int x = frame.x + frame.width + Math.max(4, area.width / 100);
+            zone(view, new Rectangle(x, frame.y, Math.max(8, area.width / 40) + area.width / 12, frame.height),
+                new PaletteRef(pad, h), "TPaletteAxis", 'z');
+        }
     }
 
     static double[] zRange(Hist h, boolean log) {
@@ -819,18 +966,34 @@ final class RootPadPainter {
         return (int) Math.round(Math.max(-1e5, Math.min(1e5, p)));
     }
 
+    /**
+     * The ground inside the frame: the frame's own fill (TFrame::SetFillColor),
+     * white or none being the pad's; what is drawn there reads against it.
+     */
+    private static Color frameGround(Pad pad) {
+        return pad.frameFill != null && pad.frameFillStyle != 0 && !isWhite(pad.frameFill) ? pad.frameFill : ground;
+    }
+
     private static void frameBox(Graphics2D g, Rectangle frame) {
         g.setColor(inkColor());
         g.setStroke(new BasicStroke(1f));
         g.drawRect(frame.x, frame.y, frame.width, frame.height);
     }
 
-    private static void grid(Graphics2D g, Rectangle frame, View v, boolean gx, boolean gy) {
+    private static void grid(Graphics2D g, Rectangle frame, View v, Pad pad, boolean gx, boolean gy) {
         if (!gx && !gy) return;
         g.setColor(palette.getCanvasGrid());
         g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, new float[]{2f, 2f}, 0f));
-        if (gx) for (double t : ticks(v.x0, v.x1, v.lx)) g.drawLine(px(v, t), frame.y, px(v, t), frame.y + frame.height);
-        if (gy) for (double t : ticks(v.y0, v.y1, v.ly)) g.drawLine(frame.x, py(v, t), frame.x + frame.width, py(v, t));
+        if (gx) {
+            for (double t : styledTicks(v.x0, v.x1, v.lx, pad.axes[0])) {
+                g.drawLine(px(v, t), frame.y, px(v, t), frame.y + frame.height);
+            }
+        }
+        if (gy) {
+            for (double t : styledTicks(v.y0, v.y1, v.ly, pad.axes[1])) {
+                g.drawLine(frame.x, py(v, t), frame.x + frame.width, py(v, t));
+            }
+        }
         g.setStroke(new BasicStroke(1f));
     }
 
@@ -839,70 +1002,289 @@ final class RootPadPainter {
         return new Font(Font.SANS_SERIF, Font.PLAIN, size);
     }
 
-    private static void axisX(Graphics2D g, Rectangle frame, double lo, double hi, boolean log, String title,
-                              String[] labels) {
-        g.setFont(labelFont(frame));
-        final FontMetrics fm = g.getFontMetrics();
-        g.setColor(inkColor());
-        final View mapping = mapping(frame, lo, hi, log, 0, 1, false);
-        final int bottom = frame.y + frame.height;
-        if (labels != null && labels.length > 0) {
-            for (int i = 0; i < labels.length; i++) {
-                final double c = lo + (i + 0.5) * (hi - lo) / labels.length;
-                final int x = px(mapping, c);
-                g.drawString(labels[i], x - fm.stringWidth(labels[i]) / 2, bottom + fm.getAscent() + 3);
-            }
+    /* ---- axes, as TGaxis paints them from TAttAxis and TAxis ------------ */
+
+    /**
+     * The major ticks of an axis: ROOT's optimised round numbers, as many as
+     * ndivisions allows at most, or exactly ndivisions parts when the
+     * optimisation is off (SetNdivisions(n, kFALSE) or a negative n).
+     */
+    static double[] styledTicks(double lo, double hi, boolean log, RootScene.AxisStyle st) {
+        if (!(hi > lo)) return new double[0];
+        if (log && lo > 0) return ticks(lo, hi, true);
+        final int n = st.primary();
+        final List<Double> out = new ArrayList<>();
+        if (!st.optimize || st.ndivisions < 0) {
+            for (int k = 0; k <= n; k++) out.add(lo + (hi - lo) * k / n);
         } else {
-            final double[] major = ticks(lo, hi, log);
-            for (double t : minorTicks(lo, hi, log, major)) {
-                final int x = px(mapping, t);
-                g.drawLine(x, bottom, x, bottom - 3);
-            }
-            for (double t : major) {
-                final int x = px(mapping, t);
-                g.drawLine(x, bottom, x, bottom - 7);
-                g.drawLine(x, frame.y, x, frame.y + 4);
-                final String s = tickLabel(t, major, log);
-                g.drawString(s, x - fm.stringWidth(s) / 2, bottom + fm.getAscent() + 3);
+            final double step = niceStepUp((hi - lo) / n);
+            final double first = Math.ceil(lo / step - 1e-9) * step;
+            for (double t = first; t <= hi + step * 1e-9 && out.size() < 200; t += step) {
+                out.add(Math.abs(t) < step * 1e-9 ? 0 : t);
             }
         }
-        if (title != null && !title.isEmpty()) {
-            final String t = RootLatex.plain(title);
-            g.drawString(t, frame.x + frame.width - fm.stringWidth(t), bottom + 2 * fm.getHeight() + 4);
-        }
+        return out.stream().mapToDouble(Double::doubleValue).toArray();
     }
 
-    private static void axisY(Graphics2D g, Rectangle frame, double lo, double hi, boolean log, String title,
-                              boolean rightTicks) {
-        g.setFont(labelFont(frame));
+    /** The smallest of 1, 2, 5 times a power of ten that is not below raw. */
+    static double niceStepUp(double raw) {
+        if (!(raw > 0)) return 1;
+        final double p = Math.pow(10, Math.floor(Math.log10(raw)));
+        final double f = raw / p;
+        return (f <= 1.0000001 ? 1 : f <= 2.0000001 ? 2 : f <= 5.0000001 ? 5 : 10) * p;
+    }
+
+    /** The secondary ticks: each primary division cut in the second-order number of ndivisions. */
+    static double[] styledMinor(double lo, double hi, boolean log, double[] major, RootScene.AxisStyle st) {
+        if (log && lo > 0) return minorTicks(lo, hi, true, major);
+        final int n2 = st.secondary();
+        final List<Double> out = new ArrayList<>();
+        if (n2 > 1 && major.length >= 2) {
+            final double step = (major[1] - major[0]) / n2;
+            for (double t = major[0] - n2 * step; t <= hi + step * 1e-9; t += step) {
+                if (t > lo && t < hi && Math.abs(Math.IEEEremainder(t - major[0], major[1] - major[0])) > step * 1e-6) {
+                    out.add(t);
+                }
+            }
+        }
+        return out.stream().mapToDouble(Double::doubleValue).toArray();
+    }
+
+    /** gStyle's time offset: 1995-01-01 00:00:00 UTC, which "%F" in a time format replaces. */
+    static final long TIME_OFFSET = 788918400L;
+
+    /** A time axis's label, strftime's codes as TAxis::SetTimeFormat takes them. */
+    static String formatTime(double t, String format) {
+        String fmt = format == null || format.isBlank() ? "%H:%M:%S" : format;
+        long offset = TIME_OFFSET;
+        final int f = fmt.indexOf("%F");
+        if (f >= 0) {
+            final String spec = fmt.substring(f + 2).strip();
+            fmt = fmt.substring(0, f);
+            try {
+                offset = java.time.LocalDateTime.parse(spec.replace(' ', 'T').replaceAll("T(\\d):", "T0$1:"))
+                    .toEpochSecond(java.time.ZoneOffset.UTC);
+            } catch (RuntimeException unreadable) {
+                // the default offset
+            }
+        }
+        final java.time.ZonedDateTime d = java.time.Instant.ofEpochSecond(offset + (long) Math.floor(t))
+            .atZone(java.time.ZoneOffset.UTC);
+        final StringBuilder out = new StringBuilder();
+        for (int i = 0; i < fmt.length(); i++) {
+            final char c = fmt.charAt(i);
+            if (c != '%' || i + 1 >= fmt.length()) {
+                out.append(c);
+                continue;
+            }
+            final char k = fmt.charAt(++i);
+            out.append(switch (k) {
+                case 'd' -> String.format(Locale.ROOT, "%02d", d.getDayOfMonth());
+                case 'm' -> String.format(Locale.ROOT, "%02d", d.getMonthValue());
+                case 'y' -> String.format(Locale.ROOT, "%02d", d.getYear() % 100);
+                case 'Y' -> Integer.toString(d.getYear());
+                case 'H' -> String.format(Locale.ROOT, "%02d", d.getHour());
+                case 'I' -> String.format(Locale.ROOT, "%02d", (d.getHour() + 11) % 12 + 1);
+                case 'p' -> d.getHour() < 12 ? "AM" : "PM";
+                case 'M' -> String.format(Locale.ROOT, "%02d", d.getMinute());
+                case 'S' -> String.format(Locale.ROOT, "%02d", d.getSecond());
+                case 'j' -> String.format(Locale.ROOT, "%03d", d.getDayOfYear());
+                case 'b', 'h' -> d.getMonth().getDisplayName(java.time.format.TextStyle.SHORT, Locale.ENGLISH);
+                case 'B' -> d.getMonth().getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH);
+                case 'a' -> d.getDayOfWeek().getDisplayName(java.time.format.TextStyle.SHORT, Locale.ENGLISH);
+                case 'A' -> d.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH);
+                case '%' -> "%";
+                default -> "%" + k;
+            });
+        }
+        return out.toString();
+    }
+
+    /**
+     * The labels of the major ticks, and the power of ten taken out of them:
+     * past MaxDigits digits ROOT writes the labels short and puts x10^n at the
+     * end of the axis, unless NoExponent is set. Decimals gives every label
+     * the same number of decimals; without it trailing zeros are dropped.
+     */
+    static String[] styledLabels(double[] t, boolean log, RootScene.AxisStyle st, int[] exponent) {
+        exponent[0] = 0;
+        final String[] out = new String[t.length];
+        if (st.timeDisplay) {
+            for (int i = 0; i < t.length; i++) out[i] = formatTime(t[i], st.timeFormat);
+            return out;
+        }
+        if (log) {
+            for (int i = 0; i < t.length; i++) out[i] = tickLabel(t[i], t, true);
+            return out;
+        }
+        double big = 0;
+        for (double v : t) big = Math.max(big, Math.abs(v));
+        final double step = t.length >= 2 ? Math.abs(t[1] - t[0]) : big == 0 ? 1 : big;
+        int e = 0;
+        if (!st.noExponent && big > 0) {
+            final int digits = (int) Math.floor(Math.log10(big)) + 1;
+            if (digits > st.maxDigits) e = digits - 1;
+            else if (big < 1e-2) e = (int) Math.floor(Math.log10(big));
+        }
+        final double scale = Math.pow(10, -e);
+        final double sstep = step * scale;
+        final int decimals = sstep >= 1 ? 0 : Math.min(9, (int) Math.ceil(-Math.log10(sstep) - 1e-9));
+        for (int i = 0; i < t.length; i++) {
+            String v = String.format(Locale.ROOT, "%." + decimals + "f", t[i] * scale);
+            if (!st.decimals && v.contains(".")) v = v.replaceAll("0+$", "").replaceAll("\\.$", "");
+            if (v.equals("-0")) v = "0";
+            out[i] = v;
+        }
+        exponent[0] = e;
+        return out;
+    }
+
+    /**
+     * An axis of the frame, as TGaxis draws it: the line in the axis colour,
+     * ticks of TickLength on the side its tick option asks (and on the
+     * opposite side when the pad's Tickx/Ticky says so), labels in their
+     * font, size, offset and colour, the power of ten factored out, and the
+     * title at its offset, at the end of the axis or centred, turned over if
+     * RotateTitle is set.
+     */
+    private static void axis(Graphics2D g, Rectangle area, Rectangle frame, Pad pad, View view, boolean isX, double lo,
+                             double hi, boolean log, String title, String[] binLabels, Item owner) {
+        final RootScene.AxisStyle st = pad.axes[isX ? 0 : 1];
+        final Color axisInk = st.axisColor == null ? inkColor() : ink(st.axisColor);
+        final Color labelInk = st.labelColor == null ? inkColor() : text(st.labelColor);
+        final Color titleInk = st.titleColor == null ? inkColor() : text(st.titleColor);
+        final Font lf = RootFonts.font(st.labelFont, RootFonts.pixels(st.labelFont, st.labelSize, area.width, area.height));
+        final Font tf = RootFonts.font(st.titleFont, RootFonts.pixels(st.titleFont, st.titleSize, area.width, area.height));
+        final View m = isX ? mapping(frame, lo, hi, log, 0, 1, false) : mapping(frame, 0, 1, false, lo, hi, log);
+        final int tick = Math.max(1, (int) Math.round(st.tickLength * (isX ? area.height : area.width)));
+        final boolean in = !st.ticks.equals("-");
+        final boolean out = st.ticks.contains("-");
+        final int opposite = isX ? pad.tickx : pad.ticky;
+        final int bottom = frame.y + frame.height;
+        final int right = frame.x + frame.width;
+        g.setStroke(new BasicStroke((float) Math.max(1, st.lineWidth)));
+        g.setColor(axisInk);
+        if (isX) g.drawLine(frame.x, bottom, right, bottom);
+        else g.drawLine(frame.x, frame.y, frame.x, bottom);
+
+        final boolean alpha = binLabels != null && binLabels.length > 0;
+        final double[] major = alpha ? new double[0] : styledTicks(lo, hi, log, st);
+        final double[] minor = alpha ? new double[0] : styledMinor(lo, hi, log, major, st);
+        for (int pass = 0; pass < 2; pass++) {
+            final double[] ts = pass == 0 ? minor : major;
+            final int len = pass == 0 ? Math.max(1, tick / 2) : tick;
+            for (double t : ts) {
+                if (isX) {
+                    final int x = px(m, t);
+                    if (in) g.drawLine(x, bottom, x, bottom - len);
+                    if (out) g.drawLine(x, bottom, x, bottom + len);
+                    if (opposite > 0) g.drawLine(x, frame.y, x, frame.y + len);
+                } else {
+                    final int y = py(m, t);
+                    if (in) g.drawLine(frame.x, y, frame.x + len, y);
+                    if (out) g.drawLine(frame.x, y, frame.x - len, y);
+                    if (opposite > 0) g.drawLine(right, y, right - len, y);
+                }
+            }
+        }
+
+        g.setFont(lf);
         final FontMetrics fm = g.getFontMetrics();
-        g.setColor(inkColor());
-        final View mapping = mapping(frame, 0, 1, false, lo, hi, log);
-        final double[] major = ticks(lo, hi, log);
-        int widest = 0;
-        for (double t : minorTicks(lo, hi, log, major)) {
-            final int y = py(mapping, t);
-            g.drawLine(frame.x, y, frame.x + 3, y);
+        g.setColor(labelInk);
+        final int gap = (int) Math.round(st.labelOffset * (isX ? area.height : area.width)) + (out ? tick : 0) + 2;
+        int extent = 0;
+        final int[] exponent = new int[1];
+        if (alpha) {
+            final String lo2 = st.labelsOption == null ? "h" : st.labelsOption;
+            for (int i = 0; i < binLabels.length; i++) {
+                final double c = lo + (i + 0.5) * (hi - lo) / binLabels.length;
+                final String s = binLabels[i] == null ? "" : RootLatex.plain(binLabels[i]);
+                if (isX) {
+                    final int x = px(m, c);
+                    if (lo2.contains("v") || lo2.contains("u") || lo2.contains("d")) {
+                        final AffineTransform saved = g.getTransform();
+                        final double angle = lo2.contains("v") ? -Math.PI / 2 : lo2.contains("u") ? -Math.PI / 4 : Math.PI / 4;
+                        g.rotate(angle, x, bottom + gap);
+                        g.drawString(s, x - (lo2.contains("d") ? 0 : fm.stringWidth(s)), bottom + gap + fm.getAscent() / 2);
+                        g.setTransform(saved);
+                        extent = Math.max(extent, fm.stringWidth(s));
+                    } else {
+                        g.drawString(s, x - fm.stringWidth(s) / 2, bottom + gap + fm.getAscent());
+                        extent = Math.max(extent, fm.getHeight());
+                    }
+                } else {
+                    final int y = py(m, c);
+                    g.drawString(s, frame.x - gap - fm.stringWidth(s), y + fm.getAscent() / 2 - 1);
+                    extent = Math.max(extent, fm.stringWidth(s));
+                }
+            }
+        } else {
+            final String[] labels = styledLabels(major, log, st, exponent);
+            for (int i = 0; i < major.length; i++) {
+                final String s = labels[i];
+                if (isX) {
+                    final int x = px(m, major[i]);
+                    g.drawString(s, x - fm.stringWidth(s) / 2, bottom + gap + fm.getAscent());
+                    if (opposite > 1) g.drawString(s, x - fm.stringWidth(s) / 2, frame.y - gap);
+                    extent = Math.max(extent, fm.getHeight());
+                } else {
+                    final int y = py(m, major[i]);
+                    g.drawString(s, frame.x - gap - fm.stringWidth(s), y + fm.getAscent() / 2 - 1);
+                    if (opposite > 1) g.drawString(s, right + gap, y + fm.getAscent() / 2 - 1);
+                    extent = Math.max(extent, fm.stringWidth(s));
+                }
+            }
+            if (log && st.moreLogLabels) {
+                for (double t : minor) {
+                    final String s = compact(t / Math.pow(10, Math.floor(Math.log10(t) + 1e-9)));
+                    if (isX) g.drawString(s, px(m, t) - fm.stringWidth(s) / 2, bottom + gap + fm.getAscent());
+                    else g.drawString(s, frame.x - gap - fm.stringWidth(s), py(m, t) + fm.getAscent() / 2 - 1);
+                }
+            }
+            if (exponent[0] != 0) {
+                final String x10 = "\u00d710" + RootLatex.superscript(Integer.toString(exponent[0]));
+                if (isX) g.drawString(x10, right - fm.stringWidth(x10), bottom + gap + fm.getAscent() + fm.getHeight());
+                else g.drawString(x10, frame.x - fm.stringWidth(x10) / 2, frame.y - 4);
+            }
         }
-        for (double t : major) {
-            final int y = py(mapping, t);
-            g.drawLine(frame.x, y, frame.x + 7, y);
-            if (rightTicks) g.drawLine(frame.x + frame.width, y, frame.x + frame.width - 4, y);
-            final String s = tickLabel(t, major, log);
-            widest = Math.max(widest, fm.stringWidth(s));
-            g.drawString(s, frame.x - fm.stringWidth(s) - 4, y + fm.getAscent() / 2 - 1);
-        }
+
         if (title != null && !title.isEmpty()) {
             final String t = RootLatex.plain(title);
+            g.setFont(tf);
+            g.setColor(titleInk);
+            final FontMetrics tm = g.getFontMetrics();
             final AffineTransform saved = g.getTransform();
-            g.rotate(-Math.PI / 2, frame.x - widest - 10, frame.y);
-            g.drawString(t, frame.x - widest - 10 - fm.stringWidth(t), frame.y);
+            if (isX) {
+                final int y = bottom + gap + extent + (int) Math.round(st.titleOffset * tm.getAscent() * 1.15);
+                final int x = st.centerTitle ? frame.x + (frame.width - tm.stringWidth(t)) / 2 : right - tm.stringWidth(t);
+                if (st.rotateTitle) {
+                    g.rotate(Math.PI, x + tm.stringWidth(t) / 2.0, y - tm.getAscent() / 2.0);
+                }
+                g.drawString(t, x, y);
+            } else {
+                final int x = frame.x - gap - extent - (int) Math.round(st.titleOffset * tm.getDescent() * 2 + 4);
+                final int along = st.centerTitle ? frame.y + (frame.height + tm.stringWidth(t)) / 2 : frame.y + tm.stringWidth(t);
+                if (st.rotateTitle) {
+                    g.rotate(Math.PI / 2, x - tm.getAscent(), along - tm.stringWidth(t));
+                    g.drawString(t, x - tm.getAscent(), along - tm.stringWidth(t));
+                } else {
+                    g.rotate(-Math.PI / 2, x, along);
+                    g.drawString(t, x, along);
+                }
+            }
             g.setTransform(saved);
         }
+        g.setStroke(new BasicStroke(1f));
+        final Rectangle band = isX
+            ? new Rectangle(frame.x, bottom - tick, frame.width, (int) Math.max(tick + gap + extent + 4, area.height * 0.09))
+            : new Rectangle(frame.x - (int) Math.max(gap + extent + 6, area.width * 0.09), frame.y,
+                (int) Math.max(gap + extent + 6, area.width * 0.09) + tick, frame.height);
+        zone(view, band, new AxisRef(pad, owner, isX ? 0 : 1), "TAxis", isX ? 'x' : 'y');
     }
 
     private static void paletteBar(Graphics2D g, Rectangle area, Rectangle frame, Color[] colors, double[] zr, boolean lz,
-                                   String title) {
+                                   String title, Pad pad) {
+        final RootScene.AxisStyle st = pad.axes[2];
         final int x = frame.x + frame.width + Math.max(4, area.width / 100);
         final int w = Math.max(8, area.width / 40);
         for (int i = 0; i < frame.height; i++) {
@@ -910,16 +1292,34 @@ final class RootPadPainter {
             g.setColor(colors[(int) Math.round(f * (colors.length - 1))]);
             g.fillRect(x, frame.y + i, w, 1);
         }
-        g.setColor(inkColor());
+        g.setColor(st.axisColor == null ? inkColor() : ink(st.axisColor));
         g.drawRect(x, frame.y, w, frame.height);
-        g.setFont(labelFont(frame));
+        g.setFont(RootFonts.font(st.labelFont, RootFonts.pixels(st.labelFont, st.labelSize, area.width, area.height)));
         final FontMetrics fm = g.getFontMetrics();
         final View mapping = mapping(frame, 0, 1, false, zr[0], zr[1], lz);
-        final double[] major = ticks(zr[0], zr[1], lz);
-        for (double t : major) {
-            final int y = py(mapping, t);
-            g.drawLine(x + w - 4, y, x + w, y);
-            g.drawString(tickLabel(t, major, lz), x + w + 3, y + fm.getAscent() / 2 - 1);
+        final double[] major = styledTicks(zr[0], zr[1], lz, st);
+        final int[] exponent = new int[1];
+        final String[] labels = styledLabels(major, lz, st, exponent);
+        final int tick = Math.max(2, (int) Math.round(st.tickLength * area.width * 0.4));
+        for (int i = 0; i < major.length; i++) {
+            final int y = py(mapping, major[i]);
+            g.setColor(st.axisColor == null ? inkColor() : ink(st.axisColor));
+            g.drawLine(x + w - tick, y, x + w, y);
+            g.setColor(st.labelColor == null ? inkColor() : text(st.labelColor));
+            g.drawString(labels[i], x + w + 3, y + fm.getAscent() / 2 - 1);
+        }
+        if (exponent[0] != 0) {
+            g.drawString("\u00d710" + RootLatex.superscript(Integer.toString(exponent[0])), x, frame.y - 4);
+        }
+        if (title != null && !title.isBlank()) {
+            g.setFont(RootFonts.font(st.titleFont, RootFonts.pixels(st.titleFont, st.titleSize, area.width, area.height)));
+            g.setColor(st.titleColor == null ? inkColor() : text(st.titleColor));
+            final AffineTransform saved = g.getTransform();
+            final int tx = Math.min(area.x + area.width - 4, x + w + 3 + fm.stringWidth("00000") + g.getFontMetrics().getAscent());
+            g.rotate(-Math.PI / 2, tx, frame.y + frame.height / 2.0);
+            final String t = RootLatex.plain(title);
+            g.drawString(t, tx - g.getFontMetrics().stringWidth(t) / 2, frame.y + frame.height / 2);
+            g.setTransform(saved);
         }
     }
 
@@ -1023,7 +1423,7 @@ final class RootPadPainter {
     /* Title, statistics, texts, legends                                   */
     /* ------------------------------------------------------------------ */
 
-    private static void title(Graphics2D g, Rectangle area, Pad pad, RootScene scene) {
+    private static void title(Graphics2D g, Rectangle area, Pad pad, View view, RootScene scene) {
         if (scene.optTitle == 0) return;
         for (Item i : pad.items) if (i instanceof Pave p && p.isTitle()) return;
         final Item main = pad.main();
@@ -1032,59 +1432,162 @@ final class RootPadPainter {
         g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(11, Math.min(20, area.height / 22))));
         g.setColor(inkColor());
         final FontMetrics fm = g.getFontMetrics();
-        g.drawString(t, area.x + (area.width - fm.stringWidth(t)) / 2, area.y + (int) (pad.tm * area.height * 0.5) + fm.getAscent() / 2);
+        final int x = area.x + (area.width - fm.stringWidth(t)) / 2;
+        final int y = area.y + (int) (pad.tm * area.height * 0.5) + fm.getAscent() / 2;
+        g.drawString(t, x, y);
+        zone(view, new Rectangle(x - 4, y - fm.getAscent() - 2, fm.stringWidth(t) + 8, fm.getHeight() + 4),
+            new TitleRef(pad, main), "TPaveText", 't');
     }
 
+    /** A number in a format of TPaveStats ("6.4g", "5.4g"), as ROOT writes it with Form("%" + format). */
+    static String format(String fmt, double v) {
+        try {
+            return String.format(Locale.ROOT, "%" + (fmt == null || fmt.isBlank() ? "6.4g" : fmt), v).strip();
+        } catch (java.util.IllegalFormatException bad) {
+            return String.format(Locale.ROOT, "%.4g", v);
+        }
+    }
+
+    /**
+     * The statistics box, as THistPainter fills it from gStyle's OptStat
+     * (the digits ksiourmen: kurtosis, skewness, integral, overflow,
+     * underflow, RMS, mean, entries, name; a 2 adds the error) and OptFit
+     * (pcev: probability, chi2/ndf, errors, values), each number in its
+     * format, with the shadow on the side of its option.
+     */
     private static void stats(Graphics2D g, Rectangle area, Pad pad, View view, RootScene scene) {
-        if (scene.optStat == 0 || view.statsOff) return;
+        if (scene.optStat == 0 && scene.optFit == 0 || view.statsOff) return;
         if (!(pad.main() instanceof Hist h) || !h.stats || h.isFunction() || h.dim == 3) return;
         final List<String[]> lines = new ArrayList<>();
         final int stat = scene.optStat;
+        final String f = scene.statFormat;
+        final double[] m = moments(h);
         if (stat % 10 != 0) lines.add(new String[]{h.name, ""});
         if (stat / 10 % 10 != 0) lines.add(new String[]{"Entries", compact(h.entries)});
-        if (stat / 100 % 10 != 0) {
-            lines.add(new String[]{h.dim == 2 ? "Mean x" : "Mean", String.format(Locale.ROOT, "%.4g", h.mean)});
-            if (h.dim == 2) lines.add(new String[]{"Mean y", String.format(Locale.ROOT, "%.4g", h.meanY)});
+        final int mean = stat / 100 % 10;
+        if (mean != 0) {
+            final double neff = Math.max(1, h.entries);
+            lines.add(new String[]{h.dim == 2 ? "Mean x" : "Mean", format(f, h.mean)
+                + (mean == 2 ? " \u00b1 " + format(f, h.std / Math.sqrt(neff)) : "")});
+            if (h.dim == 2) lines.add(new String[]{"Mean y", format(f, h.meanY)
+                + (mean == 2 ? " \u00b1 " + format(f, h.stdY / Math.sqrt(neff)) : "")});
         }
-        if (stat / 1000 % 10 != 0) {
-            lines.add(new String[]{h.dim == 2 ? "Std Dev x" : "Std Dev", String.format(Locale.ROOT, "%.4g", h.std)});
-            if (h.dim == 2) lines.add(new String[]{"Std Dev y", String.format(Locale.ROOT, "%.4g", h.stdY)});
+        final int rms = stat / 1000 % 10;
+        if (rms != 0) {
+            final double neff = Math.max(1, h.entries);
+            lines.add(new String[]{h.dim == 2 ? "Std Dev x" : "Std Dev", format(f, h.std)
+                + (rms == 2 ? " \u00b1 " + format(f, h.std / Math.sqrt(2 * neff)) : "")});
+            if (h.dim == 2) lines.add(new String[]{"Std Dev y", format(f, h.stdY)});
+        }
+        if (stat / 10000 % 10 != 0) lines.add(new String[]{"Underflow", format(f, h.underflow)});
+        if (stat / 100000 % 10 != 0) lines.add(new String[]{"Overflow", format(f, h.overflow)});
+        if (stat / 1000000 % 10 != 0) lines.add(new String[]{"Integral", format(f, m[0])});
+        if (stat / 10000000 % 10 != 0) lines.add(new String[]{"Skewness", format(f, m[1])});
+        if (stat / 100000000 % 10 != 0) lines.add(new String[]{"Kurtosis", format(f, m[2])});
+        final int fit = scene.optFit;
+        if (fit != 0 && !h.fitResults.isEmpty()) {
+            final String ff = scene.fitFormat;
+            for (String[] r : h.fitResults) {
+                final boolean head = r.length > 0 && r[0].startsWith("#");
+                if (head) {
+                    if (r[0].equals("#chi2") && fit / 10 % 10 != 0) {
+                        lines.add(new String[]{"\u03c7\u00b2 / ndf", format(ff, safe(r[1])) + " / " + r[2]});
+                    }
+                    if (r[0].equals("#prob") && fit / 1000 % 10 != 0) {
+                        lines.add(new String[]{"Prob", format(ff, safe(r[1]))});
+                    }
+                } else if (fit % 10 != 0) {
+                    lines.add(new String[]{r[0], format(ff, safe(r[1]))
+                        + (fit / 100 % 10 != 0 ? " \u00b1 " + format(ff, safe(r[2])) : "")});
+                }
+            }
         }
         if (lines.isEmpty()) return;
         final int x2 = area.x + (int) Math.round(0.98 * area.width);
-        final int w = (int) Math.round(0.20 * area.width);
         final int lineH = Math.max(12, Math.min(18, area.height / 26));
+        g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(9, lineH - 5)));
+        final FontMetrics fm = g.getFontMetrics();
+        int need = 0;
+        for (String[] l : lines) need = Math.max(need, fm.stringWidth(l[0]) + fm.stringWidth(l[1]) + 18);
+        final int w = Math.max((int) Math.round(0.20 * area.width), need);
         final int y1 = area.y + (int) Math.round(0.065 * area.height);
         final int h2 = lineH * lines.size() + 4;
+        final String opt = scene.statOption == null ? "br" : scene.statOption.toLowerCase(Locale.ROOT);
+        g.setColor(palette.getCanvasBoxBorder());
+        final int sx = opt.contains("l") ? -2 : 2;
+        final int sy = opt.contains("t") ? -2 : 2;
+        if (!opt.isBlank()) g.fillRect(x2 - w + sx, y1 + sy, w, h2);
         g.setColor(palette.getCanvasBoxFill());
         g.fillRect(x2 - w, y1, w, h2);
         g.setColor(palette.getCanvasBoxBorder());
         g.drawRect(x2 - w, y1, w, h2);
-        g.drawLine(x2 - w + 2, y1 + h2 + 1, x2 + 1, y1 + h2 + 1);
-        g.drawLine(x2 + 1, y1 + 2, x2 + 1, y1 + h2 + 1);
-        g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(9, lineH - 5)));
         g.setColor(inkOn(palette.getCanvasBoxFill()));
-        final FontMetrics fm = g.getFontMetrics();
         for (int k = 0; k < lines.size(); k++) {
             final String[] l = lines.get(k);
             final int y = y1 + 2 + lineH * k + (lineH + fm.getAscent()) / 2 - 2;
             if (l[1].isEmpty()) {
                 g.drawString(l[0], x2 - w + (w - fm.stringWidth(l[0])) / 2, y);
-                if (lines.size() > 1) g.drawLine(x2 - w, y1 + lineH + 2, x2, y1 + lineH + 2);
+                if (lines.size() > 1 && k == 0) g.drawLine(x2 - w, y1 + lineH + 2, x2, y1 + lineH + 2);
             } else {
                 g.drawString(l[0], x2 - w + 4, y);
                 g.drawString(l[1], x2 - 4 - fm.stringWidth(l[1]), y);
             }
         }
+        zone(view, new Rectangle(x2 - w, y1, w, h2), new StatsRef(pad, h), "TPaveStats", 's');
+    }
+
+    /** A number of a fit's row, NaN when ROOT sent none. */
+    private static double safe(String s) {
+        try {
+            return Double.parseDouble(s);
+        } catch (RuntimeException e) {
+            return Double.NaN;
+        }
+    }
+
+    /** Integral, skewness and kurtosis of a histogram's contents over its bins. */
+    static double[] moments(Hist h) {
+        double s = 0;
+        double s1 = 0;
+        for (int i = 0; i < h.v.length; i++) {
+            final double w = h.v[i];
+            s += w;
+            if (h.dim == 1) s1 += w * h.x.center(i);
+        }
+        if (h.dim != 1 || s <= 0) return new double[]{s, 0, 0};
+        final double mean = s1 / s;
+        double m2 = 0;
+        double m3 = 0;
+        double m4 = 0;
+        for (int i = 0; i < h.v.length; i++) {
+            final double d = h.x.center(i) - mean;
+            m2 += h.v[i] * d * d;
+            m3 += h.v[i] * d * d * d;
+            m4 += h.v[i] * d * d * d * d;
+        }
+        m2 /= s;
+        m3 /= s;
+        m4 /= s;
+        return new double[]{s, m2 > 0 ? m3 / Math.pow(m2, 1.5) : 0, m2 > 0 ? m4 / (m2 * m2) - 3 : 0};
     }
 
     private static void overlays(Graphics2D g, Rectangle area, Rectangle frame, Pad pad, View view) {
-        if (view.mode == Mode.EMPTY && pad.holdsSpace()) space(g, area, pad);
+        if (view.mode == Mode.EMPTY && pad.holdsSpace()) {
+            space(g, area, pad);
+            for (Item item : pad.items) {
+                if (item instanceof RootScene.Cloud3D c) zone(view, area, c, classOf(c, c.isLine() ? "TPolyLine3D" : "TPolyMarker3D"), 'o');
+                else if (item instanceof RootScene.Geometry geo) zone(view, area, geo, classOf(geo, "TGeoVolume"), 'o');
+            }
+        }
+        // Shapes are clipped to their pad, as gPad clips what it paints.
+        final Shape padClip = g.getClip();
+        g.clip(area);
         for (Item item : pad.items) {
             if (item instanceof RootScene.Shape s) shape(g, area, pad, view, s);
         }
+        g.setClip(padClip);
         for (Item item : pad.items) {
-            if (item instanceof Pave p) pave(g, area, p);
+            if (item instanceof Pave p) pave(g, area, view, p);
             else if (item instanceof Text t) text(g, area, pad, view, t);
             else if (item instanceof Segment s) segment(g, area, pad, view, s);
         }
@@ -1133,7 +1636,7 @@ final class RootPadPainter {
                 final java.awt.Shape e = Math.abs(extent) >= 360
                     ? new java.awt.geom.Ellipse2D.Double(c[0] - rx, c[1] - ry, 2 * rx, 2 * ry)
                     : new java.awt.geom.Arc2D.Double(c[0] - rx, c[1] - ry, 2 * rx, 2 * ry, s.phimin, extent,
-                        java.awt.geom.Arc2D.PIE);
+                        s.noEdges ? java.awt.geom.Arc2D.OPEN : java.awt.geom.Arc2D.PIE);
                 outline = s.theta == 0 ? e
                     : AffineTransform.getRotateInstance(-Math.toRadians(s.theta), c[0], c[1]).createTransformedShape(e);
             }
@@ -1147,9 +1650,22 @@ final class RootPadPainter {
                 if (s.opt().contains("F")) path.closePath();
                 outline = path;
             }
+            case "pm" -> {
+                // TPolyMarker: what ShowPeaks marks.
+                final java.awt.geom.Area hit = new java.awt.geom.Area();
+                for (int i = 0; i < Math.min(s.xs.length, s.ys.length); i++) {
+                    final double[] q = at(area, pad, view, s.ndc, s.xs[i], s.ys[i]);
+                    if (view.mode == Mode.ONE_D && s.markerStyle == 23) q[1] -= 9;
+                    marker(g, s.markerStyle, s.markerSize, ink(s.marker), q[0], q[1]);
+                    hit.add(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(q[0] - 7, q[1] - 7, 14, 14)));
+                }
+                zone(view, hit, s, classOf(s, "TPolyMarker"), 'o');
+                return;
+            }
             case "marker" -> {
                 final double[] q = at(area, pad, view, s.ndc, s.x1, s.y1);
                 marker(g, s.markerStyle, s.markerSize, ink(s.marker), q[0], q[1]);
+                zone(view, new java.awt.geom.Ellipse2D.Double(q[0] - 7, q[1] - 7, 14, 14), s, classOf(s, "TMarker"), 'o');
                 return;
             }
             case "arrow" -> {
@@ -1159,9 +1675,11 @@ final class RootPadPainter {
                 g.draw(new java.awt.geom.Line2D.Double(a[0], a[1], b[0], b[1]));
                 final double size = Math.max(6, s.arrowSize * Math.min(area.width, area.height));
                 final String o = s.arrowOption == null ? "|>" : s.arrowOption;
-                if (o.contains(">")) arrowHead(g, a, b, size, o.contains("|>"), fill == null ? line : fill);
-                if (o.contains("<")) arrowHead(g, b, a, size, o.contains("<|"), fill == null ? line : fill);
+                final double half = Math.toRadians(Math.max(5, Math.min(170, s.arrowAngle)) / 2);
+                if (o.contains(">")) arrowHead(g, a, b, size, o.contains("|>"), fill == null ? line : fill, half);
+                if (o.contains("<")) arrowHead(g, b, a, size, o.contains("<|"), fill == null ? line : fill, half);
                 g.setStroke(new BasicStroke(1f));
+                zone(view, near(new java.awt.geom.Line2D.Double(a[0], a[1], b[0], b[1])), s, classOf(s, "TArrow"), 'o');
                 return;
             }
             default -> {
@@ -1169,20 +1687,36 @@ final class RootPadPainter {
             }
         }
         if (fill != null && !"polyline".equals(s.kind) || fill != null && s.opt().contains("F")) {
-            g.setColor(fill);
+            g.setPaint(fillPaint(s, fill));
             g.fill(outline);
+        }
+        if ("box".equals(s.kind) && s.borderMode != 0 && s.borderSize > 0 && fill != null) {
+            // TWbox: the bevel of its border mode, raised (1) or sunken (-1).
+            final Rectangle r = outline.getBounds();
+            for (int k = 0; k < Math.min(s.borderSize, Math.max(1, Math.min(r.width, r.height) / 4)); k++) {
+                g.setColor(s.borderMode > 0 ? fill.brighter() : fill.darker().darker());
+                g.drawLine(r.x + k, r.y + k, r.x + r.width - k, r.y + k);
+                g.drawLine(r.x + k, r.y + k, r.x + k, r.y + r.height - k);
+                g.setColor(s.borderMode > 0 ? fill.darker().darker() : fill.brighter());
+                g.drawLine(r.x + k, r.y + r.height - k, r.x + r.width - k, r.y + r.height - k);
+                g.drawLine(r.x + r.width - k, r.y + k, r.x + r.width - k, r.y + r.height - k);
+            }
         }
         stroke(g, s, line);
         g.draw(outline);
         g.setStroke(new BasicStroke(1f));
+        final java.awt.geom.Area hit = new java.awt.geom.Area(near(outline));
+        if (fill != null) hit.add(new java.awt.geom.Area(outline));
+        zone(view, hit, s, classOf(s, "TObject"), 'o');
     }
 
-    private static void arrowHead(Graphics2D g, double[] from, double[] to, double size, boolean filled, Color color) {
+    private static void arrowHead(Graphics2D g, double[] from, double[] to, double size, boolean filled, Color color,
+                                  double half) {
         final double angle = Math.atan2(to[1] - from[1], to[0] - from[0]);
         final java.awt.geom.Path2D.Double head = new java.awt.geom.Path2D.Double();
         head.moveTo(to[0], to[1]);
-        head.lineTo(to[0] - size * Math.cos(angle - 0.4), to[1] - size * Math.sin(angle - 0.4));
-        head.lineTo(to[0] - size * Math.cos(angle + 0.4), to[1] - size * Math.sin(angle + 0.4));
+        head.lineTo(to[0] - size * Math.cos(angle - half), to[1] - size * Math.sin(angle - half));
+        head.lineTo(to[0] - size * Math.cos(angle + half), to[1] - size * Math.sin(angle + half));
         head.closePath();
         g.setColor(color);
         if (filled) g.fill(head);
@@ -1247,7 +1781,8 @@ final class RootPadPainter {
                 }
             } else if (i instanceof RootScene.Geometry geo) {
                 for (RootScene.GeoMesh m : geo.meshes) {
-                    g.setColor(translucent(m.color, 120));
+                    if (!m.visible) continue;
+                    g.setColor(translucent(m.color, (int) Math.round(120 * (1 - m.transparency / 100.0))));
                     int k = 0;
                     while (k < m.pol.length) {
                         final int n = m.pol[k];
@@ -1284,50 +1819,202 @@ final class RootPadPainter {
         return area.y + area.height - (int) Math.round(y * area.height);
     }
 
-    private static void pave(Graphics2D g, Rectangle area, Pave p) {
+    /**
+     * A TPave and what derives from it: its border and the shadow ROOT draws
+     * as a thicker border on the bottom right (in its shadow colour), round
+     * corners when a corner radius is set, the label of a TPaveText on its
+     * top edge, and its lines: a legend's in NColumns columns under its
+     * header, a pave text's in its font and alignment, inside its margin.
+     */
+    private static void pave(Graphics2D g, Rectangle area, View view, Pave p) {
         final int x1 = ndcX(area, Math.min(p.x1, p.x2));
         final int x2 = ndcX(area, Math.max(p.x1, p.x2));
         final int y1 = ndcY(area, Math.max(p.y1, p.y2));
         final int y2 = ndcY(area, Math.min(p.y1, p.y2));
         final int w = Math.max(1, x2 - x1);
         final int h = Math.max(1, y2 - y1);
+        // TPave::PaintPave rounds the corners only for the option "arc".
+        final boolean rounded = p.option != null && p.option.toLowerCase(Locale.ROOT).contains("arc");
+        final int arc = rounded ? (int) Math.round(Math.max(0, p.cornerRadius) * h * 2) : 0;
+        final java.awt.Shape box = arc > 0 ? new java.awt.geom.RoundRectangle2D.Double(x1, y1, w, h, arc, arc)
+            : new Rectangle(x1, y1, w, h);
+        final Color ground = p.fill == null ? palette.getCanvasBoxFill() : paper(p.fill);
+        if (p.border > 1) {
+            g.setColor(p.shadowColor != null ? ink(p.shadowColor) : p.line == null ? palette.getCanvasBoxBorder() : ink(p.line));
+            g.fill(AffineTransform.getTranslateInstance(p.border, p.border).createTransformedShape(box));
+        }
         if (p.hasFill() || p.fill != null) {
-            g.setColor(p.fill == null ? palette.getCanvasBoxFill() : paper(p.fill));
-            if (p.fillStyle != 0) g.fillRect(x1, y1, w, h);
+            g.setPaint(fillPaint(p, ground));
+            if (p.fillStyle != 0) g.fill(box);
         }
         if (p.border > 0) {
             g.setColor(p.line == null ? palette.getCanvasBoxBorder() : ink(p.line));
-            g.drawRect(x1, y1, w, h);
-            if (p.border > 1) {
-                g.fillRect(x1 + p.border, y2, w, p.border);
-                g.fillRect(x2, y1 + p.border, p.border, h);
-            }
+            g.draw(box);
         }
-        if (p.lines.isEmpty()) return;
-        final int lineH = h / p.lines.size();
-        final int fontSize = Math.max(8, Math.min(p.isTitle() ? 22 : 16, (int) (lineH * 0.7)));
-        g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, fontSize));
+        zone(view, box, p, classOf(p, p.isLegend() ? "TLegend" : p.isTitle() ? "TPaveText" : "TPaveText"), 'p');
+        if (p.label != null && !p.label.isBlank()) {
+            g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(8, h / 6)));
+            final FontMetrics lm = g.getFontMetrics();
+            final int lw = lm.stringWidth(p.label) + 8;
+            final int lx = x1 + (w - lw) / 2;
+            final int ly = y1 - lm.getHeight() / 2;
+            g.setColor(ground);
+            g.fillRect(lx, ly, lw, lm.getHeight());
+            g.setColor(p.line == null ? palette.getCanvasBoxBorder() : ink(p.line));
+            g.drawRect(lx, ly, lw, lm.getHeight());
+            g.setColor(inkOn(ground));
+            g.drawString(p.label, lx + 4, ly + lm.getAscent());
+        }
+        if (p.isLabel()) {
+            paveLabel(g, p, x1, y1, w, h, ground);
+            return;
+        }
+        if (!p.isLegend()) {
+            paveText(g, area, p, x1, y1, w, h, ground);
+            return;
+        }
+        final boolean header = p.header != null && !p.header.isBlank();
+        final int rows = (int) Math.ceil(p.lines.size() / (double) Math.max(1, p.nColumns)) + (header ? 1 : 0);
+        if (rows == 0) return;
+        final int lineH = h / rows;
+        // A size of the author's is ROOT's, though never taller than the legend itself.
+        final int fontSize = p.textSize > 0
+            ? Math.max(6, Math.min(Math.max(6, h), Math.round(RootFonts.pixels(p.textFont, p.textSize, area.width, area.height))))
+            : Math.max(8, Math.min(16, (int) (lineH * 0.7)));
+        g.setFont(RootFonts.font(p.textFont, fontSize));
         final FontMetrics fm = g.getFontMetrics();
+        int row = 0;
+        if (header) {
+            final String s = RootLatex.plain(p.header);
+            final int y = y1 + (lineH + fm.getAscent()) / 2 - 2;
+            final String ho = p.headerOption == null ? "" : p.headerOption.toUpperCase(Locale.ROOT);
+            final int hx = ho.contains("C") ? x1 + (w - fm.stringWidth(s)) / 2
+                : ho.contains("R") ? x2 - 4 - fm.stringWidth(s) : x1 + 6;
+            g.setColor(inkOn(ground));
+            g.drawString(s, hx, y);
+            row = 1;
+        }
+        final int cols = Math.max(1, p.nColumns);
+        final int colW = w / cols;
+        // The legend's margin is the share of each column given to the symbol, 0.25 by ROOT's default.
+        final double share = p.margin > 0 && p.margin < 1 && p.margin != 0.05 ? p.margin : 0.25;
+        final int sample = Math.max(12, Math.min((int) Math.round(colW * share), 60));
         for (int k = 0; k < p.lines.size(); k++) {
             final Entry e = p.lines.get(k);
-            final String s = RootLatex.plain(e.text);
-            final int y = y1 + lineH * k + (lineH + fm.getAscent()) / 2 - 2;
-            if (p.isLegend()) {
-                final int sample = Math.min(w / 4, 40);
-                legendSample(g, e, x1 + 6, y - fm.getAscent() / 2, sample - 8, Math.max(6, lineH - 6));
-                g.setColor(inkOn(p.fill == null ? palette.getCanvasBoxFill() : paper(p.fill)));
-                g.drawString(s, x1 + sample + 2, y);
-            } else {
-                g.setColor(text(e.color, p.fill == null ? palette.getCanvasBoxFill() : paper(p.fill)));
-                g.drawString(s, x1 + (w - fm.stringWidth(s)) / 2, y);
+            final int r = row + k / cols;
+            final int cx = x1 + (k % cols) * colW;
+            final int y = y1 + lineH * r + (lineH + fm.getAscent()) / 2 - 2;
+            legendSample(g, e, cx + 6, y - fm.getAscent() / 2, sample - 8, Math.max(6, lineH - 6));
+            g.setColor(inkOn(ground));
+            g.drawString(RootLatex.plain(e.text), cx + sample + 2, y);
+        }
+    }
+
+    /**
+     * TPaveLabel::Paint: the size is a fraction of the label's own height, not
+     * of the pad's; 0 or 0.99 asks for the text that fills that height,
+     * narrowed to 99 % of the width. A precision 3 font gives pixels. Read as
+     * a fraction of the pad, 0.99 made letters as tall as the whole canvas.
+     */
+    private static void paveLabel(Graphics2D g, Pave p, int x1, int y1, int w, int h, Color ground) {
+        if (p.lines.isEmpty()) return;
+        final Entry e = p.lines.get(0);
+        final String s = RootLatex.plain(e.text);
+        if (s.isBlank()) return;
+        float size;
+        if (p.textFont % 10 == 3) {
+            size = RootFonts.pixels(p.textFont, p.textSize, w, h);
+        } else {
+            final boolean fit = p.textSize == 0 || Math.abs(p.textSize - 0.99) < 0.001;
+            size = (float) ((p.textSize == 0 ? 0.99 : p.textSize) * h);
+            if (fit) {
+                // ROOT settles on the height the glyphs take at that size, then narrows to the width.
+                final double glyphs = extent(g, RootFonts.font(p.textFont, size), s).getHeight();
+                if (glyphs > 0) size = (float) glyphs;
+                for (int k = 0; k < 4; k++) {
+                    final double width = extent(g, RootFonts.font(p.textFont, size), s).getMaxX();
+                    if (width <= 0.99 * w) break;
+                    size *= (float) (0.99 * w / width);
+                }
             }
+        }
+        g.setFont(RootFonts.font(p.textFont, Math.max(6f, Math.min(size, h))));
+        final FontMetrics fm = g.getFontMetrics();
+        final int horizontal = p.textAlign / 10;
+        final int vertical = p.textAlign % 10;
+        final int sw = fm.stringWidth(s);
+        final double x = horizontal == 1 ? x1 + 0.02 * w : horizontal == 3 ? x1 + 0.98 * w - sw : x1 + (w - sw) / 2.0;
+        final double y = vertical == 1 ? y1 + 0.98 * h - fm.getDescent()
+            : vertical == 3 ? y1 + 0.02 * h + fm.getAscent() : y1 + (h + fm.getAscent() - fm.getDescent()) / 2.0;
+        g.setColor(text(e.color, ground));
+        g.drawString(s, (float) x, (float) y);
+    }
+
+    /** What a text's glyphs cover, from its origin: TLatex::GetTextExtent's box, slanted letters included. */
+    private static java.awt.geom.Rectangle2D extent(Graphics2D g, Font font, String s) {
+        final java.awt.geom.Rectangle2D ink = font.createGlyphVector(g.getFontRenderContext(), s).getVisualBounds();
+        final double advance = g.getFontMetrics(font).stringWidth(s);
+        return new java.awt.geom.Rectangle2D.Double(0, ink.getY(), Math.max(advance, ink.getMaxX()), ink.getHeight());
+    }
+
+    /**
+     * TPaveText::PaintPrimitives: every line, separators too, has an equal
+     * share of the height; the texts take theirs in turn from the top, and a
+     * separator crosses the pave at the height of the text before it. Without
+     * a size of its own the text is 0.85 of a share, narrowed until the
+     * longest line fits 92 % of the width; a line may carry its own font,
+     * size and alignment.
+     */
+    private static void paveText(Graphics2D g, Rectangle area, Pave p, int x1, int y1, int w, int h, Color ground) {
+        final int n = p.lines.size();
+        if (n == 0) return;
+        final double share = h / (double) n;
+        float size;
+        if (p.textSize > 0) {
+            size = RootFonts.pixels(p.textFont, p.textSize, area.width, area.height);
+        } else {
+            size = (float) (0.85 * share / area.height * Math.min(area.width, area.height));
+            final FontMetrics auto = g.getFontMetrics(RootFonts.font(p.textFont, size));
+            double longest = 0;
+            for (Entry e : p.lines) {
+                if (!e.separator && e.size == 0) longest = Math.max(longest, auto.stringWidth(RootLatex.plain(e.text)));
+            }
+            if (longest > 0.92 * w) size *= (float) (0.92 * w / longest);
+        }
+        final int margin = (int) Math.round(Math.max(0, p.margin) * w);
+        double center = y1 - share / 2;
+        for (Entry e : p.lines) {
+            if (e.separator) {
+                final int ly = (int) Math.round(Math.max(y1, center));
+                g.setColor(text(null, ground));
+                g.drawLine(x1, ly, x1 + w, ly);
+                continue;
+            }
+            center += share;
+            final int font = e.font > 0 ? e.font : p.textFont;
+            final float px = e.size > 0 ? RootFonts.pixels(font, e.size, area.width, area.height) : size;
+            g.setFont(RootFonts.font(font, Math.max(6f, Math.min(px, h))));
+            final FontMetrics em = g.getFontMetrics();
+            final String s = RootLatex.plain(e.text);
+            final int align = e.align > 0 ? e.align : p.textAlign;
+            final int horizontal = align / 10;
+            final int vertical = align % 10;
+            final int sw = em.stringWidth(s);
+            final int x = horizontal == 1 ? x1 + margin : horizontal == 3 ? x1 + w - margin - sw : x1 + (w - sw) / 2;
+            final double y = vertical == 1 ? center : vertical == 3 ? center + em.getAscent()
+                : center + (em.getAscent() - em.getDescent()) / 2.0;
+            g.setColor(text(e.color, ground));
+            g.drawString(s, x, (float) y);
         }
     }
 
     private static void legendSample(Graphics2D g, Entry e, int x, int yMid, int w, int h) {
         final String o = e.option == null ? "" : e.option.toLowerCase(Locale.ROOT);
         if (o.contains("f") && e.fill != null && e.fillStyle > 0) {
-            g.setColor(e.fill);
+            final Item probe = new RootScene.Other();
+            probe.fill = e.fill;
+            probe.fillStyle = e.fillStyle;
+            g.setPaint(fillPaint(probe, paper(e.fill)));
             g.fillRect(x, yMid - h / 2, w, h);
         }
         if (o.contains("l") || o.contains("e")) {
@@ -1352,8 +2039,9 @@ final class RootPadPainter {
             y = (int) Math.round(q[1]);
         }
         final String s = RootLatex.plain(t.text);
-        g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(8, (int) Math.round(t.size * area.height * 0.8))));
-        g.setColor(text(t.color));
+        g.setFont(RootFonts.font(t.font, Math.max(8f,
+            RootFonts.pixels(t.font, t.size, area.width, area.height) * (t.font % 10 == 3 ? 1f : 0.8f))));
+        g.setColor(text(t.color, groundUnder(area, pad, view, t, x, y)));
         final FontMetrics fm = g.getFontMetrics();
         final int horizontal = t.align / 10;
         final int vertical = t.align % 10;
@@ -1362,37 +2050,79 @@ final class RootPadPainter {
         final AffineTransform saved = g.getTransform();
         if (t.angle != 0) g.rotate(-Math.toRadians(t.angle), x, y);
         g.drawString(s, x + dx, y + dy);
+        final java.awt.Shape where = g.getTransform().createTransformedShape(
+            new Rectangle(x + dx - 2, y + dy - fm.getAscent() - 2, fm.stringWidth(s) + 4, fm.getHeight() + 4));
         g.setTransform(saved);
+        try {
+            zone(view, saved.createInverse().createTransformedShape(where), t, classOf(t, "TLatex"), 'o');
+        } catch (java.awt.geom.NoninvertibleTransformException e) {
+            zone(view, where, t, classOf(t, "TLatex"), 'o');
+        }
+    }
+
+    /**
+     * The ground under a point of the pad: the fill of the last filled pave or
+     * box drawn there before the item, else the pad's. A diagram's black text
+     * sits on its light boxes, where the theme's light ink would not read.
+     */
+    private static Color groundUnder(Rectangle area, Pad pad, View view, Item upTo, double x, double y) {
+        Color under = ground;
+        for (Item i : pad.items) {
+            if (i == upTo) break;
+            java.awt.geom.Rectangle2D r = null;
+            if (i instanceof Pave p && p.fillStyle != 0 && !p.isLegend()) {
+                r = new java.awt.geom.Rectangle2D.Double(ndcX(area, Math.min(p.x1, p.x2)), ndcY(area, Math.max(p.y1, p.y2)),
+                    Math.abs(ndcX(area, p.x2) - ndcX(area, p.x1)), Math.abs(ndcY(area, p.y2) - ndcY(area, p.y1)));
+                if (r.contains(x, y)) under = p.fill == null ? palette.getCanvasBoxFill() : paper(p.fill);
+            } else if (i instanceof RootScene.Shape b && "box".equals(b.kind) && b.hasFill()) {
+                final double[] a = at(area, pad, view, b.ndc, b.x1, b.y1);
+                final double[] c = at(area, pad, view, b.ndc, b.x2, b.y2);
+                r = new java.awt.geom.Rectangle2D.Double(Math.min(a[0], c[0]), Math.min(a[1], c[1]),
+                    Math.abs(c[0] - a[0]), Math.abs(c[1] - a[1]));
+                if (r.contains(x, y)) under = paper(b.fill);
+            }
+        }
+        return under;
     }
 
     private static void segment(Graphics2D g, Rectangle area, Pad pad, View view, Segment s) {
-        g.setColor(ink(s.line));
-        g.setStroke(new BasicStroke((float) Math.max(1, s.lineWidth)));
+        stroke(g, s, ink(s.line));
+        final java.awt.geom.Line2D line;
         if (!s.ndc && view.mode == Mode.EMPTY && pad.hasUserRange()) {
             final double[] a = at(area, pad, view, false, s.x1, s.y1);
             final double[] b = at(area, pad, view, false, s.x2, s.y2);
-            g.draw(new java.awt.geom.Line2D.Double(a[0], a[1], b[0], b[1]));
+            line = new java.awt.geom.Line2D.Double(a[0], a[1], b[0], b[1]);
         } else if (s.ndc || view.mode != Mode.ONE_D && view.mode != Mode.FLAT) {
-            g.drawLine(ndcX(area, s.x1), ndcY(area, s.y1), ndcX(area, s.x2), ndcY(area, s.y2));
+            line = new java.awt.geom.Line2D.Double(ndcX(area, s.x1), ndcY(area, s.y1), ndcX(area, s.x2), ndcY(area, s.y2));
         } else {
-            g.drawLine(px(view, s.x1), py(view, s.y1), px(view, s.x2), py(view, s.y2));
+            line = new java.awt.geom.Line2D.Double(px(view, s.x1), py(view, s.y1), px(view, s.x2), py(view, s.y2));
         }
+        g.draw(line);
         g.setStroke(new BasicStroke(1f));
+        zone(view, near(line), s, classOf(s, "TLine"), 'o');
     }
 
     /* ------------------------------------------------------------------ */
     /* Strokes, fills, markers                                             */
     /* ------------------------------------------------------------------ */
 
+    /** ROOT's line styles 1 to 10, as gStyle's default line style strings give them, in pixels. */
+    static final float[][] LINE_STYLES = {
+        null, null, {12, 12}, {3, 12}, {12, 15, 3, 15}, {20, 12, 3, 12, 3, 12}, {20, 12, 3, 12, 3, 12, 3, 12},
+        {20, 20}, {20, 12, 3, 12, 3, 12}, {60, 20}, {60, 30, 3, 30}};
+
+    static BasicStroke lineStroke(int style, double width) {
+        final float w = (float) Math.max(1, width);
+        final float[] dash = style >= 2 && style < LINE_STYLES.length ? LINE_STYLES[style] : null;
+        if (dash == null) return new BasicStroke(w, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND);
+        final float[] scaled = new float[dash.length];
+        for (int i = 0; i < dash.length; i++) scaled[i] = dash[i] * 0.5f * Math.max(1, w * 0.75f);
+        return new BasicStroke(w, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, scaled, 0f);
+    }
+
     static void stroke(Graphics2D g, Item item, Color color) {
         g.setColor(color);
-        final float w = (float) Math.max(1, item.lineWidth);
-        g.setStroke(switch (item.lineStyle) {
-            case 2 -> new BasicStroke(w, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, new float[]{8f, 5f}, 0f);
-            case 3 -> new BasicStroke(w, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, new float[]{2f, 4f}, 0f);
-            case 4 -> new BasicStroke(w, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, new float[]{8f, 4f, 2f, 4f}, 0f);
-            default -> new BasicStroke(w, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND);
-        });
+        g.setStroke(lineStroke(item.lineStyle, item.lineWidth));
     }
 
     /** A fill style of ROOT: 1001 is solid, the 3000s are hatches, shown here as a lighter wash. */
@@ -1401,6 +2131,87 @@ final class RootPadPainter {
         if (item.fillStyle >= 3000 && item.fillStyle < 4000) return translucent(c, 110);
         if (item.fillStyle > 4000 && item.fillStyle < 4100) return translucent(c, (int) (255 * (item.fillStyle - 4000) / 100.0));
         return c;
+    }
+
+    /**
+     * A fill as ROOT paints it: solid (1001), hollow (0), a hatch of the 3000s,
+     * or 4000 to 4100 for a transparency of 0 to 100 percent. The hatches are
+     * those of TAttFill: 3001 to 3025 its predefined patterns, 3ijk (3100 and
+     * over) lines i half-millimetres apart at the angles j and k.
+     */
+    static java.awt.Paint fillPaint(Item item, Color base) {
+        final Color c = base == null ? fillColor(item) : base;
+        final int fs = item.fillStyle;
+        if (fs > 4000 && fs <= 4100) return translucent(c, (int) Math.round(255 * (fs - 4000) / 100.0));
+        if (fs < 3000 || fs >= 4000) return c;
+        return hatch(fs, c);
+    }
+
+    static java.awt.Paint fillPaint(Item item) {
+        return fillPaint(item, null);
+    }
+
+    private static final java.util.Map<String, java.awt.TexturePaint> HATCHES = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static java.awt.TexturePaint hatch(int style, Color c) {
+        return HATCHES.computeIfAbsent(style + "/" + c.getRGB(), k -> {
+            final int size = 16;
+            final java.awt.image.BufferedImage tile = new java.awt.image.BufferedImage(size, size,
+                java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            final Graphics2D t = tile.createGraphics();
+            t.setColor(c);
+            t.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+            final int i;
+            final int j;
+            final int kk;
+            if (style >= 3100) {
+                i = style / 100 % 10;
+                j = style / 10 % 10;
+                kk = style % 10;
+            } else {
+                // The predefined patterns, as near as lines and dots make them.
+                final int[][] pre = {{0, 0, 0}, {-1, 0, 0}, {-2, 0, 0}, {-3, 0, 0}, {2, 4, 5}, {2, 5, 4}, {2, 9, 5},
+                    {2, 0, 5}, {1, 4, 4}, {-4, 0, 0}, {-5, 0, 0}, {-6, 0, 0}, {-7, 0, 0}, {2, 4, 4}, {-8, 0, 0},
+                    {-9, 0, 0}, {3, 4, 4}, {1, 4, 5}, {1, 5, 4}, {-10, 0, 0}, {-11, 0, 0}, {-12, 0, 0}, {-13, 0, 0},
+                    {-14, 0, 0}, {-15, 0, 0}, {-16, 0, 0}};
+                final int[] q = pre[Math.max(0, Math.min(pre.length - 1, style - 3000))];
+                i = q[0];
+                j = q[1];
+                kk = q[2];
+            }
+            if (i < 0) {
+                // Dots, denser for the low numbers, and the decorative patterns as grids of dots.
+                final int step = switch (-i) {
+                    case 1 -> 2;
+                    case 2 -> 4;
+                    case 3 -> 8;
+                    default -> 4 + (-i % 4);
+                };
+                for (int y = 0; y < size; y += step) {
+                    for (int x = (y / step % 2) * step / 2; x < size; x += step) t.fillRect(x, y, 1, 1);
+                }
+            } else {
+                final int gap = Math.max(3, i * 2 + 2);
+                t.setStroke(new BasicStroke(1f));
+                for (int set = 0; set < 2; set++) {
+                    final int code = set == 0 ? j : kk;
+                    if (code == 5) continue;
+                    final double deg = set == 0 ? new double[]{0, 10, 20, 30, 45, 0, 60, 70, 80, 90}[code]
+                        : new double[]{180, 170, 160, 150, 135, 0, 120, 110, 100, 90}[code];
+                    final double rad = Math.toRadians(deg);
+                    final double dx = Math.cos(rad);
+                    final double dy = -Math.sin(rad);
+                    for (int off = -size * 3; off < size * 3; off += gap) {
+                        final double nx = -dy * off;
+                        final double ny = dx * off;
+                        t.draw(new Line2D.Double(size / 2.0 + nx - dx * size * 2, size / 2.0 + ny - dy * size * 2,
+                            size / 2.0 + nx + dx * size * 2, size / 2.0 + ny + dy * size * 2));
+                    }
+                }
+            }
+            t.dispose();
+            return new java.awt.TexturePaint(tile, new Rectangle(0, 0, size, size));
+        });
     }
 
     static Color translucent(Color c, int alpha) {

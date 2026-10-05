@@ -281,5 +281,28 @@ public final class ThemePaletteLight implements ThemePalette {
     @Override public Color getSpace3DLabel()        { return SPACE3D_LABEL; }
     @Override public Color getSpace3DTitle()        { return SPACE3D_TITLE; }
 
+    // Python environment manager
+    private static final Color PY_OK           = new Color(30, 130, 60);
+    private static final Color PY_PATCH        = new Color(30, 100, 180);
+    private static final Color PY_MINOR        = new Color(176, 120, 0);
+    private static final Color PY_MAJOR        = new Color(200, 90, 20);
+    private static final Color PY_DANGER       = new Color(196, 40, 40);
+    private static final Color PY_INFO         = new Color(96, 104, 120);
+    private static final Color PY_BADGE_TEXT   = new Color(255, 255, 255);
+    private static final Color PY_CHIP         = new Color(232, 235, 240);
+    private static final Color PY_CHIP_ON      = new Color(53, 116, 220);
+    private static final Color PY_ROW_STRIPE   = new Color(246, 247, 249);
+
+    @Override public Color getPyOk()           { return PY_OK; }
+    @Override public Color getPyPatch()        { return PY_PATCH; }
+    @Override public Color getPyMinor()        { return PY_MINOR; }
+    @Override public Color getPyMajor()        { return PY_MAJOR; }
+    @Override public Color getPyDanger()       { return PY_DANGER; }
+    @Override public Color getPyInfo()         { return PY_INFO; }
+    @Override public Color getPyBadgeText()    { return PY_BADGE_TEXT; }
+    @Override public Color getPyChip()         { return PY_CHIP; }
+    @Override public Color getPyChipSelected() { return PY_CHIP_ON; }
+    @Override public Color getPyRowStripe()    { return PY_ROW_STRIPE; }
+
 
 }

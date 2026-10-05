@@ -1227,7 +1227,7 @@ public final class FastJetCommands {
             }
             AppLogger.raw((where.isEmpty() ? "  ok    " : "  FAIL  ")
                 + "particles at phi = 0 with R = 0.25: the lazy tilings agree with N2Plain"
-                + (where.isEmpty() ? " (FastJet 3.5.2 does not)" : " except" + where));
+                + (where.isEmpty() ? " (FastJet " + FastJet.FASTJET_VERSION + " does not)" : " except" + where));
             if (!where.isEmpty()) failures++;
         }
         // double and double-double take the same decisions on an ordinary event

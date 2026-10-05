@@ -18,7 +18,7 @@ endif()
 # TTreeCache (libTree), and TTreeFormula for the selection cut, which lives in
 # libTreePlayer rather than libTree. Without both, the build gets all the way to
 # the link step and then fails on undefined symbols.
-find_package(ROOT REQUIRED COMPONENTS Core RIO Net Hist Tree TreePlayer ROOTNTuple)
+find_package(ROOT REQUIRED COMPONENTS Core RIO Net MathCore Hist Tree TreePlayer ROOTNTuple)
 include(${ROOT_USE_FILE})
 
 find_package(Threads REQUIRED)
