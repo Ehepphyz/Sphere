@@ -87,6 +87,15 @@ public class ContextMenuBuilder {
             editItem.addActionListener(e -> handleEdit(sourceFile, editorFrame));
             menu.add(editItem);
 
+            if (com.sphere.components.rootlab.RootLabPanel.exists()) {
+                // The ROOT Lab reads any CERN data file, and every one in a folder.
+                JMenuItem lab = createModernMenuItem(sourceFile.isDirectory()
+                        ? "Open Folder in ROOT Lab" : "Open in ROOT Lab");
+                lab.addActionListener(e -> com.sphere.components.rootlab.RootLabPanel.instance()
+                        .open(sourceFile.toPath()));
+                menu.add(lab);
+            }
+
             JMenuItem duplicate = createModernMenuItem("Duplicate");
             duplicate.addActionListener(e -> duplicateFile(sourceFile, explorer));
             menu.add(duplicate);
@@ -395,15 +404,73 @@ public class ContextMenuBuilder {
         explorer.refreshNode(file.getParentFile());
     }
 
-    private static boolean deleteDirectoryRecursive(File dir) {
-        File[] files = dir.listFiles();
-        if (files != null) {
-            for (File f : files) {
-                if (f.isDirectory()) deleteDirectoryRecursive(f);
-                else f.delete();
+    /**
+     * Deletes a folder and what it holds, without ever going through a link.
+     *
+     * File.isDirectory() follows symbolic links and Windows junctions, so the
+     * previous walk went into a linked folder and emptied it: deleting a project
+     * that held a link to a data area deleted the data area. A link, or a
+     * reparse point that is not a plain folder, is now removed as the link it
+     * is, and what it points to is left alone.
+     */
+    public static boolean deleteDirectoryRecursive(File dir) {
+        final Path root = dir.toPath().toAbsolutePath().normalize();
+        try {
+            if (pointsElsewhere(root)) {
+                Files.delete(root);                             // the link itself, not its target
+                return true;
             }
+            Files.walkFileTree(root, java.util.EnumSet.noneOf(FileVisitOption.class), Integer.MAX_VALUE,
+                new SimpleFileVisitor<Path>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path d, java.nio.file.attribute.BasicFileAttributes attrs)
+                            throws IOException {
+                        if (!d.equals(root) && (attrs.isSymbolicLink() || pointsElsewhere(d))) {
+                            Files.delete(d);                    // the junction itself, not its target
+                            return FileVisitResult.SKIP_SUBTREE;
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path f, java.nio.file.attribute.BasicFileAttributes attrs)
+                            throws IOException {
+                        Files.delete(f);
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult postVisitDirectory(Path d, IOException failed) throws IOException {
+                        if (failed != null) {
+                            throw failed;
+                        }
+                        Files.delete(d);
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+            return true;
+        } catch (IOException couldNot) {
+            return false;
         }
-        return dir.delete();
+    }
+
+    /**
+     * True when a folder entry leads somewhere else than where it sits: a
+     * symbolic link, or a Windows junction (which Java does not report as a
+     * link). Its real path is then not its parent's real path plus its name.
+     */
+    private static boolean pointsElsewhere(Path entry) throws IOException {
+        if (Files.isSymbolicLink(entry)) {
+            return true;
+        }
+        final Path parent = entry.getParent();
+        if (parent == null || entry.getFileName() == null) {
+            return false;
+        }
+        final String expected = parent.toRealPath().resolve(entry.getFileName().toString()).toString();
+        final String real = entry.toRealPath().toString();
+        final boolean windows = File.separatorChar == '\\';
+        return windows ? !real.equalsIgnoreCase(expected) : !real.equals(expected);
     }
 
     private static void performCopyMove(File source, File targetDir, boolean isMove, FileExplorer explorer) {
@@ -419,6 +486,19 @@ public class ContextMenuBuilder {
 
         Path sourcePath = source.toPath();
         Path targetPath = targetDir.toPath().resolve(source.getName());
+
+        // Moving or copying onto an existing entry replaced it without a word.
+        if (Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS) && !targetPath.equals(sourcePath)) {
+            int answer = JOptionPane.showConfirmDialog(
+                    null,
+                    targetDir.getName() + " already holds " + source.getName() + ".\nReplace it?",
+                    isMove ? "Confirm Move" : "Confirm Copy",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (answer != JOptionPane.YES_OPTION) {
+                return;
+            }
+        }
 
         try {
             if (isMove) {

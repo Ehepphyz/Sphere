@@ -1,0 +1,69 @@
+# Limits, fixed and constant parameters, FIX, RELEASE, RESTORE, MINOS subsets
+new 6 gauss
+parm 0 mean 0 0.2 -1 2
+parm 1 sigma 1.5 0.1 0.2 5
+parm 2 area 10 1 0 50
+parm 3 bkg 0.3 0.1 0 0
+parm 4 dummy 7 0 0 0
+cmd SET PRINT 1
+cmd MIGRAD
+dump migrad
+cmd FIX 4 5 9 0 -2
+cmd FIX 4
+nums
+cmd MIGRAD
+cmd FIX 1 2
+nums
+cmd RESTORE 1
+nums
+cmd RESTORE 7
+cmd RESTORE
+nums
+cmd RELEASE 4
+cmd RELEASE 2
+cmd FIX
+cmd RELEASE
+cmd SET LIM 1
+cmd SET LIM 4 -1 3
+cmd SET LIM 4 3 -1
+cmd SET LIM 4 2 2
+cmd SET LIM 5 0 1
+cmd SET LIM 60 0 1
+cmd SET LIM 0 -10 10
+cmd SHOW LIM
+cmd SET LIM
+cmd SHOW LIM
+cmd SET LIM 0 -10 10
+cmd FIX 2
+cmd SET LIM 2 0.5 3
+cmd SET LIM 2
+cmd SET LIM 2 0.5 3
+cmd RELEASE 2
+cmd SHOW LIM
+cmd SET LIM 1 -0.5 0.8
+cmd MIGRAD
+cmd MINOS 1000 1 3
+cmd MINOS 1000 9 5 2
+dump minos
+cmd SHOW MIN
+cmd SET ERR 4
+cmd MINOS
+dump minos up4
+cmd SET ERR 1
+cmd HESSE
+cmd SET PAR 1 0.79999
+cmd MIGRAD
+cmd MINOS 200 1
+dump at limit
+cmd SET PAR 3 60
+cmd SET PAR 3 -5
+cmd SHOW PAR
+cmd SET LIM 3 0 1e9
+cmd MIGRAD 300
+dump far limits
+fix 0
+release 0
+release 0
+fix 4
+errdef 1
+counts

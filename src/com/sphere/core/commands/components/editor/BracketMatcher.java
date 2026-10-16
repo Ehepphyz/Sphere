@@ -5,10 +5,11 @@ import javax.swing.event.CaretListener;
 import javax.swing.text.BadLocationException;
 
 /**
- * Marks the bracket facing the caret and its partner, skipping pairs that sit
- * inside a string or a comment.
+ * Marks the bracket facing the caret and its partner. Pairs come from the
+ * highlighter's scan, which knows strings and comments; between a keystroke
+ * and that scan a plain scan of the text stands in.
  */
-public final class BracketMatcher implements CaretListener {
+public final class BracketMatcher implements CaretListener, SyntaxHighlighter.Listener {
 
     private static final String OPENERS = "([{";
     private static final String CLOSERS = ")]}";
@@ -19,16 +20,40 @@ public final class BracketMatcher implements CaretListener {
     public BracketMatcher(CodeTextPane pane) {
         this.pane = pane;
         pane.addCaretListener(this);
+        if (pane.getSyntax() != null) {
+            pane.getSyntax().addListener(this);
+        }
     }
 
     @Override
     public void caretUpdate(CaretEvent e) {
-        int dot = e.getDot();
+        update(e.getDot());
+    }
+
+    @Override
+    public void highlighted(SyntaxHighlighter.Snapshot snapshot) {
+        update(pane.getCaretPosition());
+    }
+
+    private void update(int dot) {
+        SyntaxHighlighter h = pane.getSyntax();
+        if (h != null && h.isCurrent()) {
+            SyntaxHighlighter.Snapshot s = h.snapshot();
+            int idx = dot > 0 ? s.bracketAt(dot - 1) : -1;
+            if (idx < 0) {
+                idx = s.bracketAt(dot);
+            }
+            if (idx >= 0 && s.bracketPartner[idx] >= 0) {
+                pane.setBracketPair(s.bracketPos[idx], s.bracketPos[s.bracketPartner[idx]]);
+            } else {
+                pane.setBracketPair(-1, -1);
+            }
+            return;
+        }
         try {
             String text = pane.getDocument().getText(0, pane.getDocument().getLength());
-
             int index = -1;
-            if (dot > 0 && isBracket(text.charAt(dot - 1))) {
+            if (dot > 0 && dot - 1 < text.length() && isBracket(text.charAt(dot - 1))) {
                 index = dot - 1;
             } else if (dot < text.length() && isBracket(text.charAt(dot))) {
                 index = dot;
@@ -37,7 +62,6 @@ public final class BracketMatcher implements CaretListener {
                 pane.setBracketPair(-1, -1);
                 return;
             }
-
             int partner = findPartner(text, index);
             pane.setBracketPair(partner < 0 ? -1 : index, partner);
         } catch (BadLocationException ex) {

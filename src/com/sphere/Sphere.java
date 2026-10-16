@@ -48,7 +48,7 @@ public class Sphere extends JFrame {
      */
 
     /** Sphere itself (:version). */
-    public static final String VERSION = "2026.1.0.0";
+    public static final String VERSION = "v2026.1.9.0";
 
     // ---- FastJet, SISCone and fjcontrib, ported to Java ----------------------------
     /** The FastJet release the Java port follows. */
@@ -212,6 +212,8 @@ public class Sphere extends JFrame {
     private final SettingsManager settings = new SettingsManager();
     /** Kept so the shutdown hook can stop the shells it started. */
     private TerminalManager terminals;
+    /** Runs what is typed at the prompt in the order it was typed. */
+    private final com.sphere.core.CommandSequencer commandSequencer = new com.sphere.core.CommandSequencer();
 
     public Sphere() {
         this(new CommandRouter());
@@ -697,6 +699,12 @@ public class Sphere extends JFrame {
         // Pass the valid shared editor frame reference to resolve the runtime missing context error
         topTabs.addTab("File Explorer", new JScrollPane(new FileExplorer(this.editorFrame)));
 
+        // CERN data files opened and checked, and ROOT's test programs run in Java.
+        final com.sphere.components.rootlab.RootLabPanel rootLab =
+            com.sphere.components.rootlab.RootLabPanel.instance();
+        topTabs.addTab("ROOT Lab", rootLab);
+        rootLab.setReveal(() -> topTabs.setSelectedComponent(rootLab));
+
         // --- Bottom Tabs (Workspace, Performance Metrics, Terminal) ---
         JTabbedPane bottomTabs = new JTabbedPane();
         bottomTabs.setUI(new SPTabbedPaneUI());
@@ -1061,8 +1069,8 @@ public class Sphere extends JFrame {
 
             commandInputField.setText("");
 
-            // Synchronous background context streaming path avoids UI thread freezes
-            CompletableFuture.runAsync(() -> {
+            // Off the event thread, and in the order typed (see CommandSequencer).
+            commandSequencer.submit(input, () -> {
                 try {
                     router.processInput(input);
                 } catch (Exception ex) {

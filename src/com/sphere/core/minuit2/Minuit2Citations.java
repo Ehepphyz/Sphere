@@ -69,12 +69,7 @@ public final class Minuit2Citations {
     /** The text of the Citation Minuit2 window. */
     public static String text() {
         return versionLine() + "\n"
-            + "Java translation of Minuit2 (M. Winkler, F. James, L. Moneta, A. Zsenei; ROOT, https://root.cern),\n"
-            + "operation for operation: its results are bit for bit those of the C++ compiled with g++ on Windows (MinGW)\n"
-            + "and on Linux, as ':minuit2 validate' checks against the C++ outputs kept in the jar.\n"
             + "Distributed, as ROOT, under the GNU LGPL v2.1 or later.\n"
-            + "C library functions: " + NativeMath.describe() + "; long double: "
-            + MnParameterTransformation.longDouble() + ".\n\n"
             + "Please cite, if you use it for scientific work:\n  " + MINUIT.text() + "\n  " + MINUIT2.text() + "\n  "
             + ROOT.text() + "\n\nBibTeX:\n\n" + bibtex();
     }

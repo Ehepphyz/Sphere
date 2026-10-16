@@ -338,87 +338,13 @@ public class GenericEnvManagerDialog extends JDialog {
                 // =============================================================
                 if (backend == EnvBackend.CPP || backend == EnvBackend.C) {
                     publish("\n----------------------------------------------------------------");
-                    publish("[INFO] RUNNING END-TO-END TOOLCHAIN & LSP INTEGRATION TESTS");
+                    publish("[INFO] RUNNING END-TO-END TOOLCHAIN TEST (compile, link, run)");
                     publish("----------------------------------------------------------------");
-
-                    publish("[INFO] Initializing Clangd Language Server stream handshake...");
-
-                    try {
-                        Thread.sleep(400);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        publish("[ERROR] Handshake sequence interrupted during LSP warmup.");
-                        return "ERROR";
-                    }
-
-                    publish("[SUCCESS] Clangd server safely integrated. Real-time C++ diagnostics enabled.");
-                    publish("[INFO] Clangd LSP IntelliSense engine successfully initialized.");
-
-                    publish("\n[INFO] Inline Compilation Context Dispatch:");
-                    publish("[PROMPT] Streaming payload string directly into compiler standard input...");
-
-                    final java.util.concurrent.atomic.AtomicInteger compilationResult =
-                            new java.util.concurrent.atomic.AtomicInteger(-1);
-
-                    var cppCompSubsystem = new com.sphere.core.cpp.CppBackend() {
-
-                        public void runMockTest(CppOutputListener listener) {
-                            try {
-                                listener.onStdoutLine("  > Sphere Optimization Engine: Intercepted raw code frame block context...");
-                                listener.onStdoutLine("  > Compiling via targeted cross-platform active shell matrix...");
-                                listener.onStdoutLine("  > Hello from Sphere Engine Cross-Platform Pipeline!");
-
-                                listener.onProcessComplete(0, false);
-
-                            } catch (Exception ex) {
-                                listener.onStderrLine("[ERROR] [Compiler/Process Error] " + ex.getMessage());
-                                compilationResult.set(-2);
-                            }
-                        }
-                    };
-
-                    cppCompSubsystem.runMockTest(new com.sphere.core.cpp.CppBackend.CppOutputListener() {
-
-                        @Override
-                        public void onStdoutLine(String line) {
-                            publish(line);
-                        }
-
-                        @Override
-                        public void onStderrLine(String line) {
-                            publish("[ERROR] [Compiler/Process Error] " + line);
-                            compilationResult.set(-2);
-                        }
-
-                        @Override
-                        public void onProcessComplete(int exitCode, boolean timedOut) {
-                            compilationResult.set(exitCode);
-                        }
-                    });
-
-                    int loops = 0;
-                    boolean interrupted = false;
-
-                    try {
-                        while (compilationResult.get() == -1 && loops < 50) {
-                            Thread.sleep(100);
-                            loops++;
-                        }
-                    } catch (InterruptedException e) {
-                        interrupted = true;
-                        Thread.currentThread().interrupt();
-                        publish("[ERROR] Integration test monitor thread was abnormally interrupted.");
-                    }
-
-                    if (!interrupted && compilationResult.get() == 0) {
-                        publish("[SUCCESS] Execution sequence finished layout routine context. Exit Code: 0");
-                        publish("\n[SUCCESS] C++ toolchain, virtual threads, and LSP runtime subsystems validated.");
-                        return "ONLINE";
-
-                    } else {
-                        publish("[ERROR] Integration pipeline failed validation checks. Final State Code: " + compilationResult.get());
-                        return "ERROR";
-                    }
+                    // This block used to print a successful clangd handshake and a
+                    // successful compilation without starting either: the "compiler"
+                    // was a mock that always reported exit code 0, so a missing or
+                    // broken g++ showed ONLINE. The compiler is now really run.
+                    return toolchainRoundTrip(verifiedPath, backend == EnvBackend.CPP, this::publish);
                 }
 
                 // =============================================================
@@ -440,12 +366,19 @@ public class GenericEnvManagerDialog extends JDialog {
 
                     Process process = pb.start();
 
+                    // Read to the end: closing the pipe after three lines made a tool
+                    // with a longer --version text (gfortran, g++) fail on a broken
+                    // pipe and show as faulty. The first lines are what the user
+                    // came to see, so they are shown rather than counted.
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                         String line;
                         int linesLogged = 0;
 
-                        while ((line = reader.readLine()) != null && linesLogged < 3) {
-                            linesLogged++;
+                        while ((line = reader.readLine()) != null) {
+                            if (linesLogged < 3 && !line.isBlank()) {
+                                publish("  > " + line.strip());
+                                linesLogged++;
+                            }
                         }
                     }
 
@@ -576,5 +509,83 @@ public class GenericEnvManagerDialog extends JDialog {
         } catch (Exception e) {
             return "Invalid Timestamp (" + timestampUs + ")";
         }
+    }
+    /**
+     * Compiles a small program with the configured compiler, runs it, and checks
+     * what it prints. ONLINE only when all three steps really happened.
+     */
+    private static String toolchainRoundTrip(String compiler, boolean cpp,
+                                             java.util.function.Consumer<String> say) {
+        java.nio.file.Path dir = null;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("sphere-toolchain-");
+            final String source = cpp
+                ? "#include <iostream>\nint main(){ std::cout << \"sphere-toolchain-ok \" << __cplusplus << std::endl; return 0; }\n"
+                : "#include <stdio.h>\nint main(void){ printf(\"sphere-toolchain-ok %ld\\n\", (long)__STDC_VERSION__); return 0; }\n";
+            final java.nio.file.Path file = dir.resolve(cpp ? "probe.cpp" : "probe.c");
+            java.nio.file.Files.writeString(file, source);
+            final boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+            final java.nio.file.Path exe = dir.resolve(windows ? "probe.exe" : "probe");
+
+            say.accept("[INFO] Compiling a test program with " + compiler + " ...");
+            final long t0 = System.nanoTime();
+            final String[] compile = run(java.util.List.of(compiler, file.toString(), "-o", exe.toString()), dir, 120);
+            if (!"0".equals(compile[0])) {
+                say.accept("[ERROR] The compiler failed (exit " + compile[0] + "):");
+                for (String line : compile[1].split("\\R")) {
+                    if (!line.isBlank()) say.accept("  > " + line);
+                }
+                return "ERROR";
+            }
+            say.accept(String.format(java.util.Locale.ROOT, "[SUCCESS] Compiled and linked in %.2f s.",
+                                     (System.nanoTime() - t0) / 1e9));
+            final String[] ran = run(java.util.List.of(exe.toString()), dir, 30);
+            if (!"0".equals(ran[0]) || !ran[1].contains("sphere-toolchain-ok")) {
+                say.accept("[ERROR] The compiled program did not run as expected (exit " + ran[0] + "): "
+                           + ran[1].strip());
+                say.accept("[PROMPT] On Windows this is usually a runtime DLL of the compiler missing from PATH.");
+                return "ERROR";
+            }
+            say.accept("  > " + ran[1].strip());
+            say.accept("[SUCCESS] Toolchain validated: source compiled, linked and executed.");
+            return "ONLINE";
+        } catch (java.io.IOException | InterruptedException failed) {
+            if (failed instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            say.accept("[ERROR] Toolchain test could not run: " + failed.getMessage());
+            return "ERROR";
+        } finally {
+            if (dir != null) {
+                com.sphere.components.fileexplorerincludes.ContextMenuBuilder.deleteDirectoryRecursive(dir.toFile());
+            }
+        }
+    }
+
+    /** {exit code, combined output}; the output is drained while the process runs. */
+    private static String[] run(java.util.List<String> command, java.nio.file.Path dir, int timeoutSeconds)
+            throws java.io.IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(dir.toFile());
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        java.util.concurrent.CompletableFuture<byte[]> output = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try (java.io.InputStream in = process.getInputStream()) {
+                return in.readAllBytes();
+            } catch (java.io.IOException closed) {
+                return new byte[0];
+            }
+        });
+        if (!process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            return new String[] {"timeout", "no answer within " + timeoutSeconds + " s"};
+        }
+        String text;
+        try {
+            text = new String(output.get(5, java.util.concurrent.TimeUnit.SECONDS), java.nio.charset.Charset.defaultCharset());
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException unread) {
+            text = "";
+        }
+        return new String[] {Integer.toString(process.exitValue()), text};
     }
 }

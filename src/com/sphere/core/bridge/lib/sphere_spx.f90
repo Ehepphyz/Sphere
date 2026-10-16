@@ -92,22 +92,26 @@ contains
   end function spx_bridge_folder
 
   !> A name, or a path: a bare name is looked for in the bridge folder.
+  ! a bare name is looked for in the bridge folder, then in its outbox (where the engines publish, Sphere's fits included)
   function spx_resolve(name) result(path)
     character(len=*), intent(in) :: name
     character(len=:), allocatable :: path
-    character(len=:), allocatable :: bare
+    character(len=:), allocatable :: bare, file, published
+    logical :: here, there
     bare = trim(adjustl(name))
     if (index(bare, '/') > 0 .or. index(bare, '\') > 0) then
       path = bare
-    else if (len(bare) > 4) then
-      if (bare(len(bare)-3:) == '.spx') then
-        path = spx_bridge_folder() // '/' // bare
-      else
-        path = spx_bridge_folder() // '/' // bare // '.spx'
-      end if
-    else
-      path = spx_bridge_folder() // '/' // bare // '.spx'
+      return
     end if
+    file = bare // '.spx'
+    if (len(bare) > 4) then
+      if (bare(len(bare)-3:) == '.spx') file = bare
+    end if
+    path = spx_bridge_folder() // '/' // file
+    published = spx_bridge_folder() // '/outbox/' // file
+    inquire(file=path, exist=here)
+    inquire(file=published, exist=there)
+    if (.not. here .and. there) path = published
   end function spx_resolve
 
   subroutine open_file(path, unit, kind, sections, ok)

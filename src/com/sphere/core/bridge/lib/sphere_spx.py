@@ -37,12 +37,14 @@ def bridge_folder():
 
 
 def resolve(name):
-    """A name, or a path: a bare name is looked for in the bridge folder."""
+    """A name, or a path: a bare name is looked for in the bridge folder, then in its outbox
+    (where the engines publish, Sphere's fits included)."""
     if "/" in name or "\\" in name:
         return name
-    if name.endswith(".spx"):
-        return os.path.join(bridge_folder(), name)
-    return os.path.join(bridge_folder(), name + ".spx")
+    file = name if name.endswith(".spx") else name + ".spx"
+    path = os.path.join(bridge_folder(), file)
+    published = os.path.join(bridge_folder(), "outbox", file)
+    return published if not os.path.exists(path) and os.path.exists(published) else path
 
 
 class SPXFile:

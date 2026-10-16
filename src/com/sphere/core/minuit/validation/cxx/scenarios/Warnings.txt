@@ -1,0 +1,48 @@
+# Parameter definition errors and warnings, SET NOWarnings and its circular buffer
+new 3 rosen
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1 0.1 -10 -10
+parm 1 y 1 0.1 5 -3
+parm 2 c 3 0.1 0 1
+parm 2 c 0.5 0.1 0 1e8
+parm 2 c 1 0.1 0 1
+parm 60 big 1 0.1 0 0
+parm -1 neg 1 0.1 0 0
+parm 2 c 1 0 0 0
+parm 1 y 1 0.1 0 0
+cmd SET NOW
+cmd SHOW WAR
+parm 2 c 3 0.1 0 1
+parm 2 c 4 0.1 0 1
+parm 2 c 5 0.1 1 0
+parm 2 c 0 0.1 0 1
+parm 2 c 1 0.1 -1e9 1e9
+parm 2 c 0.5 0.1 0 1
+cmd SET LIM 3 0 0.6
+cmd MIGRAD
+cmd SET PAR 3 0.6
+cmd MIGRAD
+cmd SET PAR 3 5
+cmd SET LIM 3 1 2
+cmd SET LIM 3 -1 0
+cmd SET LIM 3 -1 0
+cmd SET LIM 3 0.2 0.1
+cmd SHOW WAR
+cmd SHOW NOW
+cmd SET WAR
+cmd SHOW WAR
+cmd FIX 3
+parm 2 c 0.5 0.1 0 1
+nums
+cmd SET DEB 0
+cmd MIGRAD
+cmd SET NOD 0
+cmd MIGRAD
+cmd SHOW DEB
+cmd SET WAR
+cmd FIX 1 2
+cmd MIGRAD
+cmd MINOS
+cmd SHOW PAR
+nums
+counts

@@ -23,6 +23,22 @@ public class AppLogger {
         logTarget = target;
     }
 
+    /**
+     * Whether what is logged can show characters beyond ASCII: Sphere's console can; without it the
+     * messages go to the standard output, which can when its encoding is UTF-8.
+     */
+    public static boolean unicode() {
+        return logTarget != null || java.nio.charset.StandardCharsets.UTF_8.equals(System.out.charset());
+    }
+
+    /**
+     * A value with its error as the libraries write it for every engine ("1.23 +- 0.05", ASCII), with
+     * the sign a reader expects where it can be shown: "1.23 ± 0.05".
+     */
+    public static String plusMinus(String text) {
+        return unicode() ? text.replace(" +- ", " ± ") : text;
+    }
+
     public static void setSession(SessionManager s) {
         session = s;
     }

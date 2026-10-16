@@ -574,8 +574,12 @@ public class CommandRouter {
         command = com.sphere.core.snippets.TagInterpreter.resolve(command, ctx.getActiveProject());
         history.add(command);
 
+        // Commands of the session's own (":" commands and plugins) join the
+        // completion list once typed. The test was the wrong way round: a token
+        // was added only when it was already there, so nothing ever was.
         String firstToken = command.split("\\s+")[0];
-        if (knownCommands.contains(firstToken)) {
+        if (firstToken.startsWith(":") && firstToken.length() > 1
+                && com.sphere.core.commands.CommandDefinitions.find(firstToken) != null) {
             knownCommands.add(firstToken);
         }
 
@@ -1608,10 +1612,30 @@ public class CommandRouter {
         if (prefix.contains("/") || prefix.contains("\\") || prefix.startsWith("~") || prefix.startsWith(".")) {
             return autoCompletePath(prefix);
         }
-        return knownCommands.stream()
+        // knownCommands is a concurrent set, whose order is arbitrary: findFirst
+        // completed ":r" to whichever of hundreds of ":root ..." entries the hash
+        // put first, differently from one run to the next. Completion now goes
+        // as far as all candidates agree, as a shell does, and to the single
+        // match when there is only one.
+        final java.util.List<String> matches = knownCommands.stream()
             .filter(cmd -> cmd.startsWith(prefix))
-            .findFirst()
-            .orElse("");
+            .sorted()
+            .toList();
+        if (matches.isEmpty()) {
+            return "";
+        }
+        if (matches.size() == 1) {
+            return matches.get(0);
+        }
+        String common = matches.get(0);
+        for (String m : matches) {
+            int i = 0;
+            while (i < common.length() && i < m.length() && common.charAt(i) == m.charAt(i)) {
+                i++;
+            }
+            common = common.substring(0, i);
+        }
+        return common.length() > prefix.length() ? common : matches.get(0);
     }
 
     /**

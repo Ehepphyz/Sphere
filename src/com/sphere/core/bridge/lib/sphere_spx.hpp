@@ -83,11 +83,17 @@ inline std::string bridge_folder() {
     return at ? std::string(at) : std::string("bridge");
 }
 
-/** A name, or a path: a bare name is looked for in the bridge folder. */
+/**
+ * A name, or a path: a bare name is looked for in the bridge folder, then in its outbox (where
+ * the engines publish, Sphere's fits included).
+ */
 inline std::string resolve(const std::string& name) {
     if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) return name;
-    if (name.size() > 4 && name.compare(name.size() - 4, 4, ".spx") == 0) return bridge_folder() + "/" + name;
-    return bridge_folder() + "/" + name + ".spx";
+    const std::string file = name.size() > 4 && name.compare(name.size() - 4, 4, ".spx") == 0 ? name : name + ".spx";
+    const std::string path = bridge_folder() + "/" + file;
+    const std::string published = bridge_folder() + "/outbox/" + file;
+    auto exists = [](const std::string& p) { std::ifstream f(p, std::ios::binary); return f.good(); };
+    return !exists(path) && exists(published) ? published : path;
 }
 
 // ---------------------------------------------------------------------------

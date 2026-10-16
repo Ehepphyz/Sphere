@@ -26,6 +26,32 @@ public final class CFormat {
     private CFormat() {
     }
 
+    /**
+     * How the C library writes the sign of a NaN, the one place where the
+     * three disagree: glibc writes "-nan" for a NaN whose sign bit is set;
+     * mingw-w64 (Windows) never writes a minus but honours the + and space
+     * flags ("+nan"); the BSD libc of macOS writes no sign at all.
+     */
+    public enum NanStyle { GLIBC, MINGW, BSD }
+
+    private static volatile NanStyle nanStyle = hostNanStyle();
+
+    private static NanStyle hostNanStyle() {
+        final String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        if (os.contains("win")) return NanStyle.MINGW;
+        if (os.contains("mac") || os.contains("darwin") || os.contains("bsd")) return NanStyle.BSD;
+        return NanStyle.GLIBC;
+    }
+
+    /** The NaN style in use (the host's C library by default). */
+    public static NanStyle nanStyle() {
+        return nanStyle;
+    }
+
+    public static void setNanStyle(NanStyle s) {
+        nanStyle = s == null ? hostNanStyle() : s;
+    }
+
     /* ------------------------------------------------------------------ */
     /* printf                                                              */
     /* ------------------------------------------------------------------ */
@@ -142,8 +168,10 @@ public final class CFormat {
             }
             case 'e', 'E', 'f', 'F', 'g', 'G', 'a', 'A' -> {
                 final double v = ((Number) arg).doubleValue();
-                final boolean negative = v < 0 || (v == 0 && 1.0 / v < 0) || (Double.isNaN(v) && Double.doubleToRawLongBits(v) < 0);
+                final boolean negative = v < 0 || (v == 0 && 1.0 / v < 0)
+                    || (Double.isNaN(v) && nanStyle == NanStyle.GLIBC && Double.doubleToRawLongBits(v) < 0);
                 prefix = negative ? "-" : plus ? "+" : space ? " " : "";
+                if (Double.isNaN(v) && nanStyle == NanStyle.BSD) prefix = "";
                 final boolean upper = Character.isUpperCase(conv);
                 if (Double.isNaN(v) || Double.isInfinite(v)) {
                     body = Double.isNaN(v) ? "nan" : "inf";

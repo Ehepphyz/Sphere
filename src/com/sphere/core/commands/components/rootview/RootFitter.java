@@ -1,7 +1,11 @@
 package com.sphere.components.rootview;
 
 import com.sphere.core.hepmc3.cxx.COStream;
+import com.sphere.core.mathcore.IMultiGenFunction;
+import com.sphere.core.mathcore.IMultiGradFunction;
+import com.sphere.core.minuit.TMinuitMinimizer;
 import com.sphere.core.minuit2.FCNBase;
+import com.sphere.core.minuit2.FCNGradientBase;
 import com.sphere.core.minuit2.Minuit2Minimizer;
 
 import java.util.ArrayList;
@@ -29,7 +33,7 @@ public final class RootFitter {
      * How to fit: the algorithm of Minuit2 ("Migrad", "Simplex", "Minimize",
      * "Scan", "BFGS", "Fumili"), its strategy (0 to 3) and tolerance, and
      * ROOT's options: E (Minos errors), G (the formula's gradient by automatic
-     * differentiation), M (once more at strategy 2 when Migrad fails).
+     * differentiation), M (Sphere's autopilot when Migrad fails).
      */
     public record Options(boolean minos, boolean gradient, int strategy, double tolerance, boolean improve, String algorithm) {
         public static final Options DEFAULT = new Options(false, false, 1, 0.01, false, "Migrad");
@@ -109,7 +113,7 @@ public final class RootFitter {
             os.right();
             final StringBuilder d = new StringBuilder();
             if (diagnosis != null && !diagnosis.isEmpty()) {
-                d.append("\n Minuit2's diagnosis:\n");
+                d.append(minimizer.startsWith("Minuit2") ? "\n Minuit2's diagnosis:\n" : "\n Sphere's reading:\n");
                 for (String line : diagnosis) d.append("  - ").append(line).append('\n');
             }
             return " " + what + "  " + formula + "\n" + os.str()
@@ -147,16 +151,18 @@ public final class RootFitter {
         }
         double[] p = p0 != null && p0.length >= m ? p0.clone() : guess(f, xs, y);
         if (p.length < m) p = Arrays.copyOf(p, m);
-        final List<String> names = f.parameterNames().size() >= m ? f.parameterNames() : padNames(f, m);
+        final List<String> names = uniqueNames(f.parameterNames().size() >= m ? f.parameterNames() : padNames(f, m));
         final String algo = opt.algorithm() == null ? "Migrad" : opt.algorithm();
         final boolean fumili = algo.equalsIgnoreCase("fumili");
-        final String minimizerName = "Minuit2 / " + (fumili ? "Fumili" : algo);
+        final String minimizerName = algo.equalsIgnoreCase("tminuit") ? "Minuit / Migrad (TMinuit)"
+            : "Minuit2 / " + (fumili ? "Fumili" : algo);
         if (n <= m) {
             return new Result(p, new double[m], Double.NaN, n - m, Double.NaN, false, 0, names, Double.NaN, Double.NaN, -1,
                 -1, null, null, null, likelihood, minimizerName, List.of(n + " points for " + m + " parameters: nothing to fit"));
         }
         final FCNBase fcn = fumili ? new FumiliFit(f, x, v, invErr, likelihood, m)
             : likelihood ? poisson(f, x, v, opt.gradient()) : chi2(f, x, v, invErr, opt.gradient());
+        if (algo.equalsIgnoreCase("tminuit")) return fitTMinuit(f, x, v, invErr, fcn, p, m, names, likelihood, opt);
         final Minuit2Minimizer min = new Minuit2Minimizer(fumili ? "fumili" : algo.equalsIgnoreCase("migrad") ? "migrad" : algo);
         min.setFCN(m, fcn);
         min.setErrorDef(likelihood ? 0.5 : 1.0);
@@ -168,20 +174,36 @@ public final class RootFitter {
         }
         min.setPrintLevel(0);
         boolean ok = min.minimize();
-        if (opt.improve() && !ok) {
-            // "M": once more from where it stopped at strategy 2, then Migrad with Simplex to leave a bad region
+        com.sphere.core.minuit2.Autopilot.Report auto = null;
+        if (opt.improve() && !ok && !fumili) {
+            // "M": Sphere's autopilot, which picks the remedy from the cause of the failure (call limit, values not
+            // finite, noise, saddle point...) and tells which intervals need Minos
+            final com.sphere.core.minuit2.SmartFCN smart = new com.sphere.core.minuit2.SmartFCN(fcn);
+            smart.setErrorDef(likelihood ? 0.5 : 1.0);
+            final com.sphere.core.minuit2.MnUserParameters start = new com.sphere.core.minuit2.MnUserParameters();
+            for (int i = 0; i < m; i++) start.add(names.get(i), p[i], p[i] != 0 ? 0.1 * Math.abs(p[i]) : 0.1);
+            auto = com.sphere.core.minuit2.Autopilot.minimize(smart, new com.sphere.core.minuit2.MnUserParameterState(start),
+                new com.sphere.core.minuit2.Autopilot.Options(opt.strategy(), opt.tolerance(), 0, 0, opt.minos(), false));
+            ok = auto.best().isValid();
+        } else if (opt.improve() && !ok) {
+            // Fumili: once more from where it stopped, at strategy 2
             min.setStrategy(2);
             ok = min.minimize();
-            if (!ok && !fumili) {
-                min.setMinimizerType(com.sphere.core.minuit2.Minuit2Minimizer.EMinimizerType.kCombined);
-                ok = min.minimize();
-            }
         }
-        final double[] best = min.x();
-        final double[] errs = min.errors();
+        final com.sphere.core.minuit2.FunctionMinimum fm = auto != null ? auto.best() : min.functionMinimum();
+        final double[] best = auto != null ? fm.userState().params() : min.x();
+        final double[] errs = auto != null ? fm.userState().errors() : min.errors();
         double[] lo = null;
         double[] hi = null;
-        if (opt.minos() && ok) {
+        if (auto != null && !auto.minos().isEmpty()) {
+            lo = new double[m];
+            hi = new double[m];
+            for (com.sphere.core.minuit2.MinosError me : auto.minos()) {
+                if (!me.isValid()) continue;
+                lo[me.parameter()] = me.lower();
+                hi[me.parameter()] = me.upper();
+            }
+        } else if (auto == null && opt.minos() && ok) {
             lo = new double[m];
             hi = new double[m];
             final double[] e = new double[2];
@@ -193,7 +215,20 @@ public final class RootFitter {
             }
         }
         final double[] cov = new double[m * m];
-        if (!min.getCovMatrix(cov)) Arrays.fill(cov, Double.NaN);
+        if (auto != null) {
+            final com.sphere.core.minuit2.MnUserParameterState st = fm.userState();
+            if (st.hasCovariance()) {
+                for (int i = 0; i < st.variableParameters(); i++) {
+                    for (int j = 0; j < st.variableParameters(); j++) {
+                        cov[st.extOfInt(i) * m + st.extOfInt(j)] = st.covariance().get(i, j);
+                    }
+                }
+            } else {
+                Arrays.fill(cov, Double.NaN);
+            }
+        } else if (!min.getCovMatrix(cov)) {
+            Arrays.fill(cov, Double.NaN);
+        }
         double chi2 = 0;
         double nll = 0;
         for (int k = 0; k < n; k++) {
@@ -206,9 +241,120 @@ public final class RootFitter {
         final double stat = likelihood ? 2 * nll : chi2;
         final int ndf = n - m;
         final List<String> diagnosis = new ArrayList<>();
-        if (min.functionMinimum() != null) {
-            diagnosis.addAll(com.sphere.core.minuit2.Autopilot.diagnose(min.functionMinimum(), List.of(), List.of()));
+        if (auto != null) {
+            diagnosis.add("Option M: Migrad failed; Sphere's autopilot took over (" + auto.steps().size() + " steps, "
+                + auto.totalCalls() + " calls).");
+            diagnosis.addAll(auto.diagnosis());
+            diagnosis.add(auto.verdict().text());
+        } else if (fm != null) {
+            diagnosis.addAll(com.sphere.core.minuit2.Autopilot.diagnose(fm, List.of(), List.of()));
+            diagnosis.add(com.sphere.core.minuit2.Autopilot.judge(fm, List.of()).text());
         }
+        if (lo != null && auto == null) {
+            for (int i = 0; i < m; i++) {
+                final double a = -lo[i];
+                final double b = hi[i];
+                if (a > 0 && b > 0 && Math.abs(b - a) / (a + b) > 0.1) {
+                    diagnosis.add(String.format(Locale.ROOT, "%s: Minos errors -%.4g +%.4g are not symmetric: quote them, "
+                        + "not the parabolic error.", names.get(i), a, b));
+                }
+            }
+        }
+        if (ndf > 0 && stat / ndf > 3) {
+            diagnosis.add(String.format(Locale.ROOT, "chi2/ndf = %.3g: the model does not describe the data; the errors "
+                + "would be about %.2g times larger if the misfit were statistical.", stat / ndf, Math.sqrt(stat / ndf)));
+        }
+        if (!ok && !opt.improve()) diagnosis.add("The fit did not converge: option M hands it to Sphere's autopilot.");
+        if (auto != null) {
+            final int status = fm.isValid() ? 0 : fm.hasReachedCallLimit() ? 4 : fm.isAboveMaxEdm() ? 3 : 5;
+            return new Result(best, errs, stat, ndf, gammaQ(ndf / 2.0, stat / 2), ok, auto.totalCalls(), names, nll, fm.fval(),
+                fm.edm(), status, cov, lo, hi, likelihood, minimizerName + " + Sphere autopilot", diagnosis);
+        }
+        return new Result(best, errs == null ? new double[m] : errs, stat, ndf, gammaQ(ndf / 2.0, stat / 2), ok, min.nCalls(),
+            names, nll, min.minValue(), min.edm(), min.status(), cov, lo, hi, likelihood, minimizerName, diagnosis);
+    }
+
+    /**
+     * The same fit by TMinuit, ROOT's "Minuit" minimizer type (MinimizerOptions::SetDefaultMinimizer("Minuit")):
+     * TMinuitMinimizer runs MIGRAD, then HESSE as the strategy asks, and MINOS with "E", as TH1::Fit does.
+     */
+    private static Result fitTMinuit(RootFormula f, double[][] x, double[] v, double[] invErr, FCNBase fcn, double[] p,
+                                     int m, List<String> names, boolean likelihood, Options opt) {
+        final TMinuitMinimizer min = new TMinuitMinimizer("migrad", m);
+        min.SetPrintLevel(0);
+        min.SetErrorDef(likelihood ? 0.5 : 1.0);
+        min.SetStrategy(opt.strategy());
+        min.SetTolerance(opt.tolerance());
+        final IMultiGenFunction func = fcn instanceof FCNGradientBase g ? new IMultiGradFunction() {
+            @Override
+            public int NDim() {
+                return m;
+            }
+
+            @Override
+            public double DoEval(double[] xx) {
+                return fcn.value(Arrays.copyOf(xx, m));
+            }
+
+            @Override
+            public void Gradient(double[] xx, double[] grad) {
+                System.arraycopy(g.gradient(Arrays.copyOf(xx, m)), 0, grad, 0, m);
+            }
+        } : new IMultiGenFunction() {
+            @Override
+            public int NDim() {
+                return m;
+            }
+
+            @Override
+            public double DoEval(double[] xx) {
+                return fcn.value(Arrays.copyOf(xx, m));
+            }
+        };
+        min.SetFunction(func);
+        // what TMinuit prints stays out of the viewer, as at print level 0 in ROOT
+        final java.io.PrintStream silent = new java.io.PrintStream(java.io.OutputStream.nullOutputStream());
+        min.GetTMinuit().setOutput(silent);
+        min.GetTMinuit().setErrorOutput(silent);
+        for (int i = 0; i < m; i++) min.SetVariable(i, names.get(i), p[i], p[i] != 0 ? 0.1 * Math.abs(p[i]) : 0.1);
+        final boolean ok = min.Minimize();
+        final double[] best = Arrays.copyOf(min.X(), m);
+        final double[] errs = Arrays.copyOf(min.Errors(), m);
+        double[] lo = null;
+        double[] hi = null;
+        if (opt.minos() && ok) {
+            lo = new double[m];
+            hi = new double[m];
+            final double[] l = {0};
+            final double[] h = {0};
+            for (int i = 0; i < m; i++) {
+                if (min.GetMinosError(i, l, h, 0)) {
+                    lo[i] = l[0];
+                    hi[i] = h[0];
+                }
+            }
+        }
+        final double[] cov = new double[m * m];
+        if (!min.GetCovMatrix(cov)) Arrays.fill(cov, Double.NaN);
+        final int n = v.length;
+        double chi2 = 0;
+        double nll = 0;
+        for (int k = 0; k < n; k++) {
+            final double mu = f.eval(x[k], best);
+            final double r = (v[k] - mu) * invErr[k];
+            chi2 += r * r;
+            final double muc = Math.max(mu, 1e-300);
+            nll += muc - v[k] + (v[k] > 0 ? v[k] * Math.log(v[k] / muc) : 0);
+        }
+        final double stat = likelihood ? 2 * nll : chi2;
+        final int ndf = n - m;
+        final List<String> diagnosis = new ArrayList<>();
+        diagnosis.add("Covariance " + switch (min.CovMatrixStatus()) {
+            case 3 -> "accurate (TMinuit's HESSE).";
+            case 2 -> "forced positive-definite: the errors are not to be trusted.";
+            case 1 -> "approximate only (MIGRAD's update).";
+            default -> "not calculated.";
+        });
         if (lo != null) {
             for (int i = 0; i < m; i++) {
                 final double a = -lo[i];
@@ -223,15 +369,29 @@ public final class RootFitter {
             diagnosis.add(String.format(Locale.ROOT, "chi2/ndf = %.3g: the model does not describe the data; the errors "
                 + "would be about %.2g times larger if the misfit were statistical.", stat / ndf, Math.sqrt(stat / ndf)));
         }
-        if (!ok && !opt.improve()) diagnosis.add("The fit did not converge: option M tries strategy 2, then Simplex.");
-        return new Result(best, errs == null ? new double[m] : errs, stat, ndf, gammaQ(ndf / 2.0, stat / 2), ok, min.nCalls(),
-            names, nll, min.minValue(), min.edm(), min.status(), cov, lo, hi, likelihood, minimizerName, diagnosis);
+        if (!ok) diagnosis.add("MIGRAD did not converge (TMinuit status " + min.Status() + "): Minuit2 with option M hands "
+            + "a failing fit to Sphere's autopilot (:minuit2 default --algo migrad).");
+        return new Result(best, errs, stat, ndf, gammaQ(ndf / 2.0, stat / 2), ok, min.NCalls(), names, nll, min.MinValue(),
+            min.Edm(), min.Status(), cov, lo, hi, likelihood, "Minuit / Migrad (TMinuit)", diagnosis);
     }
 
     private static List<String> padNames(RootFormula f, int m) {
         final List<String> l = new ArrayList<>();
         for (int i = 0; i < m; i++) l.add(f.parameterName(i));
         return l;
+    }
+
+    /**
+     * The names Minuit can take, which must differ: a name already used (expo(0)+gaus(2) names two
+     * parameters Constant, as ROOT does) gets its index, Constant_2.
+     */
+    public static List<String> uniqueNames(List<String> names) {
+        final List<String> out = new ArrayList<>();
+        for (int i = 0; i < names.size(); i++) {
+            final String n = names.get(i);
+            out.add(out.contains(n) ? n + "_" + i : n);
+        }
+        return out;
     }
 
     /** sum ((y - f) / ey)^2, written as ROOT's FitUtil (the residual times the inverse error), with its gradient. */
@@ -429,7 +589,7 @@ public final class RootFitter {
      * exponential by a straight line through the logarithms, a polynomial
      * by linear least squares; any other parameter starts at 1.
      */
-    static double[] guess(RootFormula f, double[][] xs, double[] y) {
+    public static double[] guess(RootFormula f, double[][] xs, double[] y) {
         final double[] p = new double[Math.max(1, f.parameters())];
         Arrays.fill(p, 1);
         final int n = y.length;

@@ -1,0 +1,73 @@
+# The line-printer plots: SCAN, CONTOUR, MNCONTOUR, the debug plots of MNLINE and MNCROS
+new 4 gauss
+graphics 0
+parm 0 mean 0 0.2 -1 2
+parm 1 sigma 1.5 0.1 0.2 5
+parm 2 area 10 1 0 50
+parm 3 bkg 0.3 0.1 0 0
+cmd SET PRINT 0
+cmd MIGRAD
+cmd SCAN
+cmd SCAN 1
+cmd SCAN 4 21 0.2 0.6
+cmd SCAN 2 30 6 0.1
+cmd SCAN 3 5
+cmd SCAN 9
+cmd SCAN 2 11 9 10
+cmd SET WID 80
+cmd SCAN 4 41
+cmd SET WID 120
+cmd CONTOUR 1 2
+cmd CONTOUR 1 4 3 15
+cmd CONTOUR 2 2
+cmd CONTOUR
+cmd CONTOUR 1 9
+cmd MNCONTOUR 1 2 8
+cmd MNCONTOUR 3 4 5
+mncont 0 3 6
+contour 10 0 1
+contour 3 0 1
+contour 6 0 7
+cmd SET DEB 6
+cmd MNCONTOUR 1 2 4
+cmd SET NODEB 6
+dump plots
+counts
+new 2 rosen
+graphics 0
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1 0.1 0 0
+cmd SET PRINT 0
+cmd MIGRAD
+cmd CONTOUR
+cmd MNCONTOUR
+cmd SET WID 60
+cmd SET LIN 20
+cmd SCAN 1 50
+cmd CONTOUR 1 2 1 5
+cmd SET WID 120
+cmd SET LIN 56
+cmd SET DEB 1
+cmd SET PAR 1 -1
+cmd MIGRAD
+cmd SET DEB 2
+cmd SET DEB 3
+cmd SET DEB 4
+cmd SET DEB 5
+cmd SET PAR 1 -1
+cmd MIGRAD
+cmd SET DEB -1
+cmd SET PAR 1 -1.2
+cmd MINOS
+cmd SET NOD -1
+dump debug
+new 2 rosen
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1 0.1 0 0
+cmd SET PRINT 0
+cmd MIGRAD
+cmd SCAN 1
+cmd MNCONTOUR 1 2 6
+cmd SET DEB 6
+cmd MINOS
+dump graphics on

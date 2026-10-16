@@ -49,10 +49,13 @@ end
 bridge_folder() = get(ENV, "SPHERE_BRIDGE", "bridge")
 
 """A name, or a path: a bare name is looked for in the bridge folder."""
+# a bare name is looked for in the bridge folder, then in its outbox (where the engines publish, Sphere's fits included)
 function resolve(name::AbstractString)
     (occursin('/', name) || occursin('\\', name)) && return String(name)
-    endswith(name, ".spx") && return joinpath(bridge_folder(), name)
-    return joinpath(bridge_folder(), name * ".spx")
+    file = endswith(name, ".spx") ? String(name) : name * ".spx"
+    path = joinpath(bridge_folder(), file)
+    published = joinpath(bridge_folder(), "outbox", file)
+    return !isfile(path) && isfile(published) ? published : path
 end
 
 readi32(b, at) = ltoh(unsafe_load(Ptr{Int32}(pointer(b, at + 1))))

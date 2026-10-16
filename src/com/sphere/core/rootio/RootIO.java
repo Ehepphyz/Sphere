@@ -28,6 +28,20 @@ public final class RootIO implements AutoCloseable {
         return new RootIO(new RootFile(path));
     }
 
+    /**
+     * A file named the way TFile::Open accepts it: a path, an http(s) or
+     * root:// URL (read by ranges, not downloaded), or a member of a zip
+     * archive ("archive.zip#file.root"). See {@link RootLocation}.
+     */
+    public static RootIO open(String location) throws IOException {
+        return new RootIO(RootLocation.parse(location).openFile());
+    }
+
+    /** Reads objects and trees out of a file already open. */
+    public static RootIO of(RootFile file) {
+        return new RootIO(file);
+    }
+
     public RootFile file() {
         return file;
     }

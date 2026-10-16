@@ -138,6 +138,12 @@ public final class BridgeOutbox {
         final Map<String, String> meta = r.meta();
         final String title = meta.getOrDefault("Title", r.title());
         final String engine = meta.getOrDefault("Engine", "an engine");
+        if (meta.containsKey("Fit")) {
+            // a fit (Sphere's ':minuit2 fit', or sphere::autopilot::publish in C++ and ROOT macros): its result in words
+            AppLogger.result(engine + " fitted " + meta.get("Fit") + " (" + title + "):");
+            for (String line : meta.getOrDefault("Summary", "").split(";")) if (!line.isBlank()) AppLogger.raw(AppLogger.plusMinus(line));
+            if (meta.containsKey("Verdict")) AppLogger.raw("  " + meta.get("Verdict"));
+        }
         if (r.has("edges") && r.has("values")) {
             final double[] edges = r.numbers("edges");
             final double[] values = r.numbers("values");

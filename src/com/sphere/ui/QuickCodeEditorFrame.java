@@ -19,7 +19,10 @@ public class QuickCodeEditorFrame extends JFrame {
     public QuickCodeEditorFrame(File targetFile) {
         setTitle("Sphere Editor - " + (targetFile != null ? targetFile.getName() : "Untitled"));
         setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        setSize(850, 600);
+        // Room for the breadcrumbs, the minimap and the panels, without outgrowing the screen.
+        Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        setSize(Math.min(1280, (int) (screen.width * 0.85)), Math.min(840, (int) (screen.height * 0.85)));
+        setMinimumSize(new Dimension(640, 420));
         setLocationRelativeTo(null);
 
         editor = new QuickCodeEditor();

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import com.sphere.core.InProcessEngine;
+import com.sphere.core.hepmc3.cxx.NativeMath;
 import com.sphere.core.rootbackend.RootBridgeCompiler;
 
 /**
@@ -124,6 +125,14 @@ public final class StartupDiagnostic {
             } else {
                 AppLogger.error("CRITICAL: " + engine.label() + " (in process) FAILED -> " + probe.detail());
             }
+        }
+
+        // Minuit2, TMinuit and TMath give the C++'s bits by calling this machine's C library.
+        // Without it they still answer, with the portable functions: said here, since their
+        // results then differ from the C++'s in the last digits.
+        if (!NativeMath.hostAvailable()) {
+            AppLogger.warn("Minuit2 and TMinuit: this machine's C library is not reachable (" + NativeMath.hostFailure()
+                + "); the portable functions serve, and the fits are no longer the C++'s bit for bit.");
         }
 
         // 5. Generate a clean, unified, and professional summary report

@@ -1,0 +1,47 @@
+# SEEK, SIMPLEX, MINIMIZE, IMPROVE, JUMP and the random generator
+new 2 doubleWell
+parm 0 x 0.02 0.1 0 0
+parm 1 y 0 0.1 0 0
+cmd SET PRINT 2
+cmd SEEK
+dump seek
+cmd SIMPLEX
+dump simplex
+cmd SET RAN 98765
+cmd SHOW RAN
+cmd JUMP
+dump jump
+cmd JUMP 0.5
+cmd MINIMIZE 1000 0.01
+dump minimize
+cmd IMPROVE 50
+dump improve
+cmd SET PRINT 3
+cmd SIMPLEX 30
+cmd MIGRAD
+cmd IMPROVE
+cmd SEEK 40 1
+dump end
+counts
+new 2 doubleWell
+parm 0 x 0.6 0.1 -1.5 1.5
+parm 1 y 0.1 0.1 -2 2
+cmd SET PRINT 1
+cmd SET STR 0
+cmd MINIMIZE
+cmd IMPROVE 5
+cmd SEEK 100 5
+cmd SIMPLEX 20 0.001
+dump limited
+new 2 rosen
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1 0.1 0 0
+cmd SET PRINT 0
+cmd MINIMIZE 20
+dump minimize call limit
+cmd SIMPLEX 15
+dump simplex call limit
+cmd MINIMIZE
+cmd IMPROVE 3
+dump rosen improve
+counts

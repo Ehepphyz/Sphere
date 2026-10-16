@@ -1,0 +1,110 @@
+# The command reader: blanks, commas, quotes, long words, too many numbers, obsolete and preemptive commands, HELP
+new 2 rosen
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1 0.1 0 0
+cmd
+cmd
+cmd ,,,
+cmd migrad,100,,0.1
+cmd MIGRAD 50 0.5 1 2 3 4 5 6
+cmd SET PRI 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30
+cmd SET PRI 0
+cmd PARAMETERS
+cmd SET TITLE
+cmd SET INPUT 5
+cmd SET COV
+cmd 'quoted' 1
+cmd   show   fcn
+cmd SHOWFCN
+cmd SHO FCN
+cmd ABCDEFGHIJKLMNOPQRSTUVWXYZ 1 2
+cmd MIGRAD 123456789012345678901234 1
+cmd A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 1 2
+cmd MINO
+cmd MINI 10
+cmd MNC
+cmd MIGRAD -5 -1
+cmd SIMPLEX 0 -3
+cmd CLEAR
+cmd SHOW PAR
+cmd MIGRAD
+cmd MINOS
+cmd HESSE
+cmd SIMPLEX
+cmd SEEK
+cmd SCAN
+cmd IMPROVE
+cmd FIX 1
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1 0.1 0 0
+cmd TOP
+cmd STANDARD
+cmd SAVE
+cmd PUNCH
+cmd PRINTOUT 2
+cmd GRADIENT
+cmd MATOUT
+cmd ERROR DEF 1
+cmd LIMITS
+cmd COVARIANCE
+cmd CALL FCN 1
+cmd CALL FCN 4
+cmd CALL FCN 3
+cmd CALL FCN 6
+cmd CALL FCN
+cmd END
+cmd EXIT
+cmd RETURN
+cmd STOP
+cmd END 1
+cmd MIGRAD
+cmd EXIT
+cmd CALL FCN 3
+cmd RET
+help
+help *
+help ?
+help HELP
+help CLEAR
+help CONTOUR
+help END
+help EXIT
+help FIX
+help HESSE
+help IMPROVE
+help MIGRAD
+help MINIMIZE
+help MINOS
+help MIN0
+help MNCONTOUR
+help PARAMETER
+help RELEASE
+help RESTORE
+help RETURN
+help SAVE
+help SCAN
+help SEEK
+help SET
+help SHOW
+help SIMPLEX
+help STANDARD
+help STOP
+help TOP
+help XYZ
+help mig
+help mi
+cmd HELP SCAN
+cmd HELP
+cmd HELP   set
+cmd HELP SHO
+unpt hello world
+unpt tab	here
+unpt a{b}
+unpt
+unpt ABC.def/ghi;jkl:[]$%*_!@#&+()
+pars 'x' 1 2
+pars 3 'abc' 1 0.1
+pars 1 x 2 3
+pars 0
+pars
+counts

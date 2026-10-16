@@ -55,8 +55,15 @@ public class FileExplorer extends JTree {
     private final Map<WatchKey, Path> watchKeys = new HashMap<>();
     private final Map<Path, WatchKey> pathToKey = new HashMap<>();
 
-    // Debounce for refresh (cross‑platform safe)
-    private final java.util.concurrent.atomic.AtomicLong lastRefreshTime = new java.util.concurrent.atomic.AtomicLong(0L);
+    /**
+     * Folders with changes not yet shown, refreshed together once the disk has
+     * been quiet for a moment. The previous debounce was one timestamp for the
+     * whole tree: a second change within 200 ms, in the same folder or in any
+     * other, was dropped with no refresh to follow, so a file moved between two
+     * folders, or two files saved together, left the tree out of date.
+     */
+    private final java.util.Set<File> pendingRefresh = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private javax.swing.Timer refreshTimer;
 
     private static final int SCROLL_MARGIN = 20;
     private static final int SCROLL_STEP = 16;
@@ -705,42 +712,16 @@ public class FileExplorer extends JTree {
     /* -------------------------------------------------------------------------
     *   Filtering (live, non-destructive)
     */
+    /**
+     * Brings back what a filter removed, by reloading the folders that were
+     * open. The previous restore listed every folder node it met and recursed
+     * into the children it had just created, so it walked every drive of the
+     * machine, on the event thread.
+     */
     public void clearFilter() {
         assertEDT();
         activeFilter = null;
-        DefaultMutableTreeNode root = (DefaultMutableTreeNode) getModel().getRoot();
-        restoreAllNodesFromDiskIndex(root);
-        ((DefaultTreeModel) getModel()).nodeStructureChanged(root);
-    }
-
-    private void restoreAllNodesFromDiskIndex(DefaultMutableTreeNode node) {
-        Object obj = node.getUserObject();
-        if (obj instanceof File folder && folder.isDirectory()) {
-            // Check if we need to reconstruct the visual children from our current disk files
-            // instead of blindly querying folder.listFiles() again on the main thread.
-            File[] files = folder.listFiles();
-            if (files != null) {
-                node.removeAllChildren();
-                for (File f : files) {
-                    if (!showHidden && f.isHidden()) continue;
-                    DefaultMutableTreeNode childNode = nodeIndex.get(f.getAbsoluteFile());
-                    if (childNode == null) {
-                        childNode = new DefaultMutableTreeNode(f);
-                        if (f.isDirectory()) {
-                            childNode.add(new DefaultMutableTreeNode("Loading..."));
-                        }
-                    }
-                    node.add(childNode);
-                }
-            }
-        }
-
-        for (int i = 0; i < node.getChildCount(); i++) {
-            TreeNode child = node.getChildAt(i);
-            if (child instanceof DefaultMutableTreeNode mutableChild) {
-                restoreAllNodesFromDiskIndex(mutableChild);
-            }
-        }
+        reloadKeepingExpansion();
     }
 
     public void applyFilter(String query) {
@@ -833,13 +814,8 @@ public class FileExplorer extends JTree {
                             File changedFile = fullPath.toFile();
                             File parentFolder = changedFile.getParentFile();
 
-                            if (parentFolder != null) {
-                                long now = System.currentTimeMillis();
-                                // Thread-safe atomic check and update for the debounce timer
-                                if (now - lastRefreshTime.get() > 200) {
-                                    lastRefreshTime.set(now);
-                                    SwingUtilities.invokeLater(() -> refreshNode(parentFolder));
-                                }
+                            if (parentFolder != null && pendingRefresh.add(parentFolder)) {
+                                SwingUtilities.invokeLater(FileExplorer.this::scheduleRefresh);
                             }
 
                             if (kind == ENTRY_DELETE) {
@@ -870,6 +846,22 @@ public class FileExplorer extends JTree {
         } catch (Exception e) {
             AppLogger.error("File watcher could not start: " + e.getMessage());
         }
+    }
+
+    /** (Re)starts the quiet period; when it ends, every folder that changed is refreshed. */
+    private void scheduleRefresh() {
+        assertEDT();
+        if (refreshTimer == null) {
+            refreshTimer = new javax.swing.Timer(200, event -> {
+                java.util.List<File> folders = new java.util.ArrayList<>(pendingRefresh);
+                pendingRefresh.removeAll(folders);
+                for (File folder : folders) {
+                    refreshNode(folder);
+                }
+            });
+            refreshTimer.setRepeats(false);
+        }
+        refreshTimer.restart();
     }
 
     private void watchFolder(File folder) {

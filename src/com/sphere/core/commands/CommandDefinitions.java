@@ -40,6 +40,15 @@ public class CommandDefinitions {
         register(":set", "Assign or update an application runtime context variable", Handlers::setCommand);
         register(":create new", "Create a new file within the active directory", Handlers::createNew);
 
+        // --- ROOT Lab: CERN data files and ROOT's test programs, in Java ---
+        register(":rootlab", "ROOT Lab: ROOT's test programs in Java, and CERN data files checked and summarised", RootLabCommands::overview);
+        register(":rootlab test", "Run ROOT's test programs ported to Java. Usage: :rootlab test [suite ...] [--network]", RootLabCommands::test);
+        register(":rootlab open", "Open a data file, a folder of them or a URL in the ROOT Lab tab. Usage: :rootlab open <file|folder|url>", RootLabCommands::openInLab);
+        register(":rootlab fsck", "Check a ROOT file record by record (checksums, directories, recovery). Usage: :rootlab fsck <file|url> [--deep]", RootLabCommands::fsck);
+        register(":rootlab compare", "Compare two ROOT files histogram by histogram (Chi2Test, Kolmogorov). Usage: :rootlab compare <a> <b>", RootLabCommands::compare);
+        register(":rootlab stats", "Statistics of a tree branch, local or remote. Usage: :rootlab stats <file|url> <tree> <branch> [entries]", RootLabCommands::stats);
+        register(":rootlab sniff", "Say what a data file is (ROOT, HepMC, LHE, YODA, SLHA...). Usage: :rootlab sniff <file>", RootLabCommands::sniff);
+
         // --- Workspace & Project Management ---
         register(":project new", "Create and initialize a new project", Handlers::projectNew);
         register(":project open", "Open an existing project from disk", Handlers::projectOpen);
@@ -258,6 +267,8 @@ public class CommandDefinitions {
         HepMCCommands.register();
         // --- Minuit2, ROOT's minimizer, in Java bit for bit: minimize, Hesse, Minos, contours, the viewer's fits ---
         Minuit2Commands.register();
+        // --- TMinuit, ROOT's first minimizer, in Java bit for bit: MINUIT's command language, its plots, beside Minuit2 ---
+        MinuitCommands.register();
         // --- ping, diag, mode and exit for the engines inside Sphere, as ROOT and Python have them ---
         EngineCommands.register();
         LhapdfCommands.register();

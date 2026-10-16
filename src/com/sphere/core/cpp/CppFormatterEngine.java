@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 public final class CppFormatterEngine {
 
@@ -144,29 +143,14 @@ public final class CppFormatterEngine {
         }
 
         try {
-            ProcessBuilder pb = new ProcessBuilder(buildFormatCommand(file.toFile(), dryRun));
-            // CRITICAL FIX: Always redirect error streams to avoid OS pipe deadlock traps.
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
+            final Streams run = run(buildFormatCommand(file.toFile(), dryRun), null);
+            final boolean success = run.exitCode == 0;
 
-            String outputLog;
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                outputLog = reader.lines().collect(Collectors.joining(System.lineSeparator()));
+            if (!success && !run.stderr.isBlank()) {
+                AppLogger.error("[Formatter] File format error: " + run.stderr.strip());
             }
-
-            int exitCode = process.waitFor();
-            boolean success = exitCode == 0;
-
-            if (!success && !outputLog.isBlank()) {
-                AppLogger.error("[Formatter] File format error: " + outputLog);
-            }
-
-            // Honor the user's architectural selection flag safely on the return mapping object
-            String finalStdout = success ? outputLog.trim() : (mergeStreams ? outputLog.trim() : "");
-            String finalStderr = !success ? outputLog.trim() : "";
-
-            return new FormatResult(success, finalStdout, finalStderr, exitCode);
+            final String finalStdout = mergeStreams ? join(run.stdout, run.stderr) : run.stdout;
+            return new FormatResult(success, finalStdout, run.stderr, run.exitCode);
 
         } catch (Exception e) {
             return new FormatResult(false, "", e.getMessage(), -1);
@@ -186,39 +170,82 @@ public final class CppFormatterEngine {
         cmd.add("-"); // Bind to standard input buffer lines
 
         try {
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            // CRITICAL FIX: Keeping streams combined to bypass OS block drops completely
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
+            final Streams run = run(cmd, code);
+            final boolean success = run.exitCode == 0;
 
-            // Push string source blocks upstream to stdin
-            try (BufferedWriter writer = new BufferedWriter(
-                    new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8))) {
-                writer.write(code);
-                writer.flush();
+            if (!success && !run.stderr.isBlank()) {
+                AppLogger.error("[Formatter] Text tracking error: " + run.stderr.strip());
+            } else if (!run.stderr.isBlank()) {
+                // A warning (an unknown key in .clang-format, say) is reported,
+                // never mixed into the code.
+                AppLogger.info("[Formatter] " + run.stderr.strip());
             }
-
-            String outputLog;
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                outputLog = reader.lines().collect(Collectors.joining(System.lineSeparator()));
+            if (!success) {
+                return new FormatResult(false, code, run.stderr, run.exitCode);
             }
-
-            int exitCode = process.waitFor();
-            boolean success = exitCode == 0;
-
-            if (!success && !outputLog.isBlank()) {
-                AppLogger.error("[Formatter] Text tracking error: " + outputLog);
-            }
-
-            String finalStdout = success ? outputLog.trim() : (mergeStreams ? outputLog.trim() : "");
-            String finalStderr = !success ? outputLog.trim() : "";
-
-            return new FormatResult(success, finalStdout, finalStderr, exitCode);
+            final String finalStdout = mergeStreams ? join(run.stdout, run.stderr) : run.stdout;
+            return new FormatResult(true, finalStdout, run.stderr, run.exitCode);
 
         } catch (Exception e) {
             return new FormatResult(false, code, e.getMessage(), -1);
         }
+    }
+
+    /** What a run of clang-format wrote on each stream, kept apart. */
+    private record Streams(String stdout, String stderr, int exitCode) {
+    }
+
+    /**
+     * Runs clang-format with its two output streams read separately.
+     *
+     * Both used to be merged into one (redirectErrorStream), and on success the
+     * merged text was returned as the formatted code: any warning clang-format
+     * printed -- an unknown key in .clang-format, a style it fell back from --
+     * was written into the user's source. The result was also trimmed, which
+     * took the final newline and the indentation of the first line with it.
+     * stderr now goes to a file of its own, so neither stream can block the
+     * other, and stdout comes back byte for byte.
+     */
+    private static Streams run(List<String> cmd, String input) throws IOException, InterruptedException {
+        final File errors = File.createTempFile("sphere-clang-format-", ".err");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectError(ProcessBuilder.Redirect.to(errors));
+            final Process process = pb.start();
+            Thread feeder = null;
+            if (input != null) {
+                feeder = new Thread(() -> {
+                    try (OutputStream in = process.getOutputStream()) {
+                        in.write(input.getBytes(StandardCharsets.UTF_8));
+                    } catch (IOException closedEarly) {
+                        // clang-format stopped reading; its exit code says why.
+                    }
+                }, "sphere-clang-format-stdin");
+                feeder.setDaemon(true);
+                feeder.start();
+            } else {
+                process.getOutputStream().close();
+            }
+            final byte[] out;
+            try (InputStream stdout = process.getInputStream()) {
+                out = stdout.readAllBytes();
+            }
+            final int exit = process.waitFor();
+            if (feeder != null) {
+                feeder.join(2000);
+            }
+            final String err = Files.readString(errors.toPath(), StandardCharsets.UTF_8);
+            return new Streams(new String(out, StandardCharsets.UTF_8), err, exit);
+        } finally {
+            Files.deleteIfExists(errors.toPath());
+        }
+    }
+
+    private static String join(String stdout, String stderr) {
+        if (stderr == null || stderr.isBlank()) {
+            return stdout;
+        }
+        return stdout.endsWith("\n") || stdout.isEmpty() ? stdout + stderr : stdout + "\n" + stderr;
     }
 
     /**

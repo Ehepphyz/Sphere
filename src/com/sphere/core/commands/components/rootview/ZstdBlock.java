@@ -38,7 +38,20 @@ public final class ZstdBlock {
                 throw new DataFormatException("not a zstd frame");
             }
             Frame frame = new Frame(src, at + 4, end);
+            final int frameStart = written;
             written = frame.decode(out, written);
+            if (frame.checksum) {
+                // The low 32 bits of XXH64 of what the frame decoded to. It was
+                // read past without being checked; a damaged frame now fails here.
+                if (frame.at + 4 > end) {
+                    throw new DataFormatException("zstd frame ends inside its checksum");
+                }
+                final int stored = le32(src, frame.at);
+                final int actual = (int) XxHash64.hash(out, frameStart, written - frameStart, 0);
+                if (stored != actual) {
+                    throw new DataFormatException("zstd content checksum does not match: the data is damaged");
+                }
+            }
             at = frame.at + (frame.checksum ? 4 : 0);
         }
         if (written != expected) {

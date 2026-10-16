@@ -175,7 +175,12 @@ public final class RootBuffer {
         if (buffer.remaining() < 10) {
             return;
         }
-        u16();          // version
+        // TBufferFile::SkipVersion: a version, or a byte count first when the
+        // high bit of the first short says so.
+        if ((u16() & 0x4000) != 0 && buffer.remaining() >= 4) {
+            u16();      // low half of the byte count
+            u16();      // version
+        }
         i32();          // fUniqueID
         final int bits = i32();
         // A referenced object writes a process id after the bits. The bits that

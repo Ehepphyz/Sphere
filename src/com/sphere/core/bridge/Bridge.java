@@ -40,7 +40,11 @@ public final class Bridge {
     /** The reader libraries, carried inside Sphere and written out on first use. */
     public static final List<String> LIBRARIES = List.of(
         "sphere_spx.hpp", "SphereSPX.jl", "sphere_spx.f90", "sphere_lhaglue.f90", "sphere_spx.py",
-        "sphere_mpl.py", "sphere_view.hpp", "sphere_view3d.hpp", "sphere_minuit2.hpp");
+        "sphere_mpl.py", "sphere_view.hpp", "sphere_view3d.hpp", "sphere_minuit2.hpp",
+        // Sphere's Minuit2 autopilot on ROOT's own Minuit2, for ROOT macros, C++ programs and PyROOT
+        "sphere_autopilot.hpp",
+        // the Sphere x87 ABI: long double on the x87 unit, one C interface for every language (x86-64)
+        "sphere_x87.S", "sphere_x87.h");
 
     private static volatile boolean materialized;
 

@@ -1,0 +1,115 @@
+# Every SET and SHOW option, before and after a minimization
+new 2 rosen
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1.0 0.1 0 0
+cmd SET PRINT 0
+cmd SHOW FCN
+cmd SHOW PAR
+cmd SHOW LIM
+cmd SHOW COV
+cmd SHOW COR
+cmd SHOW PRI
+cmd SHOW GRA
+cmd SHOW NOG
+cmd SHOW ERR
+cmd SHOW INP
+cmd SHOW WID
+cmd SHOW LIN
+cmd SHOW NOW
+cmd SHOW WAR
+cmd SHOW RAN
+cmd SHOW TIT
+cmd SHOW STR
+cmd SHOW EIG
+cmd SHOW PAG
+cmd SHOW MIN
+cmd SHOW EPS
+cmd SHOW OUT
+cmd SHOW BAT
+cmd SHOW INT
+cmd SHOW VER
+cmd SHOW RES
+cmd SHOW NOD
+cmd SHOW DEB
+cmd SHOW SHO
+cmd SHOW SET
+cmd SHOW XYZ
+cmd SHOW
+cmd SET
+cmd SET XYZ
+cmd SET FCN
+cmd SET COV
+cmd SET INP
+cmd SET TIT
+cmd SET EIG
+cmd SET MIN
+cmd SET VER
+cmd SET SHO
+cmd SET SET
+cmd SET RES
+cmd SET WID 90
+cmd SHOW WID
+cmd SET WID 20
+cmd SHOW WID
+cmd SET LIN 40
+cmd SHOW LIN
+cmd SET PAG 0
+cmd SET PAG 1
+cmd SET OUT 6
+cmd SET BAT
+cmd SET INT
+cmd SHOW INT
+cmd SET BAT
+cmd SET RAN 54321
+cmd SHOW RAN
+cmd SHOW RAN
+cmd SET STR 3
+cmd SHOW STR
+cmd SET STR -1
+cmd SHOW STR
+cmd SET STR 1
+cmd SET PRI 5
+cmd SHOW PRI
+cmd SET PRI -3
+cmd SHOW PRI
+cmd SET PRI 1
+cmd SET STR 2
+cmd SET EPS 0.5
+cmd SHOW EPS
+cmd SET EPS 1e-15
+cmd SHOW EPS
+cmd SET ERR 0.5
+cmd SHOW ERR
+cmd SET ERR 0.5
+cmd SET ERR 0
+cmd SET ERR 0
+cmd SET ERR 2
+cmd SET ERR -1
+cmd SHOW ERR
+cmd SET PAR 1 -1
+cmd SET PAR 5 2
+cmd SET PAR 0 2
+cmd SHOW PAR
+cmd MIGRAD
+dump after migrad
+cmd SHOW MIN
+cmd MINOS
+cmd SHOW MIN
+dump after minos
+cmd SHOW EIG
+cmd SHOW COV
+cmd SHOW COR
+cmd SHOW FCN
+cmd SHOW PAR
+cmd SET DEB 9
+cmd SET DEB
+cmd SHOW DEB
+cmd SET DEB 3
+cmd SET NOD 0
+cmd SHOW DEB
+cmd SET NOD -1
+cmd SHOW DEB
+cmd SET WAR
+cmd SET NOW
+cmd SHOW NOW
+counts

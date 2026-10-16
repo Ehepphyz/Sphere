@@ -89,6 +89,8 @@ Sphere embeds a highly optimized C++ backend (`CppBackend`, `CppDiagnosticsEngin
 
 The **root-bridge** is a high-performance C++20 subsystem that acts as an ultra-low latency, zero-copy data and rendering gatekeeper between raw ROOT storage (`.root` files, `TTree`, `RNTuple`, `TChain`) and modern runtime clients (Java 22+, Python, Julia, PyTorch, TensorFlow, C++ applications).
 
+![Image 11](images/image10.png)
+
 It is optimized for:
 
 - Ultra-low latency inter-process communication (IPC)
@@ -98,6 +100,8 @@ It is optimized for:
 It integrates all sub-systems, including the **Multi-File/Multi-Partition Ingestion Engine** (`TChain` / `RNTuple` dataset partitions) and the **`io_uring` Fixed Files / Fixed Buffers Zero-Overhead Kernel Layer**, while remaining **fully cross-platform (Linux, WSL2, macOS, Windows)**.
 
 It dynamically pairs OS-native asynchronous I/O engines with ring-buffered shared memory (SHM), dynamic SIMD acceleration, and the **Java 22+ Foreign Function & Memory (FFM) API (Project Panama)** to achieve end-to-end zero-copy data transfers with **zero external JARs or heavy third-party dependencies**.
+
+![Image 10](images/image9.png)
 
 ---
 

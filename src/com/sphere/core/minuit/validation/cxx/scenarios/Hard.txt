@@ -1,0 +1,73 @@
+# Hard functions: a saddle, a flat direction, a NaN region, a correlated bowl at strategies 2 and 0
+new 2 saddle
+parm 0 x 0.5 0.1 0 0
+parm 1 y 0.1 0.1 0 0
+cmd SET PRINT 1
+cmd MIGRAD
+dump saddle
+cmd HESSE
+cmd SHOW EIG
+cmd MINOS
+dump saddle minos
+new 2 flat
+parm 0 a 0 0.1 0 0
+parm 1 b 1 0.1 0 0
+cmd SET PRINT 1
+cmd MIGRAD
+cmd HESSE
+cmd SIMPLEX
+cmd MINOS
+dump flat
+new 2 nanfcn
+parm 0 u 1 0.5 0 0
+parm 1 v 0 0.5 0 0
+cmd SET PRINT 1
+cmd MIGRAD
+dump nan
+cmd SIMPLEX
+dump nan simplex
+cmd HESSE
+dump nan hesse
+new 3 bowl3
+parm 0 x 0 0.5 0 0
+parm 1 y 0 0.5 0 0
+parm 2 z 1 0.5 -2 2
+cmd SET PRINT 1
+cmd SET STR 2
+cmd MIGRAD
+cmd SHOW EIG
+cmd SHOW COV
+emat 3
+emat 2
+emat 5
+pout 0
+pout 2
+pout 3
+pout -1
+pout -3
+pout -5
+pout -2
+cmd MINOS
+dump bowl3
+cmd SET STR 0
+cmd SET PAR 1 3
+cmd MIGRAD
+cmd HESSE
+dump bowl3 s0
+counts
+new 30 bowl3
+parm 0 x 0 0.5 0 0
+parm 1 y 0 0.5 0 0
+parm 2 z 1 0.5 -2 2
+parm 3 w 1 0.5 0 0
+parm 4 w2 1 0.5 0 0
+parm 5 w3 1 0.5 -3 3
+parm 6 w4 1 0.5 0 0
+cmd SET PRINT 1
+cmd SET WID 50
+cmd MIGRAD
+cmd HESSE
+cmd SHOW COR
+cmd SHOW COV
+dump extra parameters
+counts

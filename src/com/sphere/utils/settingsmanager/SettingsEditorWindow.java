@@ -160,7 +160,9 @@ public class SettingsEditorWindow extends JFrame {
     }
 
     /**
-     * Recursively purges contents of a targeted directory tree.
+     * Empties config/ so that it is rebuilt. A folder inside is deleted without
+     * following links: the previous recursion went through a link or junction
+     * placed there and emptied whatever it pointed at.
      */
     private void clearConfigDirectory(File directory) {
         if (directory.exists() && directory.isDirectory()) {
@@ -168,9 +170,10 @@ public class SettingsEditorWindow extends JFrame {
             if (files != null) {
                 for (File f : files) {
                     if (f.isDirectory()) {
-                        clearConfigDirectory(f);
+                        com.sphere.components.fileexplorerincludes.ContextMenuBuilder.deleteDirectoryRecursive(f);
+                    } else {
+                        f.delete();
                     }
-                    f.delete();
                 }
             }
         }

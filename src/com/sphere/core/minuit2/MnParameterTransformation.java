@@ -75,7 +75,7 @@ public final class MnParameterTransformation {
         final LongDouble vlimlo = piby2.negate().add(ld(distnn));
         final LongDouble yy = ld(value).subtract(ld(lower)).multiply(2.).divide(ld(upper).subtract(ld(lower))).subtract(1.);
         final LongDouble yy2 = yy.multiply(yy);
-        if (yy2.compareTo(ld(1. - prec.eps2())) > 0) {
+        if (yy2.gt(ld(1. - prec.eps2()))) {
             return (yy.signum() < 0 ? vlimlo : vlimhi).toDouble();
         }
         return NativeMath.asinl(yy).toDouble();
@@ -117,7 +117,7 @@ public final class MnParameterTransformation {
         }
         final LongDouble yy = ld(value).subtract(ld(lower)).add(1.);
         final LongDouble yy2 = yy.multiply(yy);
-        if (yy2.compareTo(ld(1.)) < 0) return 0;
+        if (yy2.lt(ld(1.))) return 0;
         return yy2.subtract(1.).sqrt().toDouble();
     }
 
@@ -156,7 +156,7 @@ public final class MnParameterTransformation {
         }
         final LongDouble yy = ld(upper).subtract(ld(value)).add(1.);
         final LongDouble yy2 = yy.multiply(yy);
-        if (yy2.compareTo(ld(1.)) < 0) return 0;
+        if (yy2.lt(ld(1.))) return 0;
         return yy2.subtract(1.).sqrt().toDouble();
     }
 

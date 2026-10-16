@@ -46,6 +46,9 @@ public final class RootFile implements AutoCloseable {
     private static final long MAX_PAYLOAD = 512L * 1024 * 1024;
 
     private final Path path;
+    /** Where the bytes come from: an absolute path, or the URL of a remote file. */
+    private final String location;
+    private final boolean remote;
     private final SeekableByteChannel channel;
     private final long size;
 
@@ -53,6 +56,8 @@ public final class RootFile implements AutoCloseable {
     private long begin;
     private long end;
     private long seekFree;
+    private int nbytesFree;
+    private int nbytesName;
     private long seekInfo;
     private int nbytesInfo;
     private int compress;
@@ -63,9 +68,37 @@ public final class RootFile implements AutoCloseable {
 
     public RootFile(Path path) throws IOException {
         this.path = path;
+        this.location = path.toAbsolutePath().toString();
+        this.remote = false;
         this.channel = Files.newByteChannel(path);
         this.size = Files.size(path);
-        readHeader();
+        try {
+            readHeader();
+        } catch (IOException | RuntimeException notRoot) {
+            // The channel was opened above; a file that is not ROOT must not keep it.
+            channel.close();
+            throw notRoot;
+        }
+    }
+
+    /**
+     * A file read through any channel: a remote file over HTTP, an entry stored
+     * inside a zip archive. The nominal path is only a name for display (its
+     * file name is what titles show); location says where the bytes really are.
+     */
+    public RootFile(SeekableByteChannel channel, long size, Path nominal, String location)
+            throws IOException {
+        this.path = nominal;
+        this.location = location;
+        this.remote = true;
+        this.channel = channel;
+        this.size = size;
+        try {
+            readHeader();
+        } catch (IOException | RuntimeException notRoot) {
+            channel.close();
+            throw notRoot;
+        }
     }
 
     @Override
@@ -77,6 +110,42 @@ public final class RootFile implements AutoCloseable {
 
     public Path getPath() {
         return path;
+    }
+
+    /** The absolute path, or the URL, the file was opened from. */
+    public String getLocation() {
+        return location;
+    }
+
+    /** True when the bytes are not read from a local file (HTTP, an archive). */
+    public boolean isRemote() {
+        return remote;
+    }
+
+    /** fBEGIN: where the first record, the TFile's own key, starts. */
+    public long getBegin() {
+        return begin;
+    }
+
+    public int getFileVersionRaw() {
+        return fileVersion;
+    }
+
+    public int getNbytesFree() {
+        return nbytesFree;
+    }
+
+    public int getNbytesName() {
+        return nbytesName;
+    }
+
+    public int getUnits() {
+        return units;
+    }
+
+    /** fCompress as written: 100 * algorithm + level. */
+    public int getCompressionSetting() {
+        return compress;
     }
 
     public long getSize() {
@@ -142,9 +211,9 @@ public final class RootFile implements AutoCloseable {
             end = Integer.toUnsignedLong(h.getInt());
             seekFree = Integer.toUnsignedLong(h.getInt());
         }
-        h.getInt();                 // fNbytesFree
+        nbytesFree = h.getInt();
         h.getInt();                 // nfree
-        h.getInt();                 // fNbytesName
+        nbytesName = h.getInt();
         units = h.get() & 0xff;
         compress = h.getInt();
         seekInfo = bigFile ? h.getLong() : Integer.toUnsignedLong(h.getInt());
@@ -153,7 +222,13 @@ public final class RootFile implements AutoCloseable {
 
     // ---- raw access --------------------------------------------------------
 
-    private ByteBuffer read(long at, int length) throws IOException {
+    /**
+     * Synchronized because the position and the read are two calls on one
+     * channel: the viewer, the tree reader and the ROOT Lab may read the same
+     * file from different threads, and an interleaving there handed one of them
+     * the bytes of another record.
+     */
+    private synchronized ByteBuffer read(long at, int length) throws IOException {
         if (at < 0 || length < 0 || at + length > size) {
             throw new IOException("read past the end of the file at " + at);
         }
@@ -308,24 +383,7 @@ public final class RootFile implements AutoCloseable {
             block.get(packedBytes);
 
             final int room = Math.min(unpacked, result.length - filled);
-            int written;
-            switch (algorithm) {
-                case "ZL":
-                    written = inflateZlib(packedBytes, result, filled, room);
-                    break;
-                case "L4":
-                    // LZ4 blocks carry an eight byte checksum before the data.
-                    written = Lz4Block.decode(packedBytes, 8, packedBytes.length - 8,
-                                              result, filled, room);
-                    break;
-                case "ZS":
-                    written = inflateZstd(packedBytes, unpacked, result, filled, room);
-                    break;
-                default:
-                    // XZ is LZMA and CS the old ROOT routine; neither ships with
-                    // the JDK, so say so rather than return noise.
-                    throw new UnsupportedPayload(algorithmName(algorithm));
-            }
+            final int written = unpackBlock(algorithm, packedBytes, unpacked, result, filled, room, at - 9);
             if (written <= 0) {
                 break;
             }
@@ -340,14 +398,86 @@ public final class RootFile implements AutoCloseable {
         return result;
     }
 
-    private static int inflateZlib(byte[] input, byte[] out, int at, int room)
-            throws IOException {
-        Inflater inflater = new Inflater();
+    /**
+     * One compressed block, by the tag in front of it, as R__unzip dispatches:
+     * ZL zlib, CS the old ROOT deflate (raw, no zlib wrapper), XZ an .xz
+     * stream, L4 LZ4 behind its XXH64 checksum, ZS a Zstandard frame. Every
+     * check the format carries is verified, as ROOT does; a block that fails
+     * one is refused rather than returned damaged.
+     */
+    public static int unpackBlock(String algorithm, byte[] packedBytes, int unpacked,
+                           byte[] result, int filled, int room, long blockAt) throws IOException {
         try {
-            inflater.setInput(input);
-            return inflater.inflate(out, at, room);
+            switch (algorithm) {
+                case "ZL":
+                    return inflate(packedBytes, result, filled, room, false, blockAt);
+                case "CS":
+                    // R__Inflate, the Info-ZIP inflate ROOT kept for its first
+                    // files: deflate without the zlib header and trailer.
+                    return inflate(packedBytes, result, filled, room, true, blockAt);
+                case "XZ": {
+                    byte[] block = XzBlock.decode(packedBytes, 0, packedBytes.length, unpacked);
+                    final int written = Math.min(block.length, room);
+                    System.arraycopy(block, 0, result, filled, written);
+                    return written;
+                }
+                case "L4": {
+                    // LZ4 blocks carry an eight byte checksum before the data.
+                    if (packedBytes.length < 8) {
+                        throw new IOException("LZ4 block at " + blockAt + " is too short for its checksum");
+                    }
+                    final long stored = XxHash64.readCanonical(packedBytes, 0);
+                    final long actual = XxHash64.hash(packedBytes, 8, packedBytes.length - 8, 0);
+                    if (stored != actual) {
+                        throw new IOException("LZ4 block at " + blockAt
+                            + " fails its XXH64 checksum: the data is damaged");
+                    }
+                    return Lz4Block.decode(packedBytes, 8, packedBytes.length - 8, result, filled, room);
+                }
+                case "ZS":
+                    return inflateZstd(packedBytes, unpacked, result, filled, room);
+                default:
+                    throw new UnsupportedPayload(algorithmName(algorithm));
+            }
         } catch (DataFormatException bad) {
-            throw new IOException("a compressed block is damaged");
+            throw new IOException(algorithmName(algorithm) + " block at " + blockAt + " is damaged: "
+                                  + bad.getMessage());
+        } catch (RuntimeException corrupt) {
+            // A damaged block can send an index out of its array; that is a bad
+            // block, not a reason to take the reading thread down.
+            throw new IOException(algorithmName(algorithm) + " block at " + blockAt + " is damaged ("
+                                  + corrupt.getClass().getSimpleName() + ")");
+        }
+    }
+
+    private static int inflate(byte[] input, byte[] out, int at, int room, boolean raw, long blockAt)
+            throws IOException, DataFormatException {
+        Inflater inflater = new Inflater(raw);
+        try {
+            if (raw) {
+                // zlib wants one byte past a raw stream to be sure it has ended.
+                byte[] padded = java.util.Arrays.copyOf(input, input.length + 1);
+                inflater.setInput(padded);
+            } else {
+                inflater.setInput(input);
+            }
+            int written = 0;
+            while (written < room && !inflater.finished()) {
+                final int n = inflater.inflate(out, at + written, room - written);
+                if (n == 0 && (inflater.needsInput() || inflater.needsDictionary())) {
+                    break;
+                }
+                written += n;
+            }
+            if (!raw && !inflater.finished() && written == room) {
+                // The block filled its room; zlib only checks the Adler-32 once it
+                // reads the end of the stream, so make it do so.
+                byte[] probe = new byte[1];
+                if (inflater.inflate(probe) != 0) {
+                    throw new IOException("zlib block at " + blockAt + " holds more data than its header says");
+                }
+            }
+            return written;
         } finally {
             inflater.end();
         }
@@ -415,15 +545,11 @@ public final class RootFile implements AutoCloseable {
     }
 
     private static int inflateZstd(byte[] input, int unpacked, byte[] out,
-                                   int at, int room) throws IOException {
-        try {
-            byte[] block = ZstdBlock.decode(input, 0, input.length, unpacked);
-            final int written = Math.min(block.length, room);
-            System.arraycopy(block, 0, out, at, written);
-            return written;
-        } catch (DataFormatException bad) {
-            throw new IOException("a compressed block is damaged");
-        }
+                                   int at, int room) throws DataFormatException {
+        byte[] block = ZstdBlock.decode(input, 0, input.length, unpacked);
+        final int written = Math.min(block.length, room);
+        System.arraycopy(block, 0, out, at, written);
+        return written;
     }
 
     private static int u24(ByteBuffer b) {
@@ -585,5 +711,179 @@ public final class RootFile implements AutoCloseable {
             tally.merge(child.className, 1, Integer::sum);
             countClasses(child, tally);
         }
+    }
+
+    // ---- the records as they sit on disk -------------------------------------
+
+    /**
+     * One record met walking the file from fBEGIN: a key and its object, or a
+     * gap (a negative byte count, which ROOT writes over freed space).
+     */
+    public static final class Record {
+        public final long offset;
+        public final int nbytes;
+        public final boolean gap;
+        public final RootKey key;
+
+        Record(long offset, int nbytes, boolean gap, RootKey key) {
+            this.offset = offset;
+            this.nbytes = nbytes;
+            this.gap = gap;
+            this.key = key;
+        }
+    }
+
+    /** What a walk over the records found, and where it had to stop. */
+    public static final class RecordScan {
+        public final List<Record> records = new ArrayList<>();
+        /** Null when the walk reached fEND; otherwise why it stopped. */
+        public String stoppedBecause;
+        public long stoppedAt = -1;
+    }
+
+    /**
+     * Every record from fBEGIN to fEND, in file order, the way TFile::Recover
+     * and TFile::GetCompressionFactor walk them. It does not need the
+     * directories: this is how a file whose key list was never written (a job
+     * that crashed) still shows what it holds, and how holes and overlaps in a
+     * damaged one are found.
+     */
+    public RecordScan scanRecords() throws IOException {
+        RecordScan scan = new RecordScan();
+        long at = begin;
+        final long stop = Math.min(end, size);
+        int guard = 0;
+        while (at < stop) {
+            if (++guard > 50_000_000) {
+                scan.stoppedBecause = "too many records";
+                scan.stoppedAt = at;
+                break;
+            }
+            if (at + 4 > size) {
+                scan.stoppedBecause = "a record header runs past the end of the file";
+                scan.stoppedAt = at;
+                break;
+            }
+            final int nbytes = read(at, 4).getInt();
+            if (nbytes < 0) {
+                // a free gap, as ROOT marks freed space
+                scan.records.add(new Record(at, -nbytes, true, null));
+                at += -(long) nbytes;
+                continue;
+            }
+            if (nbytes == 0) {
+                scan.stoppedBecause = "a record of zero bytes (the file is damaged here)";
+                scan.stoppedAt = at;
+                break;
+            }
+            RootKey k = readKey(at);
+            if (k == null || k.nbytes != nbytes || k.keylen <= 0 || k.keylen > nbytes) {
+                scan.stoppedBecause = "no readable key header";
+                scan.stoppedAt = at;
+                break;
+            }
+            scan.records.add(new Record(at, nbytes, false, k));
+            at += nbytes;
+        }
+        return scan;
+    }
+
+    /**
+     * TFile::GetCompressionFactor: the bytes the objects would take
+     * uncompressed over the bytes they take, keys included, starting from
+     * fBEGIN on both sides.
+     */
+    public double compressionFactor() throws IOException {
+        double comp = begin;
+        double uncomp = begin;
+        long at = begin;
+        while (at < end - 100) {
+            if (at + 18 > size) {
+                break;
+            }
+            ByteBuffer h = read(at, 18);
+            final int nbytes = h.getInt();
+            if (nbytes < 0) {
+                at -= nbytes;
+                continue;
+            }
+            if (nbytes == 0) {
+                break;
+            }
+            h.getShort();                                   // key version
+            int objlen = h.getInt();
+            h.getInt();                                     // datime
+            final short keylen = h.getShort();
+            if (objlen == 0) {
+                objlen = nbytes - keylen;
+            }
+            comp += nbytes;
+            uncomp += keylen + objlen;
+            at += nbytes;
+        }
+        return uncomp / comp;
+    }
+
+    /** One free segment, [first, last], as TFree writes it. */
+    public record FreeSegment(long first, long last) {
+    }
+
+    /** The free segments list ROOT keeps at fSeekFree (always uncompressed). */
+    public List<FreeSegment> freeSegments() throws IOException {
+        List<FreeSegment> out = new ArrayList<>();
+        if (seekFree <= 0 || seekFree >= size) {
+            return out;
+        }
+        RootKey k = readKey(seekFree);
+        if (k == null) {
+            return out;
+        }
+        ByteBuffer b = ByteBuffer.wrap(payload(k)).order(ByteOrder.BIG_ENDIAN);
+        while (b.remaining() >= 10) {
+            final short version = b.getShort();
+            if (version == 0) {
+                break;          // TFile::WriteFree pads the record with zeros when it reserved too much
+            }
+            if (version > 1000) {
+                if (b.remaining() < 16) {
+                    break;
+                }
+                out.add(new FreeSegment(b.getLong(), b.getLong()));
+            } else {
+                out.add(new FreeSegment(Integer.toUnsignedLong(b.getInt()), Integer.toUnsignedLong(b.getInt())));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The algorithm the compressed records really use, read off the first
+     * one's block header: a file whose fCompress says only "the default"
+     * (algorithm 0) was compressed with what that ROOT's default was -- the
+     * old ROOT routine before 5.30, zlib after. Null when nothing is compressed.
+     */
+    public String firstBlockAlgorithm() throws IOException {
+        final java.util.Deque<RootNode> todo = new java.util.ArrayDeque<>(tree().children);
+        while (!todo.isEmpty()) {
+            final RootNode n = todo.poll();
+            if (n.directory) {
+                todo.addAll(n.children);
+            }
+            if (n.key != null && n.key.compressed() && n.key.storedBytes() >= 2) {
+                final byte[] tag = rawAt(n.key.payloadAt(), 2);
+                return algorithmName(new String(tag, StandardCharsets.US_ASCII));
+            }
+        }
+        final RootKey info = streamerInfoKey();
+        if (info != null && info.compressed() && info.storedBytes() >= 2) {
+            return algorithmName(new String(rawAt(info.payloadAt(), 2), StandardCharsets.US_ASCII));
+        }
+        return null;
+    }
+
+    /** The key list record of the top directory (fSeekKeys), or -1 when it was never written. */
+    public long topKeyListSeek() throws IOException {
+        RootKey top = readKey(begin);
+        return top == null ? -1 : topDirectoryKeyTable(top);
     }
 }

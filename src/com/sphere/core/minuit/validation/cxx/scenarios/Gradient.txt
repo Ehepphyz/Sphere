@@ -1,0 +1,44 @@
+# Derivatives given by the FCN: checked and accepted, rejected, forced, absent
+new 3 quartic
+parm 0 x 3 0.5 0 0
+parm 1 y 1 0.5 0 0
+parm 2 z 1 0.3 0 0
+cmd SET PRINT 0
+cmd SET GRAD
+cmd SHOW GRAD
+cmd MIGRAD
+counts
+dump grad
+cmd SET STR 0
+cmd SET GRAD 1
+cmd SET PAR 1 2
+cmd MIGRAD
+cmd HESSE
+dump forced
+cmd SET NOGRAD
+cmd SHOW GRAD
+cmd SET STR 2
+cmd MIGRAD
+dump nograd
+new 2 badgrad
+parm 0 x 0 1 0 0
+parm 1 y 0 1 -5 5
+cmd SET PRINT 1
+cmd SET GRAD
+cmd SHOW GRAD
+cmd MIGRAD
+dump badgrad refused
+cmd SET GRAD 1
+cmd SET PAR 1 0
+cmd SET PAR 2 0
+cmd MIGRAD
+dump badgrad forced
+counts
+new 2 rosen
+parm 0 x -1.2 0.1 0 0
+parm 1 y 1 0.1 0 0
+cmd SET GRAD
+cmd SHOW GRAD
+cmd MIGRAD
+dump rosen nograd
+counts

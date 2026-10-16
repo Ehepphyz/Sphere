@@ -86,6 +86,27 @@ public final class NativeMath {
         return hostReady;
     }
 
+    /** Why this machine's C library is not reachable; empty when it is. */
+    public static String hostFailure() {
+        return hostFailure;
+    }
+
+    /**
+     * Native access is the launcher's to grant: the manifest of Sphere.jar
+     * (Enable-Native-Access) grants it to 'java -jar Sphere.jar', the option
+     * --enable-native-access to any other launch. Asked before any restricted
+     * method is called, so that without it none is: the portable functions
+     * serve and {@link #hostFailure} says why, instead of the JVM's warning
+     * today and the call refused tomorrow.
+     */
+    static void requireNativeAccess() {
+        final Module self = NativeMath.class.getModule();
+        if (!self.isNativeAccessEnabled()) {
+            throw new IllegalCallerException("native access is not enabled for Sphere (run 'java -jar Sphere.jar', "
+                + "whose manifest enables it, or add --enable-native-access=" + (self.isNamed() ? self.getName() : "ALL-UNNAMED") + ")");
+        }
+    }
+
     /** What the functions are, in a sentence. */
     public static String describe() {
         if (target == Target.PORTABLE) {
@@ -203,6 +224,7 @@ public final class NativeMath {
     /* ---- this machine ----------------------------------------------------------- */
 
     private static void setUpHost() throws Throwable {
+        requireNativeAccess();
         final String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         final String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
         final boolean x64 = arch.equals("amd64") || arch.equals("x86_64");
@@ -245,33 +267,24 @@ public final class NativeMath {
         final FunctionDescriptor binary = FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
         if (windows) {
             // MinGW's long double functions are in a static library: run their x87 instructions here
-            final MemorySegment page = Executable.allocate(linker, true);
-            int at = 0;
-            final MemorySegment s = Executable.put(page, at, X87.minGwTrig(X87.FSIN));
-            at += 128;
-            final MemorySegment c = Executable.put(page, at, X87.minGwTrig(X87.FCOS));
-            at += 128;
-            final MemorySegment a = Executable.put(page, at, X87.minGwAsin());
-            sinl = linker.downcallHandle(s, unary);
-            cosl = linker.downcallHandle(c, unary);
-            asinl = linker.downcallHandle(a, unary);
+            final MemorySegment page = Executable.load(linker, true,
+                Executable.slots(X87.minGwTrig(X87.FSIN), X87.minGwTrig(X87.FCOS), X87.minGwAsin()));
+            sinl = linker.downcallHandle(Executable.slot(page, 0), unary);
+            cosl = linker.downcallHandle(Executable.slot(page, 1), unary);
+            asinl = linker.downcallHandle(Executable.slot(page, 2), unary);
             powl = null;
             hostDescription = library + " for double; the x87 instructions of MinGW's sinl, cosl and asinl for long double";
         } else {
             // System V: call the library's own long double functions through an adapter
-            final MemorySegment page = Executable.allocate(linker, false);
-            int at = 0;
-            final MemorySegment s = Executable.put(page, at, X87.sysvAdapter(find(libm, "sinl").address(), 1));
-            at += 128;
-            final MemorySegment c = Executable.put(page, at, X87.sysvAdapter(find(libm, "cosl").address(), 1));
-            at += 128;
-            final MemorySegment a = Executable.put(page, at, X87.sysvAdapter(find(libm, "asinl").address(), 1));
-            at += 128;
-            final MemorySegment p = Executable.put(page, at, X87.sysvAdapter(find(libm, "powl").address(), 2));
-            sinl = linker.downcallHandle(s, unary);
-            cosl = linker.downcallHandle(c, unary);
-            asinl = linker.downcallHandle(a, unary);
-            powl = linker.downcallHandle(p, binary);
+            final MemorySegment page = Executable.load(linker, false, Executable.slots(
+                X87.sysvAdapter(find(libm, "sinl").address(), 1),
+                X87.sysvAdapter(find(libm, "cosl").address(), 1),
+                X87.sysvAdapter(find(libm, "asinl").address(), 1),
+                X87.sysvAdapter(find(libm, "powl").address(), 2)));
+            sinl = linker.downcallHandle(Executable.slot(page, 0), unary);
+            cosl = linker.downcallHandle(Executable.slot(page, 1), unary);
+            asinl = linker.downcallHandle(Executable.slot(page, 2), unary);
+            powl = linker.downcallHandle(Executable.slot(page, 3), binary);
             hostDescription = library + ", its long double functions on the x87 80-bit format";
         }
         // check the long double functions once: sin(0.5) and asin(0.5) must be what they are
@@ -299,34 +312,82 @@ public final class NativeMath {
         return s.orElseThrow(() -> new UnsupportedOperationException("no " + name + " in the C library"));
     }
 
-    /** Pages of executable memory, from the operating system. */
-    private static final class Executable {
-        static MemorySegment allocate(Linker linker, boolean windows) throws Throwable {
-            final long size = 4096;
-            MemorySegment page;
+    /**
+     * Pages of machine code, from the operating system, never writable and
+     * executable at once (W^X): the page is mapped read-write, the code copied
+     * in, then the page made read-execute for good.
+     */
+    static final class Executable {
+        private static final long PAGE = 4096;
+        /** The room of one thunk in a page of {@link #slots}. */
+        private static final int SLOT = 128;
+
+        /** Thunks one after the other, each at the start of a slot of {@link #SLOT} bytes. */
+        static byte[] slots(byte[]... thunks) {
+            final byte[] image = new byte[thunks.length * SLOT];
+            for (int i = 0; i < thunks.length; i++) {
+                if (thunks[i].length > SLOT) throw new IllegalStateException("a thunk of " + thunks[i].length + " bytes overflows its slot");
+                System.arraycopy(thunks[i], 0, image, i * SLOT, thunks[i].length);
+            }
+            return image;
+        }
+
+        /** The entry of the thunk in slot i of a page loaded from {@link #slots}. */
+        static MemorySegment slot(MemorySegment page, int i) {
+            return page.asSlice((long) i * SLOT);
+        }
+
+        /** The code in a page of its own, read-execute; the segment starts at its first byte. */
+        static MemorySegment load(Linker linker, boolean windows, byte[] code) throws Throwable {
+            if (code.length > PAGE) throw new IllegalStateException("the code does not fit its page");
+            final MemorySegment page;
             if (windows) {
                 final SymbolLookup k32 = SymbolLookup.libraryLookup("kernel32", Arena.global());
                 final MethodHandle valloc = linker.downcallHandle(find(k32, "VirtualAlloc"),
                     FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-                // MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
-                page = (MemorySegment) valloc.invokeExact(MemorySegment.NULL, size, 0x3000, 0x40);
+                final MethodHandle vprotect = linker.downcallHandle(find(k32, "VirtualProtect"),
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+                final MethodHandle flush = linker.downcallHandle(find(k32, "FlushInstructionCache"),
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+                // MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
+                page = mapped((MemorySegment) valloc.invokeExact(MemorySegment.NULL, PAGE, 0x3000, 0x04));
+                page.copyFrom(MemorySegment.ofArray(code));
+                try (Arena a = Arena.ofConfined()) {
+                    // PAGE_EXECUTE_READ; the previous protection is written to 'old'
+                    final MemorySegment old = a.allocate(ValueLayout.JAVA_INT);
+                    if ((int) vprotect.invokeExact(page, PAGE, 0x20, old) == 0) {
+                        throw new IllegalStateException("VirtualProtect refused to make the code executable");
+                    }
+                }
+                // GetCurrentProcess() is the pseudo handle -1
+                if ((int) flush.invokeExact(MemorySegment.ofAddress(-1L), page, PAGE) == 0) {
+                    throw new IllegalStateException("FlushInstructionCache failed");
+                }
             } else {
-                final MethodHandle mmap = linker.downcallHandle(find(linker.defaultLookup(), "mmap"),
+                final SymbolLookup libc = linker.defaultLookup();
+                final MethodHandle mmap = linker.downcallHandle(find(libc, "mmap"),
                     FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG));
+                final MethodHandle mprotect = linker.downcallHandle(find(libc, "mprotect"),
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
                 final boolean mac = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
-                // PROT_READ | PROT_WRITE | PROT_EXEC; MAP_PRIVATE | MAP_ANONYMOUS
-                page = (MemorySegment) mmap.invokeExact(MemorySegment.NULL, size, 7, mac ? 0x1002 : 0x22, -1, 0L);
+                // PROT_READ | PROT_WRITE; MAP_PRIVATE | MAP_ANONYMOUS
+                page = mapped((MemorySegment) mmap.invokeExact(MemorySegment.NULL, PAGE, 3, mac ? 0x1002 : 0x22, -1, 0L));
+                page.copyFrom(MemorySegment.ofArray(code));
+                // PROT_READ | PROT_EXEC
+                if ((int) mprotect.invokeExact(page, PAGE, 5) != 0) {
+                    throw new IllegalStateException("mprotect refused to make the code executable");
+                }
             }
-            if (page.address() == 0 || page.address() == -1L) throw new IllegalStateException("no executable memory");
-            return page.reinterpret(size);
+            return page;
         }
 
-        static MemorySegment put(MemorySegment page, int at, byte[] code) {
-            final MemorySegment slot = page.asSlice(at, code.length);
-            slot.copyFrom(MemorySegment.ofArray(code));
-            return page.asSlice(at);
+        /** The page, or the failure of VirtualAlloc (NULL) and mmap (MAP_FAILED). */
+        private static MemorySegment mapped(MemorySegment page) {
+            if (page.address() == 0 || page.address() == -1L) throw new IllegalStateException("no memory for the code");
+            return page.reinterpret(PAGE);
         }
     }
 

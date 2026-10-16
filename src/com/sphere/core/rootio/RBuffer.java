@@ -185,7 +185,10 @@ public final class RBuffer {
         final boolean memberWise = (version & STREAMED_MEMBER_WISE) != 0;
         version &= ~STREAMED_MEMBER_WISE;
         long checksum = 0;
-        if (version == 0 && remaining() >= 4) checksum = u32();
+        // ReadVersion reads the checksum of a class without ClassDef only when a
+        // byte count of at least six came first (v.cnt >= 6): an object written
+        // without one has no checksum to read.
+        if (version == 0 && end - start - 4 >= 6 && remaining() >= 4) checksum = u32();
         return new Header(version, checksum, start, end, memberWise);
     }
 

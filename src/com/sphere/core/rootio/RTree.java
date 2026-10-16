@@ -220,7 +220,7 @@ public final class RTree {
         private record Basket(long first, long seek, RObject embedded) {
         }
 
-        private List<Basket> baskets() throws IOException {
+        private synchronized List<Basket> baskets() throws IOException {
             if (baskets != null) return baskets;
             final List<Basket> out = new ArrayList<>();
             final long[] seeks = b.longs("fBasketSeek");
@@ -279,10 +279,17 @@ public final class RTree {
             if (k == null) throw new IOException("no basket at " + bk.seek() + " for " + name());
             final byte[] head = tree.io().file().rawAt(bk.seek(), k.keylen);
             final RBuffer h = new RBuffer(head, 0);
-            h.position(k.keylen - 19);
+            // Read forward through the key rather than back from its end: when
+            // TBasket writes fIOBits (a negative fNevBufSize) the basket fields
+            // take one byte more, and counting 19 bytes back from fKeylen landed
+            // one byte off.
+            h.position(18 + (k.version > 1000 ? 16 : 8));
+            h.tstring();                   // class name
+            h.tstring();                   // name
+            h.tstring();                   // title
             h.u16();                       // basket version
             h.i32();                       // fBufferSize
-            h.i32();                       // fNevBufSize
+            if (h.i32() < 0) h.u8();       // fNevBufSize, then fIOBits when it is negative
             final int nevBuf = h.i32();
             final int last = h.i32();
             final byte[] payload = tree.io().file().payload(k);
@@ -303,7 +310,7 @@ public final class RTree {
         }
 
         /** The bytes of one entry, as a buffer positioned on them. */
-        public RBuffer entry(long entry) throws IOException {
+        public synchronized RBuffer entry(long entry) throws IOException {
             final int i = load(entry);
             if (offsets != null) return new RBuffer(data, offsets[i], offsets[i + 1], basketKeylen);
             return new RBuffer(data, i * fixedSize, (i + 1) * fixedSize, basketKeylen);
@@ -337,8 +344,22 @@ public final class RTree {
                 return out;
             }
             if (t <= 0 && id() < 0) {
-                // a whole object, not split
-                return r.readClass(e, elementClass());
+                // A whole object, not split. TBranchElement::ReadLeavesMember
+                // streams it through its class description with no header of
+                // its own; only a class with a custom Streamer writes one
+                // (ReadLeavesCustomStreamer). The first word says which: a byte
+                // count has bit 30 set and fits in the entry.
+                final int start = e.position();
+                final long first = e.remaining() >= 4 ? e.u32() : 0;
+                e.position(start);
+                final boolean counted = (first & 0x40000000L) != 0
+                    && (first & ~0x40000000L) + 4 <= e.remaining();
+                if (counted) return r.readClass(e, elementClass());
+                final Streamers.Info info = tree.io().streamers().find(elementClass(), b.integer("fClassVersion"));
+                if (info == null) return r.readClass(e, elementClass());
+                final RObject o = new RObject(elementClass(), info.version());
+                r.readMembers(e, info, o);
+                return o;
             }
             final Streamers.Element el = element();
             if (st > 0 && st < Streamers.K_OFFSET_L) return r.readBasic(e, st, el == null ? "" : el.title());
@@ -457,7 +478,9 @@ public final class RTree {
         /** Every number of the branch over all entries: what a histogram of it is filled with. */
         public double[] column() throws IOException {
             final long n = entries();
-            double[] out = new double[(int) Math.min(Integer.MAX_VALUE - 8, Math.max(16, n))];
+            // Grown as needed: sizing it by the entry count up front asked for
+            // gigabytes for a large tree whose branch is often empty (a vector).
+            double[] out = new double[(int) Math.min(1 << 16, Math.max(16, n))];
             int at = 0;
             for (long i = 0; i < n; i++) {
                 final double[] v = numbers(i);
