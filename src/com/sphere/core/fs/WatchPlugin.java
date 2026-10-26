@@ -72,7 +72,10 @@ public class WatchPlugin implements CommandRouter.CommandPlugin {
             return;
         }
 
-        String command = String.join(" ", tokens.subList(first, tokens.size()));
+        // The command as typed: rebuilt from the tokens it lost its quotes, so
+        // ":watch :grep "two words" log.txt" ran ":grep two words log.txt".
+        String command = trimmed.replaceFirst(first == 3
+            ? "^\\S+\\s+\\S+\\s+\\S+\\s+" : "^\\S+\\s+", "");
 
         // A watch that watches itself would multiply without bound
         String head = command.trim();

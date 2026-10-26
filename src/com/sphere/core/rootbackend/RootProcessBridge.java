@@ -176,6 +176,14 @@ public final class RootProcessBridge implements AutoCloseable {
             AppLogger.error("Cannot push command: the engine or the command ring is inactive.");
             return false;
         }
+        // The bridge writes inline only, and the message holds 44 bytes: what was
+        // longer used to be cut there without a word. RootBackend.sendCommand
+        // carries any length, through the shared heap.
+        if (payload != null && payload.length > RootBackend.BRIDGE_INLINE_CAPACITY) {
+            AppLogger.error("Command of " + payload.length + " bytes refused: the bridge carries "
+                            + RootBackend.BRIDGE_INLINE_CAPACITY + " at most; use RootBackend.sendCommand.");
+            return false;
+        }
         return RootBackend.pushCommandMessage(commandSegment, cmdRingCapacityPow2,
                                              opcode, jobId, reqId, payload);
     }

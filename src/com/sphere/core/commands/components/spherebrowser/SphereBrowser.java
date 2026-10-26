@@ -1332,7 +1332,7 @@ public final class SphereBrowser extends JFrame {
             }
             final JToggleButton white = new JToggleButton("White paper");
             ImagingTheme.styleButton(white);
-            white.setToolTipText("The canvas on ROOT's white paper instead of the theme's colours");
+            white.setToolTipText("The canvas on ROOT's white paper instead of the theme's colors");
             white.addActionListener(e -> canvas.setThemePaper(!white.isSelected()));
             white.setVisible(ImagingTheme.isDark());
             strip.add(javax.swing.Box.createHorizontalStrut(12));
@@ -1459,7 +1459,7 @@ public final class SphereBrowser extends JFrame {
 
         ItemTable(Item item) {
             if (item instanceof Hist h && h.dim == 1) {
-                columns = new String[]{"bin", "low edge", "centre", "content", "error"};
+                columns = new String[]{"bin", "low edge", "center", "content", "error"};
                 for (int i = 0; i < h.nx(); i++) {
                     rows.add(new Object[]{i + 1, h.x.edge(i), h.x.center(i), h.at(i, 0), h.error(i)});
                 }

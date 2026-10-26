@@ -732,6 +732,8 @@ public class MdTexEditor extends JPanel {
     }
 
     public static void main(String[] args) {
+        java.util.Locale.setDefault(java.util.Locale.US);
+        javax.swing.JComponent.setDefaultLocale(java.util.Locale.US);
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {}

@@ -652,7 +652,7 @@ public final class FastJetCommands {
         final StringBuilder head = new StringBuilder(f("%5s %10s", "jet", "pt"));
         for (int n = 1; n <= nmax; n++) head.append(f(" %10s", "tau" + n));
         for (int n = 2; n <= nmax; n++) head.append(f(" %9s", "tau" + n + (n - 1)));
-        AppLogger.result(f("N-subjettiness, beta = %g, %s axes, normalised:", beta, axes));
+        AppLogger.result(f("N-subjettiness, beta = %g, %s axes, normalized:", beta, axes));
         AppLogger.raw(head.toString());
         final List<PseudoJet> jets = leading(cs, (int) a.opt("njets", 2), 0);
         for (int k = 0; k < jets.size(); k++) {
@@ -866,7 +866,7 @@ public final class FastJetCommands {
                 AppLogger.warn(f("%s would be faster but gives other jets on %d of %d events. Kept aside.",
                     d.strategy().label(), differing, EVENTS.size()));
                 AppLogger.raw(tied > 0
-                    ? f("      Event %d has %d particles with two nearest neighbours at exactly the same distance"
+                    ? f("      Event %d has %d particles with two nearest neighbors at exactly the same distance"
                         + " (cells on a lattice, duplicated inputs): the strategies break these ties in another order.",
                         firstDiffering, tied)
                     : f("      Event %d has no exact tie among its distances, so one of the two strategies is at fault:"

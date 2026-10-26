@@ -167,8 +167,8 @@ public final class RootPipelineChain {
 
         out.append("void ").append(job).append("() {\n");
         out.append("  ROOT::RDF::RNode node =\n");
-        out.append("      ROOT::RDataFrame(\"").append(tree).append("\", \"")
-           .append(file).append("\");\n\n");
+        out.append("      ROOT::RDataFrame(\"").append(escape(tree)).append("\", \"")
+           .append(escape(file)).append("\");\n\n");
 
         final List<String> results = new ArrayList<>();
         final List<String> printed = new ArrayList<>();
@@ -208,7 +208,10 @@ public final class RootPipelineChain {
                            .append(w.get(3)).append("}, \"").append(w.get(4)).append("\");\n");
                         results.add(handle + "->GetName() << \"  \" << " + handle
                                     + "->GetEntries()");
-                        out.append("  ").append(handle).append("->SetDirectory(gDirectory);\n");
+                        // Through the result pointer this reads the histogram,
+                        // which runs the loop. Here it ran once per histogram
+                        // stage, before the later stages were even booked.
+                        printed.add(handle + "->SetDirectory(gDirectory);");
                     }
                 }
                 case HISTO2 -> {
@@ -282,8 +285,8 @@ public final class RootPipelineChain {
                 }
                 case SNAPSHOT -> {
                     if (w.size() >= 2) {
-                        out.append("  node.Snapshot(\"").append(w.get(0)).append("\", \"")
-                           .append(w.get(1)).append("\");\n");
+                        out.append("  node.Snapshot(\"").append(escape(w.get(0))).append("\", \"")
+                           .append(escape(w.get(1))).append("\");\n");
                     }
                 }
                 default -> { }

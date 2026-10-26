@@ -32,13 +32,51 @@ public final class PythonProbe {
         throw new UnsupportedOperationException("Utility class cannot be instantiated.");
     }
 
-    /** The wrapper, given to the interpreter as -c, with the script after it. */
+    /** The wrapper's file, kept in config/ beside the other drivers Sphere writes. */
+    public static final String FILE_NAME = "sphere_vars.py";
+
+    /**
+     * What goes between the interpreter and the script: the wrapper's file.
+     *
+     * The wrapper used to be handed over as -c and its text. On Windows a double
+     * quote inside an argument does not survive the trip to the new process,
+     * since ProcessBuilder does not escape it, so .replace("\\", "\\\\") reached
+     * Python as .replace(\, \\) and every wrapped script stopped on a SyntaxError
+     * before its first line. A file has nothing to quote.
+     *
+     * Empty when the file cannot be written: the script then runs the plain way,
+     * and only its variables are missed.
+     */
+    public static java.util.List<String> launcher() {
+        try {
+            return java.util.List.of(materialize().toAbsolutePath().toString());
+        } catch (java.io.IOException | RuntimeException unwritable) {
+            com.sphere.utils.AppLogger.warn("Variables will not be collected for this run: "
+                + unwritable.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /** Writes the wrapper to config/, again only when its text has changed. */
+    static synchronized java.nio.file.Path materialize() throws java.io.IOException {
+        final java.nio.file.Path script = java.nio.file.Path.of("config", FILE_NAME);
+        if (java.nio.file.Files.isReadable(script)
+                && java.nio.file.Files.readString(script, java.nio.charset.StandardCharsets.UTF_8).equals(WRAPPER)) {
+            return script;
+        }
+        java.nio.file.Files.createDirectories(script.getParent());
+        java.nio.file.Files.writeString(script, WRAPPER, java.nio.charset.StandardCharsets.UTF_8);
+        return script;
+    }
+
+    /** The wrapper, run as a file with the script after it (see launcher). */
     public static final String WRAPPER = """
         import os, sys
 
         _sphere_path = sys.argv[1]
         sys.argv = sys.argv[1:]
-        sys.path.insert(0, os.path.dirname(os.path.abspath(_sphere_path)))
+        # The script's folder in place of the wrapper's, as "python script.py" has it.
+        sys.path[0] = os.path.dirname(os.path.abspath(_sphere_path))
 
 
         def _sphere_escape(text):

@@ -91,11 +91,18 @@ public class SPTreeUI extends BasicTreeUI {
         int width = c.getWidth();
         Integer hoverRow = (Integer) tree.getClientProperty("treeHoverRow");
 
-        // Loop through visible rows to render custom background layers
+        // Only the rows inside the area being painted: asking every row of the tree for its bounds measured
+        // each one through its renderer, thousands of HTML labels per repaint (and one per hover) in a big tree
+        Rectangle clip = g.getClipBounds();
+        if (clip == null) {
+            clip = new Rectangle(0, 0, c.getWidth(), c.getHeight());
+        }
         int rowCount = tree.getRowCount();
-        for (int i = 0; i < rowCount; i++) {
+        int first = rowCount == 0 ? 0 : Math.max(0, tree.getClosestRowForLocation(0, clip.y));
+        int last = rowCount == 0 ? -1 : Math.min(rowCount - 1, tree.getClosestRowForLocation(0, clip.y + clip.height));
+        for (int i = first; i <= last; i++) {
             Rectangle bounds = tree.getRowBounds(i);
-            if (bounds != null && g.getClipBounds().intersects(bounds)) {
+            if (bounds != null && clip.intersects(0, bounds.y, width, bounds.height)) {
                 if (tree.isRowSelected(i)) {
                     g2.setColor(palette.getButtonPressed());
                     g2.fillRect(0, bounds.y, width, bounds.height);

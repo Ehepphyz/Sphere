@@ -102,7 +102,7 @@ public class ProjectSettingsFrame extends JDialog implements WorkspaceListener {
     private void initComponents() {
         fileExplorerPanel = new WorkspaceFileExplorerPanel();
         
-        // Harmonisation de la bordure du projet avec la couleur de bordure de la palette
+        // The project border matches the palette's border color
         fileExplorerPanel.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createLineBorder(palette.getBorder()), "Project Explorer"));
         fileExplorerPanel.setProjectTarget(projectDirectory);

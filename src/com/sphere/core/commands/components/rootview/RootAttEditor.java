@@ -165,13 +165,13 @@ final class RootAttEditor {
         showColor.run();
         color.setHorizontalAlignment(JButton.LEFT);
         color.addActionListener(e -> {
-            final Color c = JColorChooser.showDialog(color, "Colour", a.color);
+            final Color c = JColorChooser.showDialog(color, "Color", a.color);
             if (c != null) {
                 a.color = c;
                 showColor.run();
             }
         });
-        add.accept("Colour", color);
+        add.accept("Color", color);
         final JComboBox<Integer> basic = new JComboBox<>();
         for (int i = 0; i <= 50; i++) basic.addItem(i);
         for (int base : new int[]{RootColors.K_RED, RootColors.K_ORANGE, RootColors.K_YELLOW, RootColors.K_SPRING,
@@ -197,7 +197,7 @@ final class RootAttEditor {
                 showColor.run();
             }
         });
-        add.accept("ROOT colour", basic);
+        add.accept("ROOT color", basic);
         switch (kind) {
             case LINE -> {
                 add.accept("Width", spinner(a.width, 0, 20, 1, v -> {

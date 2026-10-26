@@ -108,6 +108,7 @@ public final class StartupDiagnostic {
         } catch (Exception ignored) {
             // Intentionally swallowed to ensure the main UI lifecycle remains non-blocking
         }
+        buildGeant4BridgeAside(sm);
 
         if (configUpdated) {
             saveConfiguration(sm);
@@ -253,6 +254,63 @@ public final class StartupDiagnostic {
     }
 
     /**
+     * The Geant4 engine (geant4-bridge, into geantbackend/), as the ROOT one above: built at startup when
+     * settings.conf names a Geant4, so a run finds it ready. It was only ever built on a first run or
+     * :g4 bridge build, and geantbackend/ did not exist until then. A build takes minutes: it runs on a
+     * thread of its own, after the diagnostic, its output in geantbackend/geant4-bridge-build.log; an
+     * engine up to date says nothing. A blank GEANT4_DIR disables Geant4, as the file's rules say.
+     */
+    private static void buildGeant4BridgeAside(SettingsManager sm) {
+        final String declared = sm.getProperty("GEANT4_DIR");
+        if (declared == null || declared.isBlank()) {
+            return; // blank: disabled; absent: built on first use, from what the search finds
+        }
+        final Thread t = new Thread(() -> {
+            final java.util.function.Function<String, String> settings = key -> {
+                try {
+                    return sm.getProperty(key);
+                } catch (RuntimeException e) {
+                    return null;
+                }
+            };
+            final Path logFile = com.sphere.core.geantbackend.Geant4BridgeCompiler.runtimeDir()
+                .resolve("geant4-bridge-build.log");
+            // Opened at the first line, so an engine up to date leaves the last build's log as it was
+            final java.io.PrintWriter[] w = new java.io.PrintWriter[1];
+            try {
+                final com.sphere.core.geantbackend.Geant4BridgeCompiler.Result r =
+                    com.sphere.core.geantbackend.Geant4BridgeCompiler.getOrBuild(settings, line -> {
+                        if (w[0] == null) {
+                            try {
+                                w[0] = new java.io.PrintWriter(Files.newBufferedWriter(logFile), true);
+                            } catch (java.io.IOException e) {
+                                w[0] = new java.io.PrintWriter(java.io.Writer.nullWriter());
+                            }
+                        }
+                        w[0].println(line);
+                        /*if (line.startsWith("Building geant4-bridge")) {
+                            AppLogger.info(line + ", in the background (geantbackend/geant4-bridge-build.log)");
+                        }*/
+                    }, false);
+                /*if (r.built()) {
+                    AppLogger.success("geant4-bridge built: " + r.binary() + ". Runs in Geant4 are ready (G4editor, :g4 run).");
+                } else if (!r.ok()) {
+                    AppLogger.warn("geant4-bridge: " + r.message() + " (geantbackend/geant4-bridge-build.log)");
+                }*/
+            } catch (Exception e) {
+                AppLogger.warn("geant4-bridge: the build could not start: " + e.getMessage());
+            } finally {
+                if (w[0] != null) {
+                    w[0].close();
+                }
+            }
+        }, "sphere-geant4-build");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
+    }
+
+    /**
      * Analyzes compiled verification mappings to print a high-grade professional summary.
      */
     private static void generateSummaryReport(List<String> inProcess) {
@@ -276,9 +334,8 @@ public final class StartupDiagnostic {
 
         if (criticalErrors == 0) {
             // Pristine operational summary
-            AppLogger.info(String.format("Environment verified. %d/%d core runtimes fully functional%s. Ready.",
-                    successfulCore, totalCore, inProcess.isEmpty() ? ""
-                        : "; " + String.join(" and ", inProcess) + " answering in process"));
+            AppLogger.info(String.format("Environment verified. %d/%d core runtimes fully functional%s.",
+                    successfulCore, totalCore, ""));
         } else {
             AppLogger.error(String.format("System initialization failed. %d critical components missing.", 
                     criticalErrors));

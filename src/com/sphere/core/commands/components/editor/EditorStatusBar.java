@@ -136,6 +136,7 @@ public final class EditorStatusBar extends JPanel {
     public final Segment eol = new Segment("Select End of Line Sequence");
     public final Segment language = new Segment("Select Language Mode");
     public final Segment insight = new Segment("Sphere Insight: live analysis of the code");
+    public final Segment layout = new Segment("Split groups: click to split, focus or change the layout");
 
     public EditorStatusBar() {
         super(new BorderLayout());
@@ -145,6 +146,7 @@ public final class EditorStatusBar extends JPanel {
         left.add(problems);
         left.add(insight);
         left.add(message);
+        right.add(layout);
         right.add(cursor);
         right.add(indentation);
         right.add(encoding);

@@ -12,7 +12,9 @@ public class PathComponentCommand implements PythonCommand {
     public void execute() {
         String script = "import sys; print('\\n'.join(sys.path))";
         try {
-            Process p = new ProcessBuilder(pythonExecutable, "-c", script).start();
+            // With stderr: an interpreter that fails printed its reason there,
+            // and the command then printed nothing at all.
+            Process p = new ProcessBuilder(pythonExecutable, "-c", script).redirectErrorStream(true).start();
             try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
                 String line;
                 while ((line = br.readLine()) != null) AppLogger.raw(line);

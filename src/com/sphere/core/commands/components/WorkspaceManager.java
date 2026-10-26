@@ -205,20 +205,16 @@ public class WorkspaceManager {
 
         String name = projectDir.getName();
         try {
-            Files.walkFileTree(projectDir.toPath(), new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    Files.delete(file);
-                    return FileVisitResult.CONTINUE;
-                }
+            // Through the delete :rm uses, which removes a Windows junction as the
+            // link it is: this walk went through one and deleted what it pointed to.
+            List<Path> refused = com.sphere.core.fs.FsSupport.deleteTree(projectDir.toPath());
+            if (!refused.isEmpty()) {
+                AppLogger.error("Project '" + name + "' only partly deleted: "
+                                + com.sphere.core.fs.FsSupport.refusedSummary(refused));
+                scanWorkspace();
+                return false;
+            }
 
-                @Override
-                public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                    Files.delete(dir);
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-            
             AppLogger.success("Project deleted: " + name);
             scanWorkspace();
             return true;

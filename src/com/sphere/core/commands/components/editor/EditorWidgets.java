@@ -266,6 +266,75 @@ public final class EditorWidgets {
         }
     }
 
+    // ---- Split pane --------------------------------------------------------
+
+    /**
+     * A split pane that leaves the keyboard to the editor. A plain one answers
+     * F6, F8 and Ctrl+Tab for any component inside it (moving its divider or
+     * the focus), which took Next Problem, Next Editor and Focus Next Group
+     * away from the code. Under every look and feel and after a theme switch.
+     */
+    public static class QuietSplitPane extends javax.swing.JSplitPane {
+        public QuietSplitPane(int orientation) {
+            super(orientation);
+        }
+
+        public QuietSplitPane(int orientation, Component left, Component right) {
+            super(orientation, left, right);
+        }
+
+        @Override
+        protected boolean processKeyBinding(javax.swing.KeyStroke ks, java.awt.event.KeyEvent e, int condition,
+                                            boolean pressed) {
+            if (condition == WHEN_ANCESTOR_OF_FOCUSED_COMPONENT) {
+                return false;
+            }
+            return super.processKeyBinding(ks, e, condition, pressed);
+        }
+    }
+
+    /**
+     * A quiet split pane whose divider is drawn in the editor's colors, not
+     * the look and feel's bar, and lights up under the pointer to show it can
+     * be dragged. It keeps its look after a theme switch.
+     */
+    public static class FlatSplitPane extends QuietSplitPane {
+        public FlatSplitPane(int orientation, Component left, Component right) {
+            super(orientation, left, right);
+        }
+
+        @Override
+        public void updateUI() {
+            setUI(new javax.swing.plaf.basic.BasicSplitPaneUI() {
+                @Override
+                public javax.swing.plaf.basic.BasicSplitPaneDivider createDefaultDivider() {
+                    return new FlatDivider(this);
+                }
+            });
+            setBorder(null);
+            revalidate();
+        }
+    }
+
+    private static final class FlatDivider extends javax.swing.plaf.basic.BasicSplitPaneDivider {
+        private boolean hovered;
+
+        FlatDivider(javax.swing.plaf.basic.BasicSplitPaneUI ui) {
+            super(ui);
+            setBorder(null);
+            addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override public void mouseEntered(java.awt.event.MouseEvent e) { hovered = true; repaint(); }
+                @Override public void mouseExited(java.awt.event.MouseEvent e) { hovered = false; repaint(); }
+            });
+        }
+
+        @Override
+        public void paint(Graphics g) {
+            g.setColor(hovered ? EditorTheme.focus() : EditorTheme.chrome());
+            g.fillRect(0, 0, getWidth(), getHeight());
+        }
+    }
+
     // ---- Overlay -----------------------------------------------------------
 
     /** Where an overlay sits over the base component. */

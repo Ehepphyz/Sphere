@@ -23,7 +23,9 @@ public class VersionCommand implements PythonCommand {
         String script = "import sys; print(f'Executable Path: {sys.executable}'); print(f'Version: {sys.version.split()[0]}')";
         
         try {
-            Process process = new ProcessBuilder(pythonExecutable, "-c", script).start();
+            // With stderr: an interpreter that fails printed its reason there,
+            // and the command then printed nothing at all.
+            Process process = new ProcessBuilder(pythonExecutable, "-c", script).redirectErrorStream(true).start();
             
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;

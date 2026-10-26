@@ -21,7 +21,7 @@ public final class ContribCatalog {
     /** What a contrib is for, in the order an analysis meets them. */
     public enum Category {
         CLUSTERING("jet algorithms"),
-        FLAVOUR("jet flavour"),
+        FLAVOR("jet flavor"),
         GROOMING("grooming and tagging"),
         SUBSTRUCTURE("substructure observables"),
         PILEUP("pileup and underlying event"),
@@ -84,7 +84,7 @@ public final class ContribCatalog {
             "Distances in etabar = 2pT/(E-pz); give gammaE and gammaPz to boost to the Breit frame on the fly.",
             u(":fjet def cen centauro:1.0"), new String[]{"centauro"}, "centauro");
         add("DISGenkt", Sphere.FJCONTRIB_DIS_GENKT_VERSION, Category.CLUSTERING,
-            "A spherically invariant generalised-kt family for DIS, in the Breit frame",
+            "A spherically invariant generalized-kt family for DIS, in the Breit frame",
             "d_ij = 2 min(E_i^2p, E_j^2p)(1 - cos theta_ij); p >= 0 selects the member, beam = +1 or -1 the "
                 + "direction of the struck quark.",
             u(":fjet def dis disgenkt:1.0,p=1,beam=1"), new String[]{"disgenkt"}, "disgenkt");
@@ -115,37 +115,37 @@ public final class ContribCatalog {
                 + "kt, ca, onepass_*, min. XCone finds exactly N cone jets.",
             u(":fjco obs tau21 tau32", ":fjet def x3 xcone:0.4,n=3,beta=2"), new String[]{"xcone"},
             "nsubjettiness", "xcone");
-        add("QCDAwarePlugin", Sphere.FJCONTRIB_QCD_AWARE_PLUGIN_VERSION, Category.FLAVOUR,
-            "Partonic clustering through Standard Model vertices only, for truth flavour labels",
+        add("QCDAwarePlugin", Sphere.FJCONTRIB_QCD_AWARE_PLUGIN_VERSION, Category.FLAVOR,
+            "Partonic clustering through Standard Model vertices only, for truth flavor labels",
             "q g -> q, g g -> g, q qbar -> g, q/l gamma -> q/l, l+ l- -> gamma; the user index carries the "
-                + "PDG code (from LHE or HepMC events). Couplings and colour factors optional.",
+                + "PDG code (from LHE or HepMC events). Couplings and color factors optional.",
             u(":fjet def qa qcdaware:0.4,dm=akt", ":fjco cluster qcdaware:0.4,dm=kt,couplings"),
             new String[]{"qcdaware"}, "qcdaware");
-        add("FlavorCone", Sphere.FJCONTRIB_FLAVOR_CONE_VERSION, Category.FLAVOUR,
-            "Jets built around heavy-flavour seeds, with no overlap between them",
+        add("FlavorCone", Sphere.FJCONTRIB_FLAVOR_CONE_VERSION, Category.FLAVOR,
+            "Jets built around heavy-flavor seeds, with no overlap between them",
             "Ilten, Rodd, Thaler and Williams: each particle within rcut of a seed goes to the nearest seed.",
-            u(":fjco flavour cone [--rcut 0.5] [--flav 5]"), new String[0], "flavorcone");
+            u(":fjco flavor cone [--rcut 0.5] [--flav 5]"), new String[0], "flavorcone");
 
-        // --- jet flavour ---------------------------------------------------
-        add("IFNPlugin", Sphere.FJCONTRIB_IFN_PLUGIN_VERSION, Category.FLAVOUR,
-            "Interleaved Flavour Neutralisation: anti-kt jets with infrared and collinear safe flavour",
-            "The kinematics are exactly anti-kt's; before a soft flavoured object enters a jet it may be "
-                + "neutralised by a nearby opposite flavour. alpha = 2 (or 1), omega = 3 - alpha.",
-            u(":fjet def ifn ifn:0.4,alpha=2", ":fjco flavour", ":fjco flavour irc"), new String[]{"ifn"}, "ifn");
-        add("CMPPlugin", Sphere.FJCONTRIB_CMP_PLUGIN_VERSION, Category.FLAVOUR,
-            "The Czakon-Mitov-Poncelet flavoured anti-kt algorithm",
-            "Opposite flavours are brought together first by a factor S_ij on their distance; a sets its "
+        // --- jet flavor ---------------------------------------------------
+        add("IFNPlugin", Sphere.FJCONTRIB_IFN_PLUGIN_VERSION, Category.FLAVOR,
+            "Interleaved Flavour Neutralisation: anti-kt jets with infrared and collinear safe flavor",
+            "The kinematics are exactly anti-kt's; before a soft flavored object enters a jet it may be "
+                + "neutralized by a nearby opposite flavor. alpha = 2 (or 1), omega = 3 - alpha.",
+            u(":fjet def ifn ifn:0.4,alpha=2", ":fjco flavor", ":fjco flavor irc"), new String[]{"ifn"}, "ifn");
+        add("CMPPlugin", Sphere.FJCONTRIB_CMP_PLUGIN_VERSION, Category.FLAVOR,
+            "The Czakon-Mitov-Poncelet flavored anti-kt algorithm",
+            "Opposite flavors are brought together first by a factor S_ij on their distance; a sets its "
                 + "reach. With the sqrt-coshy correction (default) it is infrared and collinear safe.",
-            u(":fjet def cmp cmp:0.4,a=0.1", ":fjco flavour"), new String[]{"cmp"}, "cmp");
-        add("GHSAlgo", Sphere.FJCONTRIB_GHS_ALGO_VERSION, Category.FLAVOUR,
-            "Gauld-Huss-Stagnitto flavour dressing of any jets",
-            "Flavour is attached after the jets are found: flavoured particles cluster among themselves "
-                + "and to the hard jets with a flavour-kt distance (alpha, omega).",
-            u(":fjco flavour --ptmin 20", ":fjco flavour irc"), new String[0], "ghs");
-        add("SDFPlugin", Sphere.FJCONTRIB_SDF_PLUGIN_VERSION, Category.FLAVOUR,
-            "Soft Drop Flavour: the net flavour of what survives Soft Drop after JADE reclustering",
+            u(":fjet def cmp cmp:0.4,a=0.1", ":fjco flavor"), new String[]{"cmp"}, "cmp");
+        add("GHSAlgo", Sphere.FJCONTRIB_GHS_ALGO_VERSION, Category.FLAVOR,
+            "Gauld-Huss-Stagnitto flavor dressing of any jets",
+            "Flavor is attached after the jets are found: flavored particles cluster among themselves "
+                + "and to the hard jets with a flavor-kt distance (alpha, omega).",
+            u(":fjco flavor --ptmin 20", ":fjco flavor irc"), new String[0], "ghs");
+        add("SDFPlugin", Sphere.FJCONTRIB_SDF_PLUGIN_VERSION, Category.FLAVOR,
+            "Soft Drop Flavour: the net flavor of what survives Soft Drop after JADE reclustering",
             "Infrared and collinear safe through NNLO; beta = 2, zcut = 0.1 by default.",
-            u(":fjco flavour"), new String[0], "sdf");
+            u(":fjco flavor"), new String[0], "sdf");
 
         // --- grooming ------------------------------------------------------
         add("RecursiveTools", Sphere.FJCONTRIB_RECURSIVE_TOOLS_VERSION, Category.GROOMING,
@@ -158,7 +158,7 @@ public final class ContribCatalog {
         // --- substructure --------------------------------------------------
         add("EnergyCorrelator", Sphere.FJCONTRIB_ENERGY_CORRELATOR_VERSION, Category.SUBSTRUCTURE,
             "Energy correlation functions and the C, D, N, M and U series",
-            "C2, D2 for two-prong tagging, N2 and M2 from generalised correlators, U for quark/gluon.",
+            "C2, D2 for two-prong tagging, N2 and M2 from generalized correlators, U for quark/gluon.",
             u(":fjco obs c2 d2 n2 m2 u1"), new String[0], "ecf", "ecfg");
         add("LundPlane", Sphere.FJCONTRIB_LUND_PLANE_VERSION, Category.SUBSTRUCTURE,
             "The Lund jet plane: (ln 1/Delta, ln kt) of every declustering",

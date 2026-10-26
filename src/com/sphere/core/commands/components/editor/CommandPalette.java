@@ -111,6 +111,9 @@ public final class CommandPalette extends EditorWidgets.Card {
     private Source active;
     private String activePrefix = "";
     private boolean closing;
+    /** When the box last opened; a focus change soon after is the menu that opened it closing. */
+    private long shownAt;
+    private static final long SETTLE_MS = 600;
     private Runnable onClose;
     private final PropertyChangeListener focusWatcher;
 
@@ -178,6 +181,18 @@ public final class CommandPalette extends EditorWidgets.Card {
             }
             Object now = evt.getNewValue();
             if (now instanceof Component c && !SwingUtilities.isDescendingFrom(c, this)) {
+                if (System.currentTimeMillis() - shownAt < SETTLE_MS) {
+                    // Opened from a menu (Preferences > Change Language Mode...): the
+                    // closing menu hands the focus back to the code just after the box
+                    // opens. That is not the user leaving it; the box takes the focus
+                    // back instead of closing on the spot.
+                    SwingUtilities.invokeLater(() -> {
+                        if (isVisible() && !closing) {
+                            field.requestFocusInWindow();
+                        }
+                    });
+                    return;
+                }
                 SwingUtilities.invokeLater(() -> close(true));
             }
         };
@@ -220,6 +235,7 @@ public final class CommandPalette extends EditorWidgets.Card {
 
     private void show(String text) {
         closing = false;
+        shownAt = System.currentTimeMillis();
         setVisible(true);
         if (getParent() != null) {
             getParent().revalidate();

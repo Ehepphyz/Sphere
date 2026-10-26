@@ -441,7 +441,7 @@ final class RootDataActions {
                 max = Math.max(max, h.v[k]);
             }
             final double c = o.contains("max") ? max : sum;
-            if (c == 0) throw new IllegalStateException("the integral is 0: nothing to normalise");
+            if (c == 0) throw new IllegalStateException("the integral is 0: nothing to normalize");
             scale(h, 1 / c, o.contains("width"));
             return o.contains("max") ? "highest bin at 1" : "integral 1";
         });
@@ -1900,7 +1900,7 @@ final class RootDataActions {
         def("TGeoManager::DefaultColors", (t, a) -> {
             final List<GeoMesh> ms = geometry(t).meshes;
             for (int k = 0; k < ms.size(); k++) ms.get(k).color = RootColors.color(2 + k % 8);
-            return "ROOT's default colours, by volume";
+            return "ROOT's default colors, by volume";
         });
         def("TGeoManager::SetVisLevel", (t, a) -> {
             final int level = Math.max(0, i(a, 0, 3));

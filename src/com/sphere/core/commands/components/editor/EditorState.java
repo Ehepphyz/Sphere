@@ -55,7 +55,7 @@ public final class EditorState {
             }
             File tmp = new File(FILE.getPath() + ".tmp");
             try (OutputStream out = Files.newOutputStream(tmp.toPath())) {
-                PROPS.store(out, "Sphere editor state: recent files and view preferences");
+                PROPS.store(out, "SphereCoder state: recent files, split layout and view preferences");
             }
             Files.move(tmp.toPath(), FILE.toPath(), StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException | RuntimeException ignored) {
@@ -88,7 +88,21 @@ public final class EditorState {
         scheduleSave();
     }
 
+    public static String text(String key, String fallback) {
+        return PROPS.getProperty(key, fallback);
+    }
+
+    public static void setText(String key, String value) {
+        if (value == null) {
+            PROPS.remove(key);
+        } else {
+            PROPS.setProperty(key, value);
+        }
+        scheduleSave();
+    }
+
     public static final String MINIMAP = "view.minimap";
+    public static final String RESTORE_SESSION = "session.restore";
     public static final String WORD_WRAP = "view.wordWrap";
     public static final String INDENT_GUIDES = "view.indentGuides";
     public static final String OCCURRENCES = "view.occurrences";

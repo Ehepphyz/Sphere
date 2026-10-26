@@ -420,7 +420,7 @@ public final class Space3DPanel extends JPanel {
         r.panX = m[0] * x + m[1] * y + m[2] * z;
         r.panY = m[3] * x + m[4] * y + m[5] * z;
         r.distance = Math.max(0.8, r.distance * 0.7);
-        report("centred on " + p.mesh().name + String.format(Locale.ROOT, " (%.4g, %.4g, %.4g)", p.x(), p.y(), p.z()));
+        report("centered on " + p.mesh().name + String.format(Locale.ROOT, " (%.4g, %.4g, %.4g)", p.x(), p.y(), p.z()));
         moved();
     }
 
@@ -431,7 +431,7 @@ public final class Space3DPanel extends JPanel {
 
     private String hint() {
         return "drag: turn · right/Shift-drag: slide · wheel: zoom · Ctrl/Shift/Alt+wheel: stretch Z/X/Y · "
-            + "double-click: centre · Space: spin";
+            + "double-click: center · Space: spin";
     }
 
     private void key(KeyEvent e) {
@@ -571,7 +571,7 @@ public final class Space3DPanel extends JPanel {
             options.invertImage = on;
             rebuild();
         })));
-        p.add(checks(check("Decode colours", options.decodePalette, on -> {
+        p.add(checks(check("Decode colors", options.decodePalette, on -> {
             options.decodePalette = on;
             rebuild();
         }), check("Theme paper", options.themePaper, on -> {
@@ -686,7 +686,7 @@ public final class Space3DPanel extends JPanel {
                 r.walls = on;
                 moved();
             }, () -> r.walls),
-            check("Colour bar", r.colorBar, on -> {
+            check("Color bar", r.colorBar, on -> {
                 r.colorBar = on;
                 moved();
             }, () -> r.colorBar)));
@@ -710,7 +710,7 @@ public final class Space3DPanel extends JPanel {
         png.addActionListener(e -> savePng());
         final JButton gif = ImagingTheme.textButton("Turntable GIF", "A full turn, 48 frames, looping");
         gif.addActionListener(e -> saveGif());
-        final JButton obj = ImagingTheme.textButton("OBJ", "The meshes, with vertex colours, for Blender or MeshLab");
+        final JButton obj = ImagingTheme.textButton("OBJ", "The meshes, with vertex colors, for Blender or MeshLab");
         obj.addActionListener(e -> saveObj());
         final JButton copy = ImagingTheme.textButton("Copy", "The view to the clipboard");
         copy.addActionListener(e -> copyImage());

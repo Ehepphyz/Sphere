@@ -69,7 +69,7 @@ public class Nsubjettiness implements FunctionOfPseudoJet<Double> {
     @Override
     public String description() {
         return "N-subjettiness tau_" + n + " with beta = " + Fmt.g(beta) + ", R0 = " + Fmt.g(r0) + ", " + axes
-            + " axes, " + (normalised ? "normalised" : "unnormalised");
+            + " axes, " + (normalised ? "normalized" : "unnormalized");
     }
 
     @Override

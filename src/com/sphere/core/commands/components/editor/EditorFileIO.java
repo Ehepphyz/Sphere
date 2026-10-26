@@ -30,11 +30,18 @@ public final class EditorFileIO {
         public final String text;
         public final Charset charset;
         public final boolean fellBack;
+        /** The file began with a UTF-8 byte order mark. */
+        public final boolean bom;
 
         Loaded(String text, Charset charset, boolean fellBack) {
+            this(text, charset, fellBack, false);
+        }
+
+        Loaded(String text, Charset charset, boolean fellBack, boolean bom) {
             this.text = text;
             this.charset = charset;
             this.fellBack = fellBack;
+            this.bom = bom;
         }
     }
 
@@ -65,7 +72,7 @@ public final class EditorFileIO {
         if (bytes.length >= 3 && (bytes[0] & 0xFF) == 0xEF
                 && (bytes[1] & 0xFF) == 0xBB && (bytes[2] & 0xFF) == 0xBF) {
             return new Loaded(new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8),
-                              StandardCharsets.UTF_8, false);
+                              StandardCharsets.UTF_8, false, true);
         }
 
         CharsetDecoder strict = StandardCharsets.UTF_8.newDecoder()
@@ -84,18 +91,50 @@ public final class EditorFileIO {
      * Writes through a temporary file in the same directory, then moves it into
      * place. A truncating write left the user's file destroyed if anything failed
      * between the truncate and the last byte.
+     *
+     * The move replaces whatever sits at the path, so two things are carried
+     * over by hand. A symbolic link is written through, to the file it names:
+     * moving onto the link put a plain file in its place and left the real one
+     * unchanged. And the permissions of the old file are given to the new one:
+     * a temporary file is created 0600 on Unix, so a saved script lost its
+     * execute bit and became unreadable to the group.
      */
     public static void write(File file, String text, Charset charset) throws IOException {
+        write(file, text, charset, false);
+    }
+
+    /**
+     * The same, starting with a UTF-8 byte order mark when the file had one.
+     * The load set it aside and the save never wrote it back, so opening and
+     * saving a file changed it: MSVC, for one, then read its accents in the
+     * local code page.
+     */
+    public static void write(File file, String text, Charset charset, boolean bom) throws IOException {
+        final Charset encoding = charset == null ? StandardCharsets.UTF_8 : charset;
         Path target = file.toPath();
+        if (Files.isSymbolicLink(target) && Files.exists(target)) {
+            target = target.toRealPath();
+        }
         Path directory = target.toAbsolutePath().getParent();
         if (directory == null) {
             directory = Path.of(".");
         }
         Files.createDirectories(directory);
 
-        Path temp = Files.createTempFile(directory, "." + file.getName() + ".", ".tmp");
+        Path temp = Files.createTempFile(directory, "." + target.getFileName() + ".", ".tmp");
         try {
-            Files.writeString(temp, text, charset == null ? StandardCharsets.UTF_8 : charset);
+            if (bom && StandardCharsets.UTF_8.equals(encoding)) {
+                final byte[] body = text.getBytes(StandardCharsets.UTF_8);
+                final byte[] all = new byte[body.length + 3];
+                all[0] = (byte) 0xEF;
+                all[1] = (byte) 0xBB;
+                all[2] = (byte) 0xBF;
+                System.arraycopy(body, 0, all, 3, body.length);
+                Files.write(temp, all);
+            } else {
+                Files.writeString(temp, text, encoding);
+            }
+            keepPermissions(target, temp);
             try {
                 Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING,
                            StandardCopyOption.ATOMIC_MOVE);
@@ -104,6 +143,19 @@ public final class EditorFileIO {
             }
         } finally {
             Files.deleteIfExists(temp);
+        }
+    }
+
+    /** Gives the replacement the Unix permissions of the file it replaces; nothing on Windows. */
+    private static void keepPermissions(Path original, Path replacement) {
+        if (!Files.exists(original)
+                || !original.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            return;
+        }
+        try {
+            Files.setPosixFilePermissions(replacement, Files.getPosixFilePermissions(original));
+        } catch (IOException | UnsupportedOperationException notCarried) {
+            // The file is still saved, with the permissions of a new file.
         }
     }
 }

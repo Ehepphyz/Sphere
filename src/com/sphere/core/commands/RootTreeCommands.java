@@ -196,7 +196,9 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf cache <name> [column ...]".trim());
             return;
         }
-        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Cache(" + (w.length > 1 ? "{" + Handlers.quotedCsv(Handlers.join(w, 1)) + "}" : "\"\"") + "))"));
+        // Cache is not lazy: it runs the event loop to fill the memory it holds.
+        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Cache(" + (w.length > 1 ? "{" + Handlers.quotedCsv(Handlers.join(w, 1)) + "}" : "\"\"") + "))"),
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfColumns(String i, CommandExecutionContext c) {
@@ -210,7 +212,8 @@ public final class RootTreeCommands {
 
     public static void rootRdfCount(String i, CommandExecutionContext c) {
         final String name = Handlers.head(Handlers.args(i, ":root rdf count"));
-        Handlers.cling(c, Handlers.held(name.isEmpty() ? "df" : name, "ROOT::RDF::RNode") + "->Count().GetValue()");
+        Handlers.cling(c, Handlers.held(name.isEmpty() ? "df" : name, "ROOT::RDF::RNode") + "->Count().GetValue()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfDefine(String i, CommandExecutionContext c) {
@@ -219,7 +222,7 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf define <name> <column> <expression>".trim());
             return;
         }
-        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Define(\"" + w[1] + "\", \"" + Handlers.join(w, 2) + "\")" + ")"));
+        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Define(\"" + w[1] + "\", \"" + Handlers.lit(Handlers.join(w, 2)) + "\")" + ")"));
     }
 
     public static void rootRdfDescribe(String i, CommandExecutionContext c) {
@@ -237,7 +240,12 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf display <name> [rows] [column ...]".trim());
             return;
         }
-        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Display(" + (w.length > 2 ? "{" + Handlers.quotedCsv(Handlers.join(w, 2)) + "}" : "\"\"") + ", " + Handlers.asInt((w.length > 1 ? w[1] : "5"), 5) + ")->AsString()");
+        // The row count is optional: ":root rdf display df pt eta" names two
+        // columns, where the first used to be read as a count and dropped.
+        final boolean counted = w.length > 1 && w[1].matches("\\d+");
+        final int first = counted ? 2 : 1;
+        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Display(" + (w.length > first ? "{" + Handlers.quotedCsv(Handlers.join(w, first)) + "}" : "\"\"") + ", " + (counted ? Handlers.asInt(w[1], 5) : 5) + ")->AsString()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfFilter(String i, CommandExecutionContext c) {
@@ -249,9 +257,11 @@ public final class RootTreeCommands {
             return;
         }
         // The filtered frame replaces what the name held, so a chain of filters
-        // reads as a chain of commands.
+        // reads as a chain of commands. Report lists named filters only, so
+        // each one is named after its expression: unnamed, ':root rdf report'
+        // never had anything to say.
         Handlers.cling(c, Handlers.keep(name, "ROOT::RDF::RNode",
-            "new ROOT::RDF::RNode(" + Handlers.held(name, "ROOT::RDF::RNode") + "->Filter(\"" + expr + "\"))"));
+            "new ROOT::RDF::RNode(" + Handlers.held(name, "ROOT::RDF::RNode") + "->Filter(\"" + Handlers.lit(expr) + "\", \"" + Handlers.lit(expr) + "\"))"));
     }
 
     public static void rootRdfHisto(String i, CommandExecutionContext c) {
@@ -260,7 +270,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf histo <name> <hist> <bins> <low> <high> <column>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto *h = new TH1D(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Histo1D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4]) + "}, \"" + w[5] + "\").GetValue()); h->SetName(\"" + w[1] + "\"); h->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()");
+        Handlers.cling(c, "[]{ auto *h = new TH1D(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Histo1D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4]) + "}, \"" + w[5] + "\").GetValue()); h->SetName(\"" + w[1] + "\"); h->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfHisto2(String i, CommandExecutionContext c) {
@@ -269,7 +280,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf histo2 <name> <hist> <xbins> <xlow> <xhigh> <ybins> <ylow> <yhigh> <xcolumn> <ycolumn>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto *h = new TH2D(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Histo2D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4] + " " + w[5] + " " + w[6] + " " + w[7]) + "}, \"" + w[8] + "\", \"" + w[9] + "\").GetValue()); h->SetName(\"" + w[1] + "\"); h->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()");
+        Handlers.cling(c, "[]{ auto *h = new TH2D(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Histo2D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4] + " " + w[5] + " " + w[6] + " " + w[7]) + "}, \"" + w[8] + "\", \"" + w[9] + "\").GetValue()); h->SetName(\"" + w[1] + "\"); h->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfMax(String i, CommandExecutionContext c) {
@@ -278,7 +290,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf max <name> <column>".trim());
             return;
         }
-        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Max(\"" + w[1] + "\").GetValue()");
+        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Max(\"" + w[1] + "\").GetValue()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfMean(String i, CommandExecutionContext c) {
@@ -287,7 +300,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf mean <name> <column>".trim());
             return;
         }
-        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Mean(\"" + w[1] + "\").GetValue()");
+        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Mean(\"" + w[1] + "\").GetValue()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfMin(String i, CommandExecutionContext c) {
@@ -296,7 +310,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf min <name> <column>".trim());
             return;
         }
-        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Min(\"" + w[1] + "\").GetValue()");
+        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Min(\"" + w[1] + "\").GetValue()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfOpen(String i, CommandExecutionContext c) {
@@ -309,7 +324,7 @@ public final class RootTreeCommands {
         final String tree = w[w.length - 2];
         final String file = w[w.length - 1];
         Handlers.cling(c, Handlers.keep(name, "ROOT::RDF::RNode",
-            "new ROOT::RDF::RNode(ROOT::RDataFrame(\"" + tree + "\",\"" + file + "\"))"));
+            "new ROOT::RDF::RNode(ROOT::RDataFrame(\"" + Handlers.lit(tree) + "\",\"" + Handlers.lit(file) + "\"))"));
     }
 
     public static void rootRdfProfile(String i, CommandExecutionContext c) {
@@ -318,7 +333,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf profile <name> <profile> <bins> <low> <high> <xcolumn> <ycolumn>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto *p = new TProfile(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Profile1D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4]) + "}, \"" + w[5] + "\", \"" + w[6] + "\").GetValue()); p->SetName(\"" + w[1] + "\"); p->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()");
+        Handlers.cling(c, "[]{ auto *p = new TProfile(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Profile1D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4]) + "}, \"" + w[5] + "\", \"" + w[6] + "\").GetValue()); p->SetName(\"" + w[1] + "\"); p->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfRange(String i, CommandExecutionContext c) {
@@ -336,7 +352,7 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf redefine <name> <column> <expression>".trim());
             return;
         }
-        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Redefine(\"" + w[1] + "\", \"" + Handlers.join(w, 2) + "\")" + ")"));
+        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Redefine(\"" + w[1] + "\", \"" + Handlers.lit(Handlers.join(w, 2)) + "\")" + ")"));
     }
 
     public static void rootRdfReport(String i, CommandExecutionContext c) {
@@ -345,7 +361,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf report <name>".trim());
             return;
         }
-        Handlers.cling(c, "(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Report()->Print(), std::string(\"\"))");
+        Handlers.cling(c, "(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Report()->Print(), std::string(\"\"))",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfSnapshot(String i, CommandExecutionContext c) {
@@ -354,7 +371,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf snapshot <name> <tree> <file> [column ...]".trim());
             return;
         }
-        Handlers.cling(c, "(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Snapshot(\"" + w[1] + "\", \"" + w[2] + "\", " + (w.length > 3 ? "{" + Handlers.quotedCsv(Handlers.join(w, 3)) + "}" : "\"\"") + "), std::string(\"written to " + w[2] + "\"))");
+        Handlers.cling(c, "(" + Handlers.held(w[0], "ROOT::RDF::RNode") + "->Snapshot(\"" + Handlers.lit(w[1]) + "\", \"" + Handlers.lit(w[2]) + "\", " + (w.length > 3 ? "{" + Handlers.quotedCsv(Handlers.join(w, 3)) + "}" : "\"\"") + "), std::string(\"written to " + Handlers.lit(w[2]) + "\"))",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfStdDev(String i, CommandExecutionContext c) {
@@ -363,7 +381,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf stddev <name> <column>".trim());
             return;
         }
-        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->StdDev(\"" + w[1] + "\").GetValue()");
+        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->StdDev(\"" + w[1] + "\").GetValue()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfSum(String i, CommandExecutionContext c) {
@@ -372,7 +391,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf sum <name> <column>".trim());
             return;
         }
-        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Sum(\"" + w[1] + "\").GetValue()");
+        Handlers.cling(c, Handlers.held(w[0], "ROOT::RDF::RNode") + "->Sum(\"" + w[1] + "\").GetValue()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfType(String i, CommandExecutionContext c) {
@@ -783,16 +803,21 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf take <name> <column> <type>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto values = " + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Take<" + w[2] + ">(\"" + w[1] + "\").GetValue(); std::string out = std::to_string(values.size()) + \" values\"; for (std::size_t i = 0; i < values.size() && i < 10; ++i) { out += \" \" + std::to_string(values[i]); } if (values.size() > 10) { out += \" ...\"; } return out; }()");
+        Handlers.cling(c, "[]{ auto values = " + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Take<" + w[2] + ">(\"" + w[1] + "\").GetValue(); std::string out = std::to_string(values.size()) + \" values\"; for (std::size_t i = 0; i < values.size() && i < 10; ++i) { out += \" \" + SphereBridge::ToText(values[i]); } if (values.size() > 10) { out += \" ...\"; } return out; }()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfVary(String i, CommandExecutionContext c) {
-        final String[] w = Handlers.words(Handlers.args(i, ":root rdf vary"));
+        // The expression sits between other words, so one holding spaces is
+        // written in quotes: "ROOT::RVecD{pt*0.9, pt*1.1}". Split on spaces, it
+        // lost its second half to the tags.
+        final String[] w = com.sphere.core.commandrouterincludes.Tokenizer.DEFAULT
+            .tokenize(Handlers.args(i, ":root rdf vary")).toArray(new String[0]);
         if (w.length < 4) {
             Handlers.usage(":root rdf vary <name> <column> <expression> <tag> [tag ...]".trim());
             return;
         }
-        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Vary(\"" + w[1] + "\", \"" + w[2] + "\", {" + Handlers.quotedCsv(Handlers.join(w, 3)) + "}))"));
+        Handlers.cling(c, Handlers.keep(w[0], "ROOT::RDF::RNode", "new ROOT::RDF::RNode(" + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Vary(\"" + w[1] + "\", \"" + Handlers.lit(w[2]) + "\", {" + Handlers.quotedCsv(Handlers.join(w, 3)) + "}))"));
     }
 
     public static void rootRdfVaried(String i, CommandExecutionContext c) {
@@ -801,7 +826,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf varied <name> <hist> <bins> <low> <high> <column>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto nominal = " + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Histo1D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + ' ' + w[3] + ' ' + w[4]) + "}, \"" + w[5] + "\"); auto all = ROOT::RDF::Experimental::VariationsFor(nominal); std::string out; for (const auto &key : all.GetKeys()) { auto *copy = new TH1D(all[key]); copy->SetName((std::string(\"" + w[1] + "\") + \"_\" + key).c_str()); copy->SetDirectory(gDirectory); if (!out.empty()) { out += \" \"; } out += key; } return out; }()");
+        Handlers.cling(c, "[]{ auto nominal = " + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Histo1D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + ' ' + w[3] + ' ' + w[4]) + "}, \"" + w[5] + "\"); auto all = ROOT::RDF::Experimental::VariationsFor(nominal); std::string out; for (const auto &key : all.GetKeys()) { auto *copy = new TH1D(all[key]); copy->SetName((std::string(\"" + w[1] + "\") + \"_\" + key).c_str()); copy->SetDirectory(gDirectory); if (!out.empty()) { out += \" \"; } out += key; } return out; }()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     // --- reading fits back, TF1 parameters, applying a TMVA model, canvas layout and output, geometry, RooFit datasets and results, tree caches and indices, the rest of RDataFrame, the host system, regular expressions, file internals and more of TMath ---
@@ -920,7 +946,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf histo3 <name> <hist> <xb> <xlo> <xhi> <yb> <ylo> <yhi> <zb> <zlo> <zhi> <x> <y> <z>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto *h = new TH3D(" + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Histo3D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4] + " " + w[5] + " " + w[6] + " " + w[7] + " " + w[8] + " " + w[9] + " " + w[10]) + "}, \"" + w[11] + "\", \"" + w[12] + "\", \"" + w[13] + "\").GetValue()); h->SetName(\"" + w[1] + "\"); h->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()");
+        Handlers.cling(c, "[]{ auto *h = new TH3D(" + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Histo3D({\"" + w[1] + "\", \"" + w[1] + "\", " + Handlers.csv(w[2] + " " + w[3] + " " + w[4] + " " + w[5] + " " + w[6] + " " + w[7] + " " + w[8] + " " + w[9] + " " + w[10]) + "}, \"" + w[11] + "\", \"" + w[12] + "\", \"" + w[13] + "\").GetValue()); h->SetName(\"" + w[1] + "\"); h->SetDirectory(gDirectory); return std::string(\"" + w[1] + " filled\"); }()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfGraph(String i, CommandExecutionContext c) {
@@ -929,7 +956,8 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf graph <name> <graph> <x> <y>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto *g = new TGraph(" + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Graph(\"" + w[2] + "\", \"" + w[3] + "\").GetValue()); g->SetName(\"" + w[1] + "\"); gDirectory->Append(g); return std::string(\"" + w[1] + " created\"); }()");
+        Handlers.cling(c, "[]{ auto *g = new TGraph(" + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Graph(\"" + w[2] + "\", \"" + w[3] + "\").GetValue()); g->SetName(\"" + w[1] + "\"); gDirectory->Append(g); return std::string(\"" + w[1] + " created\"); }()",
+            Handlers.LOOP_TIMEOUT_MS);
     }
 
     public static void rootRdfRuns(String i, CommandExecutionContext c) {
@@ -956,7 +984,144 @@ public final class RootTreeCommands {
             Handlers.usage(":root rdf stats <name> <column>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ auto s = " + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Stats(\"" + w[1] + "\"); return std::string(\"mean \") + std::to_string(s->GetMean()) + \"  rms \" + std::to_string(s->GetRMS()) + \"  entries \" + std::to_string(s->GetN()); }()");
+        Handlers.cling(c, "[]{ auto s = " + "SphereBridge::Held<ROOT::RDF::RNode>(\"" + w[0] + "\")" + "->Stats(\"" + w[1] + "\"); return std::string(\"mean \") + std::to_string(s->GetMean()) + \"  rms \" + std::to_string(s->GetRMS()) + \"  entries \" + std::to_string(s->GetN()); }()",
+            Handlers.LOOP_TIMEOUT_MS);
+    }
+
+    // --- RDataFrame over the other data sources (RDataSource) ---
+    //
+    // ':root rdf open' reads a TTree. These bind a name to a frame over a CSV
+    // file, an SQLite query, an RNTuple or no data at all, and every other
+    // ':root rdf' command then works on it the same way. As with open, the
+    // name is optional and defaults to df.
+
+    public static void rootRdfCsv(String i, CommandExecutionContext c) {
+        final String usage = ":root rdf csv [<name>] <file.csv> [--delimiter=<char>|tab|space] [--no-header]";
+        boolean headers = true;
+        String delimiter = ",";
+        final java.util.List<String> w = new java.util.ArrayList<>();
+        for (String word : Handlers.words(Handlers.args(i, ":root rdf csv"))) {
+            if (word.equalsIgnoreCase("--no-header")) {
+                headers = false;
+            } else if (word.regionMatches(true, 0, "--delimiter=", 0, 12)) {
+                delimiter = word.substring(12);
+            } else {
+                w.add(word);
+            }
+        }
+        final String separator = charLiteral(delimiter);
+        if (w.isEmpty() || w.size() > 2 || separator == null) {
+            Handlers.usage(usage);
+            return;
+        }
+        final String name = w.size() == 2 ? w.get(0) : "df";
+        final String file = w.get(w.size() - 1);
+        // ROOT reads the first lines here to guess each column's type.
+        Handlers.cling(c, Handlers.keep(name, "ROOT::RDF::RNode",
+            "new ROOT::RDF::RNode(ROOT::RDF::FromCSV(\"" + Handlers.lit(file) + "\", " + headers + ", " + separator + "))"),
+            Handlers.LOOP_TIMEOUT_MS);
+    }
+
+    /** A delimiter as a C++ character literal, or null when it is not one character. */
+    private static String charLiteral(String given) {
+        switch (given.toLowerCase(java.util.Locale.ROOT)) {
+            case "tab", "\\t" -> {
+                return "'\\t'";
+            }
+            case "space" -> {
+                return "' '";
+            }
+            default -> {
+                if (given.length() != 1) {
+                    return null;
+                }
+                final char one = given.charAt(0);
+                return (one == '\'' || one == '\\') ? "'\\" + one + "'" : "'" + one + "'";
+            }
+        }
+    }
+
+    /** The query is everything from its SELECT (or WITH) on, as typed. */
+    private static final java.util.regex.Pattern SQLITE_ARGS = java.util.regex.Pattern.compile(
+        "^(?:(\\S+)\\s+)??(\\S+)\\s+((?i:select|with)\\b.*)$", java.util.regex.Pattern.DOTALL);
+
+    public static void rootRdfSqlite(String i, CommandExecutionContext c) {
+        final java.util.regex.Matcher m = SQLITE_ARGS.matcher(Handlers.args(i, ":root rdf sqlite"));
+        if (!m.matches()) {
+            Handlers.usage(":root rdf sqlite [<name>] <file.sqlite> <SELECT ...>");
+            return;
+        }
+        final String name = m.group(1) != null ? m.group(1) : "df";
+        // The query runs here: ROOT reads its first row to learn the column types.
+        final String answer = Handlers.clingAnswer(c, Handlers.keep(name, "ROOT::RDF::RNode",
+            "new ROOT::RDF::RNode(ROOT::RDF::FromSqlite(\"" + Handlers.lit(m.group(2)) + "\", \""
+                + Handlers.lit(m.group(3).trim()) + "\"))"),
+            Handlers.LOOP_TIMEOUT_MS);
+        if (answer == null) {
+            return;
+        }
+        AppLogger.result(answer);
+        if (answer.contains("Unexpected column decl type")) {
+            // ROOT's SQLite source knows four declared types; REAL, DOUBLE,
+            // INT or NUMERIC columns are refused, and a cast in the query is
+            // all it takes to read them.
+            AppLogger.warn("ROOT reads SQLite columns declared INTEGER, FLOAT, TEXT or BLOB. Cast the others"
+                + " in the query: SELECT run, CAST(lumi AS FLOAT) AS lumi FROM runs");
+        }
+    }
+
+    public static void rootRdfNtuple(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root rdf ntuple"));
+        if (w.length < 2 || w.length > 3) {
+            Handlers.usage(":root rdf ntuple [<name>] <ntuple> <file>");
+            return;
+        }
+        final String name = (w.length == 3) ? w[0] : "df";
+        final String ntuple = w[w.length - 2];
+        final String file = w[w.length - 1];
+        Handlers.cling(c, Handlers.keep(name, "ROOT::RDF::RNode",
+            "new ROOT::RDF::RNode(ROOT::RDF::FromRNTuple(\"" + Handlers.lit(ntuple) + "\", \"" + Handlers.lit(file) + "\"))"));
+    }
+
+    public static void rootRdfEmpty(String i, CommandExecutionContext c) {
+        final String usage = ":root rdf empty [<name>] <entries>";
+        final String[] w = Handlers.words(Handlers.args(i, ":root rdf empty"));
+        if (w.length < 1 || w.length > 2 || !w[w.length - 1].matches("\\d+")) {
+            Handlers.usage(usage);
+            return;
+        }
+        final long entries;
+        try {
+            entries = Long.parseUnsignedLong(w[w.length - 1]);
+        } catch (NumberFormatException tooLarge) {
+            Handlers.usage(usage);
+            return;
+        }
+        final String name = (w.length == 2) ? w[0] : "df";
+        // No column at all: ':root rdf define' gives it some, from rdfentry_
+        // (the entry number) or gRandom.
+        Handlers.cling(c, Handlers.keep(name, "ROOT::RDF::RNode",
+            "new ROOT::RDF::RNode(ROOT::RDataFrame((ULong64_t)" + Long.toUnsignedString(entries) + "ULL))"));
+    }
+
+    public static void rootRdfSource(String i, CommandExecutionContext c) {
+        final String name = Handlers.head(Handlers.args(i, ":root rdf source"));
+        // What the frame reads (TTreeDS, RNTupleDS, RCsv, RSqliteDS, EmptyDS...),
+        // then its columns, those the source carries apart from those defined.
+        Handlers.cling(c, "[]{ auto *node = " + Handlers.held(name.isEmpty() ? "df" : name, "ROOT::RDF::RNode") + ";"
+            + " std::string out = ROOT::Internal::RDF::GetDataSourceLabel(*node) + \": \" + node->Describe().AsString(true);"
+            + " while (!out.empty() && out.back() == '\\n') { out.pop_back(); }"
+            + " const auto defined = node->GetDefinedColumnNames();"
+            + " std::string own, made;"
+            + " for (const auto &col : node->GetColumnNames()) {"
+            + "   std::string &into = std::find(defined.begin(), defined.end(), col) != defined.end() ? made : own;"
+            + "   if (!into.empty()) { into += \", \"; }"
+            + "   into += col + \" (\" + node->GetColumnType(col) + \")\";"
+            + " }"
+            + " out += \"\\nfiles     \" + std::to_string(node->GetNFiles());"
+            + " out += \"\\ncolumns   \" + (own.empty() ? std::string(\"none\") : own);"
+            + " if (!made.empty()) { out += \"\\ndefined   \" + made; }"
+            + " return out; }()");
     }
 
     /** <tree> <expr> <selection> <option> */

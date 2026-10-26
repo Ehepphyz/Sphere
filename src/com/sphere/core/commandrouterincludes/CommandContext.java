@@ -53,27 +53,48 @@ public class CommandContext {
     }
 
     /**
-     * Registers a running process to the context for life-cycle management.
+     * Registers a running process under a name of its own, and returns that name.
+     *
+     * Two runs of one program used to share its name: the second replaced the
+     * first in the table, and the first, on finishing, removed the second's
+     * entry, so neither could be stopped by name any more. A name already taken
+     * now gets a number: python, python#2, python#3.
      */
-    public void registerProcess(String commandName, Process process) {
-        activeProcesses.put(commandName, process);
+    public String registerProcess(String commandName, Process process) {
+        final String base = (commandName == null || commandName.isBlank()) ? "process" : commandName;
+        if (activeProcesses.putIfAbsent(base, process) == null) {
+            return base;
+        }
+        for (int n = 2; ; n++) {
+            final String numbered = base + "#" + n;
+            if (activeProcesses.putIfAbsent(numbered, process) == null) {
+                return numbered;
+            }
+        }
     }
 
     /**
-     * Unregisters a completed or killed process from tracking.
+     * Unregisters a completed or killed process from tracking: this process
+     * only, so a name taken over since is left alone.
      */
-    public void unregisterProcess(String commandName) {
-        activeProcesses.remove(commandName);
+    public void unregisterProcess(String commandName, Process process) {
+        if (commandName != null) {
+            activeProcesses.remove(commandName, process);
+        }
     }
 
     /**
-     * Terminate an active running process by its token identifier name.
+     * Terminate an active running process by its token identifier name, with
+     * the programs it started. A line runs through "cmd /c" or "bash -c", so the
+     * process Sphere holds is the shell: stopping it alone left the program it
+     * had launched running, and on Windows that was every program.
      */
     public boolean killProcess(String commandName) {
-        Process p = activeProcesses.get(commandName);
+        Process p = commandName == null ? null : activeProcesses.get(commandName);
         if (p != null && p.isAlive()) {
+            p.descendants().forEach(ProcessHandle::destroyForcibly);
             p.destroyForcibly();
-            activeProcesses.remove(commandName);
+            activeProcesses.remove(commandName, p);
             return true;
         }
         return false;

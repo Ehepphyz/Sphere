@@ -7,7 +7,6 @@ import com.sphere.core.rootbackend.RootProcessBridge;
 import com.sphere.utils.AppLogger;
 
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Handles incoming ROOT execution commands. Decomposes the 3-level Sphere grammar
@@ -19,10 +18,6 @@ public class RootDispatcher extends ScientificBaseDispatcher {
     // One backend per process: several pumps on one event ring steal each
     // other's replies.
     private static RootBackend rootBackend;
-
-    /** Correlates a reply with its request. Distinct per command. */
-    private static final AtomicInteger REQUEST_IDS =
-        new AtomicInteger(new java.util.Random().nextInt(1 << 30));
 
     @Override
     protected String getToolName() {
@@ -143,9 +138,16 @@ public class RootDispatcher extends ScientificBaseDispatcher {
             ? null
             : payload.getBytes(StandardCharsets.UTF_8);
 
+        // Through the backend, which puts a payload longer than the 44 bytes of a
+        // message on the shared heap; the bridge's own push cut it short, so
+        // ".x <path>" lost the end of any real path. The request id comes from
+        // the backend's counter, the one table the pump routes replies through.
         RootProcessBridge bridge = backend.getProcessBridge();
         if (bridge != null) {
-            bridge.pushCommand(opcode, 0, REQUEST_IDS.incrementAndGet(), bytes);
+            if (!backend.sendCommand(opcode, 0, RootBackend.nextRequestId(), bytes)) {
+                AppLogger.error("The ROOT engine did not take the command (its queue or"
+                                + " its shared heap is full).");
+            }
         } else {
             backend.execute(payload);
         }

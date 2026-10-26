@@ -49,7 +49,7 @@ public final class ImageDocument {
     private SvgDocument vector;
     private boolean dirty;
     /**
-     * What the file held beyond what the editor keeps, "16-bit grey" or
+     * What the file held beyond what the editor keeps, "16-bit gray" or
      * "12 pages": the editor works on an 8-bit copy of one picture, so writing
      * it back over such a file would lose data. Null for an ordinary picture.
      */

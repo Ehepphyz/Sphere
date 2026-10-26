@@ -1932,6 +1932,8 @@ public final class JupylabXeditor extends JFrame {
     }
 
     public static void main(String[] args) {
+        java.util.Locale.setDefault(java.util.Locale.US);
+        javax.swing.JComponent.setDefaultLocale(java.util.Locale.US);
         SwingUtilities.invokeLater(() -> {
             try {
                 Path p = (args.length > 0) ? Paths.get(args[0]) : null;

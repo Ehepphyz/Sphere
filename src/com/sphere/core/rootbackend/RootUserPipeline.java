@@ -162,7 +162,7 @@ public final class RootUserPipeline {
     }
 
     /**
-     * Finds a macro by bare name, so ":root script run analyse.C" works without
+     * Finds a macro by bare name, so ":root script run analyze.C" works without
      * a path. The project is searched first, then the global folder, then the
      * name is taken as a path relative to the working directory.
      */

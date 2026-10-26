@@ -18,9 +18,11 @@ import javax.swing.Timer;
 import javax.swing.ToolTipManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.text.AbstractDocument;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.Document;
 import javax.swing.text.Element;
+import javax.swing.text.PlainDocument;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.StyleSheet;
@@ -32,6 +34,7 @@ import java.awt.Cursor;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.KeyboardFocusManager;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
@@ -42,8 +45,8 @@ import java.awt.geom.Rectangle2D;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -55,8 +58,12 @@ import com.sphere.fonts.FontLoader;
 /**
  * One editor tab: the code surface with its gutter and minimap, the breadcrumb
  * bar above, the find bar floating over it, and the markdown or LaTeX preview
- * beside it. It owns the language services of its buffer: highlighting, the
- * analysis behind outline and problems, completion, indentation and undo.
+ * beside it. It runs the language services of its view: highlighting, the
+ * analysis behind outline and problems, completion and indentation.
+ *
+ * The text itself, its undo history, its breakpoints and its file live in a
+ * {@link TextBuffer}, which two tabs share when the same file is open in two
+ * split groups: typing in one shows in the other, undo walks one history.
  */
 public class CodeTab extends JPanel {
 
@@ -74,9 +81,23 @@ public class CodeTab extends JPanel {
 
         List<CodeTab> allTabs();
 
+        /**
+         * The tabs definitions and completions are looked up in: those of every
+         * window of the editor when a group was moved into one of its own.
+         */
+        default List<CodeTab> openTabs() {
+            return allTabs();
+        }
+
         void selectTab(CodeTab tab);
 
         void tabStateChanged(CodeTab tab);
+
+        /** Shows a symbol of a tab in the split group beside the asking one. */
+        default void revealToSide(CodeTab from, CodeTab target, DocSymbol symbol) {
+            selectTab(target);
+            target.reveal(symbol);
+        }
     }
 
     private EditorMode currentMode = EditorMode.PLAIN_TEXT;
@@ -95,32 +116,26 @@ public class CodeTab extends JPanel {
     private final JLabel infoText = new JLabel();
     private final JPanel infoActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
 
+    private final TextBuffer buffer;
     private final SmartUndoManager undoManager;
-    private final BreakpointModel breakpoints = new BreakpointModel();
+    private final BreakpointModel breakpoints;
     private final SyntaxHighlighter highlighter;
     private final CodeInsight insight;
     private final AutoIndenter indenter;
     private final CompletionPopup completion;
+    /** What this view hung on the shared document, taken off again when it closes. */
+    private final List<DocumentListener> ownListeners = new ArrayList<>();
+    private boolean disposed;
 
     private LanguageSpec language = LanguageSpec.NONE;
     private boolean languagePinned;
-    private Charset charset = StandardCharsets.UTF_8;
-    private String lineSeparator = System.lineSeparator().equals("\r\n") ? "\r\n" : "\n";
-
-    private File currentFile;
-    private boolean isModified = false;
-    private boolean isLoading = false;
     private boolean syncScroll = true;
-    private long knownModified = -1;
-    private long knownSize = -1;
-    private boolean diskConflictShown;
 
     private List<EditorDiagnostic> externalDiagnostics = List.of();
     private List<EditorDiagnostic> insightDiagnostics = List.of();
     private List<EditorDiagnostic> combined = List.of();
     private SnippetSession snippet;
     private Host host;
-    private int lastLineCount = 1;
 
     private final Timer previewDebounceTimer;
     private final Timer autoSaveTimer;
@@ -128,12 +143,29 @@ public class CodeTab extends JPanel {
     private final EditorWidgets.FlatButton previewButton;
 
     public CodeTab(File file) {
-        this.currentFile = file;
+        this(file, null);
+    }
+
+    /**
+     * A second view of the buffer another tab shows, for a split: the same
+     * text, history and breakpoints, its own caret, scroll and preview.
+     */
+    public CodeTab(CodeTab twin) {
+        this(twin.getFile(), twin);
+    }
+
+    private CodeTab(File file, CodeTab twin) {
         setLayout(new BorderLayout());
         setBackground(EditorTheme.background());
 
-        /* --- 1. Code surface --- */
+        /* --- 1. Code surface, on its own buffer or on the twin's --- */
         editorArea = new CodeTextPane();
+        if (twin != null) {
+            editorArea.setDocument(twin.buffer.document);
+        }
+        buffer = twin != null ? twin.buffer : new TextBuffer(editorArea.getDocument(), file);
+        buffer.attach(this);
+        Set<DocumentListener> before = new HashSet<>(documentListeners());
         editorArea.setFont(FontLoader.getTerminalFont(Font.PLAIN, EditorState.fontSize()));
         editorArea.setTabWidth(4);
         editorArea.setLineWrap(EditorState.flag(EditorState.WORD_WRAP, false));
@@ -144,9 +176,9 @@ public class CodeTab extends JPanel {
         editorArea.setFocusTraversalKeys(KeyboardFocusManager.FORWARD_TRAVERSAL_KEYS, Collections.<AWTKeyStroke>emptySet());
         editorArea.setFocusTraversalKeys(KeyboardFocusManager.BACKWARD_TRAVERSAL_KEYS, Collections.<AWTKeyStroke>emptySet());
 
-        /* --- 2. Undo/Redo --- */
-        undoManager = new SmartUndoManager(editorArea.getDocument());
-        editorArea.getDocument().addUndoableEditListener(undoManager);
+        /* --- 2. Undo/Redo, one history per buffer --- */
+        undoManager = buffer.undo;
+        breakpoints = buffer.breakpoints;
         editorArea.setAtomicRunner(undoManager::group);
 
         /* --- 3. Language services --- */
@@ -172,10 +204,10 @@ public class CodeTab extends JPanel {
         autoSaveTimer = new Timer(1500, e -> autoSave());
         autoSaveTimer.setRepeats(false);
 
-        /* --- 5. Modification tracking --- */
+        /* --- 5. Modification tracking (the dirty flag lives in the buffer) --- */
         editorArea.getDocument().addDocumentListener(new DocumentListener() {
-            public void insertUpdate(DocumentEvent e) { onEdit(e); }
-            public void removeUpdate(DocumentEvent e) { onEdit(e); }
+            public void insertUpdate(DocumentEvent e) { onEdit(); }
+            public void removeUpdate(DocumentEvent e) { onEdit(); }
             public void changedUpdate(DocumentEvent e) { /* attribute-only */ }
         });
 
@@ -231,7 +263,7 @@ public class CodeTab extends JPanel {
         previewScrollPane.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, EditorTheme.chromeBorder()));
         previewScrollPane.setVisible(false);
 
-        splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, editorScrollPane, previewScrollPane);
+        splitPane = new EditorWidgets.QuietSplitPane(JSplitPane.HORIZONTAL_SPLIT, editorScrollPane, previewScrollPane);
         splitPane.setResizeWeight(0.6);
         splitPane.setDividerSize(0);
         splitPane.setContinuousLayout(true);
@@ -290,14 +322,108 @@ public class CodeTab extends JPanel {
             }
         });
 
-        if (file != null) {
+        for (DocumentListener l : documentListeners()) {
+            if (!before.contains(l)) {
+                ownListeners.add(l);
+            }
+        }
+
+        if (twin != null) {
+            adoptFrom(twin);
+        } else if (file != null) {
             loadFile(file);
         }
         refreshChrome();
     }
 
+    private List<DocumentListener> documentListeners() {
+        if (editorArea.getDocument() instanceof AbstractDocument ad) {
+            return Arrays.asList(ad.getDocumentListeners());
+        }
+        return List.of();
+    }
+
+    /** A new view takes on what its twin already worked out about the buffer. */
+    private void adoptFrom(CodeTab twin) {
+        languagePinned = twin.languagePinned;
+        setLanguageInternal(twin.language);
+        applyIndentation(twin.indenter.usesTabs(), twin.indenter.indentSize());
+        insight.setFile(buffer.file);
+        insight.setBaseline(buffer.savedText);
+        externalDiagnostics = twin.externalDiagnostics;
+        mergeDiagnostics();
+        editorArea.setCaretPosition(Math.min(twin.editorArea.getCaret().getMark(), buffer.document.getLength()));
+        editorArea.moveCaretPosition(Math.min(twin.editorArea.getCaret().getDot(), buffer.document.getLength()));
+    }
+
+    /** Scrolls to where another view of the buffer stands, once this one is laid out. */
+    public void matchScrollOf(CodeTab other) {
+        if (other == null) {
+            return;
+        }
+        Point p = other.editorScrollPane.getViewport().getViewPosition();
+        SwingUtilities.invokeLater(() -> SwingUtilities.invokeLater(() -> {
+            JViewport vp = editorScrollPane.getViewport();
+            int maxY = Math.max(0, editorArea.getHeight() - vp.getExtentSize().height);
+            vp.setViewPosition(new Point(0, Math.max(0, Math.min(p.y, maxY))));
+        }));
+    }
+
     public void setHost(Host host) {
         this.host = host;
+    }
+
+    /** The shared state of the file this tab shows. */
+    public TextBuffer getBuffer() {
+        return buffer;
+    }
+
+    /** True when both tabs show the same buffer, in two groups. */
+    public boolean sharesBufferWith(CodeTab other) {
+        return other != null && other.buffer == buffer;
+    }
+
+    /** Called by the buffer when its dirty flag or file changed. */
+    void bufferStateChanged() {
+        if (host != null) {
+            host.tabStateChanged(this);
+        }
+    }
+
+    /**
+     * Takes this view off the shared document. The buffer lives on in the other
+     * views of the file; without this a closed split would keep listening to
+     * every keystroke made in the other one.
+     */
+    public void dispose() {
+        if (disposed) {
+            return;
+        }
+        disposed = true;
+        host = null;
+        previewDebounceTimer.stop();
+        autoSaveTimer.stop();
+        completion.hide();
+        if (snippet != null) {
+            snippet.finish(false);
+            snippet = null;
+        }
+        highlighter.dispose();
+        for (DocumentListener l : ownListeners) {
+            buffer.document.removeDocumentListener(l);
+        }
+        ownListeners.clear();
+        gutter.dispose();
+        ToolTipManager.sharedInstance().unregisterComponent(editorArea);
+        buffer.detach(this);
+        if (!buffer.views().isEmpty()) {
+            // The text UI and the caret listen to the document they show.
+            editorArea.setDocument(new PlainDocument());
+        }
+    }
+
+    public boolean isDisposed() {
+        return disposed;
     }
 
     /** The name the tab shows while the buffer has no file. */
@@ -311,42 +437,33 @@ public class CodeTab extends JPanel {
 
     // ---- Edits -------------------------------------------------------------
 
-    private void onEdit(DocumentEvent e) {
-        int lines = editorArea.lineCountTotal();
-        int delta = lines - lastLineCount;
-        lastLineCount = lines;
-        if (delta != 0 && !isLoading) {
-            int line = editorArea.lineAt(e.getOffset());
-            boolean atLineStart = editorArea.lineStartOffset(line) == e.getOffset();
-            breakpoints.shift(line + (atLineStart ? 1 : 2), delta);
+    /** What this view does after any edit, made here or in another view of the buffer. */
+    private void onEdit() {
+        if (buffer.loading) {
+            return;
         }
-        if (!isLoading) {
-            this.isModified = true;
-            if (currentMode != EditorMode.PLAIN_TEXT) {
-                previewDebounceTimer.restart();
-            }
-            if (EditorState.flag(EditorState.AUTO_SAVE, false) && currentFile != null) {
-                autoSaveTimer.restart();
-            }
+        if (currentMode != EditorMode.PLAIN_TEXT) {
+            previewDebounceTimer.restart();
+        }
+        if (EditorState.flag(EditorState.AUTO_SAVE, false) && buffer.file != null) {
+            autoSaveTimer.restart();
         }
     }
 
     private void autoSave() {
-        if (isModified && currentFile != null && !isLoading) {
+        if (buffer.modified && buffer.file != null && !buffer.loading) {
             saveFile();
-            if (host != null) {
-                host.tabStateChanged(this);
-            }
         }
     }
 
+    /** The analyses of the other open files; a second view of this one adds nothing. */
     private List<CodeInsight.Result> otherResults() {
         if (host == null) {
             return List.of();
         }
         List<CodeInsight.Result> out = new ArrayList<>();
-        for (CodeTab t : host.allTabs()) {
-            if (t != this) {
+        for (CodeTab t : host.openTabs()) {
+            if (t.buffer != buffer) {
                 out.add(t.insight.result());
             }
         }
@@ -422,6 +539,8 @@ public class CodeTab extends JPanel {
         bind(ks(KeyEvent.VK_Z, ctrl | shift), "sphere-redo", this::redo);
         bind(ks(KeyEvent.VK_Z, alt), "sphere-wrap", () -> setWordWrap(!editorArea.getLineWrap()));
         bind(ks(KeyEvent.VK_V, ctrl | shift), "sphere-preview", this::togglePreview);
+        // The text area's own Ctrl+\ (unselect) would hide Split Editor Right from the editor around it.
+        editorArea.getInputMap(JComponent.WHEN_FOCUSED).put(ks(KeyEvent.VK_BACK_SLASH, ctrl), "none");
     }
 
     private boolean onTab() {
@@ -458,15 +577,17 @@ public class CodeTab extends JPanel {
 
     public void undo() {
         if (undoManager.canUndo()) {
-            undoManager.undo();
+            buffer.keepOtherViews(this, undoManager::undo);
             placeCaretAfterHistory();
+            buffer.recheckSaved();
         }
     }
 
     public void redo() {
         if (undoManager.canRedo()) {
-            undoManager.redo();
+            buffer.keepOtherViews(this, undoManager::redo);
             placeCaretAfterHistory();
+            buffer.recheckSaved();
         }
     }
 
@@ -511,7 +632,8 @@ public class CodeTab extends JPanel {
                     int offset = editorArea.viewToModel2D(e.getPoint());
                     int[] w = editorArea.wordAt(offset);
                     if (w != null) {
-                        goToDefinition(word(w));
+                        // Ctrl+Alt+click keeps this view and opens the definition beside it.
+                        goToDefinition(word(w), (e.getModifiersEx() & InputEvent.ALT_DOWN_MASK) != 0);
                     }
                 }
             }
@@ -561,8 +683,8 @@ public class CodeTab extends JPanel {
             return new Object[] { this, s };
         }
         if (host != null) {
-            for (CodeTab t : host.allTabs()) {
-                if (t == this) {
+            for (CodeTab t : host.openTabs()) {
+                if (t.buffer == buffer) {
                     continue;
                 }
                 DocSymbol o = t.insight.result().find(name);
@@ -575,6 +697,11 @@ public class CodeTab extends JPanel {
     }
 
     public void goToDefinitionAtCaret() {
+        goToDefinitionAtCaret(false);
+    }
+
+    /** F12, or Ctrl+K F12 to open the definition in the group beside this one. */
+    public void goToDefinitionAtCaret(boolean toSide) {
         int[] w = editorArea.wordAt(editorArea.getCaretPosition());
         if (w == null) {
             if (host != null) {
@@ -582,10 +709,14 @@ public class CodeTab extends JPanel {
             }
             return;
         }
-        goToDefinition(word(w));
+        goToDefinition(word(w), toSide);
     }
 
     public void goToDefinition(String name) {
+        goToDefinition(name, false);
+    }
+
+    public void goToDefinition(String name, boolean toSide) {
         Object[] def = definitionOf(name);
         if (def == null) {
             if (host != null) {
@@ -595,6 +726,10 @@ public class CodeTab extends JPanel {
         }
         CodeTab tab = (CodeTab) def[0];
         DocSymbol s = (DocSymbol) def[1];
+        if (toSide && host != null) {
+            host.revealToSide(this, tab, s);
+            return;
+        }
         if (tab != this && host != null) {
             host.selectTab(tab);
         }
@@ -716,7 +851,7 @@ public class CodeTab extends JPanel {
 
     private void setupScrollSynchronization() {
         editorScrollPane.getVerticalScrollBar().addAdjustmentListener(e -> {
-            if (!syncScroll || currentMode == EditorMode.PLAIN_TEXT || isLoading) return;
+            if (!syncScroll || currentMode == EditorMode.PLAIN_TEXT || buffer.loading) return;
 
             javax.swing.JScrollBar editorBar = editorScrollPane.getVerticalScrollBar();
             javax.swing.JScrollBar previewBar = previewScrollPane.getVerticalScrollBar();
@@ -793,10 +928,12 @@ public class CodeTab extends JPanel {
         }
     }
 
-    /** Picks a language by hand, overriding what the file name suggests. */
+    /** Picks a language by hand, overriding what the file name suggests, in every view of the file. */
     public void setLanguage(LanguageSpec spec) {
-        languagePinned = true;
-        setLanguageInternal(spec);
+        for (CodeTab v : buffer.views()) {
+            v.languagePinned = true;
+            v.setLanguageInternal(spec);
+        }
     }
 
     private void setLanguageInternal(LanguageSpec spec) {
@@ -804,7 +941,7 @@ public class CodeTab extends JPanel {
         editorArea.setLanguage(language);
         highlighter.setLanguage(language);
         indenter.setLanguage(language);
-        insight.setFile(currentFile);
+        insight.setFile(buffer.file);
         refreshChrome();
         if (host != null) {
             host.tabStateChanged(this);
@@ -816,11 +953,11 @@ public class CodeTab extends JPanel {
     }
 
     private void refreshChrome() {
-        breadcrumbs.setFile(currentFile, language);
-        runButton.setVisible(LanguageSpec.runCommandFor(language, currentFile) != null);
+        breadcrumbs.setFile(buffer.file, language);
+        runButton.setVisible(LanguageSpec.runCommandFor(language, buffer.file) != null);
         previewButton.setVisible(language == LanguageSpec.MARKDOWN || language == LanguageSpec.LATEX
                                  || currentMode != EditorMode.PLAIN_TEXT);
-        editorArea.setWatermark(currentFile == null ? watermark : List.of());
+        editorArea.setWatermark(buffer.file == null ? watermark : List.of());
     }
 
     private static List<String[]> watermark = List.of();
@@ -898,7 +1035,7 @@ public class CodeTab extends JPanel {
         map.addActionListener(e -> {
             EditorState.setFlag(EditorState.MINIMAP, map.isSelected());
             if (host != null) {
-                for (CodeTab t : host.allTabs()) {
+                for (CodeTab t : host.openTabs()) {
                     t.setMinimapVisible(map.isSelected());
                 }
             } else {
@@ -1044,52 +1181,67 @@ public class CodeTab extends JPanel {
 
     // ---- File --------------------------------------------------------------
 
+    /**
+     * Reads the file into the buffer. The other views of the buffer keep their
+     * place, then learn what the reading found (encoding, indentation).
+     */
     private void loadFile(File file) {
-        isLoading = true;
         previewDebounceTimer.stop();
-        try {
-            editorArea.getDocument().removeUndoableEditListener(undoManager);
-
-            EditorFileIO.Loaded loaded = EditorFileIO.read(file);
-            charset = loaded.charset;
-            String text = loaded.text;
-            lineSeparator = text.contains("\r\n") ? "\r\n" : "\n";
-            String normalized = text.replace("\r\n", "\n").replace('\r', '\n');
-            editorArea.setText(normalized);
-            editorArea.setCaretPosition(0);
-            detectIndentation(normalized);
-            knownModified = file.lastModified();
-            knownSize = file.length();
-            diskConflictShown = false;
-            infoBar.setVisible(false);
-
-            if (loaded.fellBack) {
-                AppLogger.warn("Not valid UTF-8, opened as ISO-8859-1: " + file.getName());
+        final String[] loadedText = { null };
+        buffer.keepOtherViews(this, () -> {
+            buffer.beginLoading();
+            try {
+                EditorFileIO.Loaded loaded = EditorFileIO.read(file);
+                String text = loaded.text;
+                String normalized = text.replace("\r\n", "\n").replace('\r', '\n');
+                editorArea.setText(normalized);
+                editorArea.setCaretPosition(0);
+                buffer.charset = loaded.charset;
+                buffer.bom = loaded.bom;
+                buffer.lineSeparator = text.contains("\r\n") ? "\r\n" : "\n";
+                buffer.knownModified = file.lastModified();
+                buffer.knownSize = file.length();
+                buffer.diskConflictShown = false;
+                buffer.savedText = normalized;
+                buffer.formatDirty = false;
+                if (loaded.fellBack) {
+                    AppLogger.warn("Not valid UTF-8, opened as ISO-8859-1: " + file.getName());
+                }
+                loadedText[0] = normalized;
+            } catch (EditorFileIO.TooLargeException tooBig) {
+                // grown past the limit since it was opened (a reload): what the disk holds is shown read-only
+                AppLogger.error(tooBig.getMessage() + " Shown read-only in the large file viewer.");
+                LargeFileViewer.show(file);
+            } catch (IOException e) {
+                AppLogger.error("Failed to load file: " + e.getMessage());
+            } finally {
+                buffer.endLoading(loadedText[0] != null);
             }
-
-            undoManager.discardAllEdits();
-            isModified = false;
-            lastLineCount = editorArea.lineCountTotal();
-            applyLanguage(file);
-            insight.setFile(file);
-            insight.setBaseline(normalized);
-            autoDetectModeFromFile();
-            highlighter.rehighlightAll();
-            updatePreview();
-
-        } catch (EditorFileIO.TooLargeException tooBig) {
-            AppLogger.error(tooBig.getMessage());
-        } catch (IOException e) {
-            AppLogger.error("Failed to load file: " + e.getMessage());
-        } finally {
-            editorArea.getDocument().addUndoableEditListener(undoManager);
-            isLoading = false;
+        });
+        if (loadedText[0] != null) {
+            int[] indent = detectIndentation(loadedText[0]);
+            for (CodeTab v : buffer.views()) {
+                v.afterLoad(indent[0] == 1, indent[1]);
+            }
+            buffer.setModified(false);
         }
         refreshChrome();
     }
 
-    /** Tabs or spaces, and how many, as the file is already indented. */
-    private void detectIndentation(String text) {
+    private void afterLoad(boolean tabs, int size) {
+        infoBar.setVisible(false);
+        applyIndentation(tabs, size);
+        applyLanguage(buffer.file);
+        insight.setFile(buffer.file);
+        insight.setBaseline(buffer.savedText);
+        autoDetectModeFromFile();
+        highlighter.rehighlightAll();
+        updatePreview();
+        refreshChrome();
+    }
+
+    /** Tabs or spaces, and how many, as the file is already indented: {1 for tabs, width}. */
+    private static int[] detectIndentation(String text) {
         int tabs = 0;
         int spaces = 0;
         int[] widths = new int[9];
@@ -1121,9 +1273,7 @@ public class CodeTab extends JPanel {
             previous = n;
         }
         if (tabs > spaces) {
-            indenter.setIndentation(true, 4);
-            editorArea.setTabSize(4);
-            return;
+            return new int[] { 1, 4 };
         }
         int best = 4;
         int bestCount = 0;
@@ -1133,30 +1283,43 @@ public class CodeTab extends JPanel {
                 bestCount = widths[w];
             }
         }
-        indenter.setIndentation(false, spaces == 0 ? 4 : best);
-        editorArea.setTabSize(spaces == 0 ? 4 : best);
+        return new int[] { 0, spaces == 0 ? 4 : best };
+    }
+
+    private void applyIndentation(boolean tabs, int size) {
+        indenter.setIndentation(tabs, size);
+        editorArea.setTabSize(size);
     }
 
     public void saveFile() {
-        if (currentFile == null) return;
+        File file = buffer.file;
+        if (file == null) return;
         try {
             if (EditorState.flag(EditorState.TRIM_ON_SAVE, false)) {
                 EditorActions.trimTrailingWhitespace(editorArea);
             }
             String text = editorArea.getText();
-            String out = lineSeparator.equals("\n") ? text : text.replace("\n", lineSeparator);
-            EditorFileIO.write(currentFile, out, charset);
-            isModified = false;
-            knownModified = currentFile.lastModified();
-            knownSize = currentFile.length();
-            diskConflictShown = false;
-            infoBar.setVisible(false);
+            String out = buffer.lineSeparator.equals("\n") ? text : text.replace("\n", buffer.lineSeparator);
+            EditorFileIO.write(file, out, buffer.charset, buffer.bom);
+            buffer.knownModified = file.lastModified();
+            buffer.knownSize = file.length();
+            buffer.diskConflictShown = false;
+            buffer.savedText = text;
+            buffer.formatDirty = false;
             undoManager.closeTyping();
-            insight.setBaseline(text);
-            refreshChrome();
+            for (CodeTab v : buffer.views()) {
+                v.afterSave();
+            }
+            buffer.setModified(false);
         } catch (IOException e) {
             AppLogger.error("Failed to save: " + e.getMessage());
         }
+    }
+
+    private void afterSave() {
+        infoBar.setVisible(false);
+        insight.setBaseline(buffer.savedText);
+        refreshChrome();
     }
 
     /**
@@ -1165,45 +1328,58 @@ public class CodeTab extends JPanel {
      * shows up here instead of being overwritten by the next save.
      */
     public void checkDisk() {
-        if (currentFile == null || isLoading) {
+        File file = buffer.file;
+        if (file == null || buffer.loading) {
             return;
         }
-        if (!currentFile.exists()) {
-            if (!diskConflictShown) {
-                showInfo("This file was deleted or moved on disk.", "Save Here", this::saveFile, null, null);
-                diskConflictShown = true;
+        if (!file.exists()) {
+            if (!buffer.diskConflictShown) {
+                buffer.diskConflictShown = true;
+                showInfoAll("This file was deleted or moved on disk.", "Save Here", this::saveFile, null, null);
             }
             return;
         }
-        long lm = currentFile.lastModified();
-        long size = currentFile.length();
-        if (lm == knownModified && size == knownSize) {
+        long lm = file.lastModified();
+        long size = file.length();
+        if (lm == buffer.knownModified && size == buffer.knownSize) {
             return;
         }
-        if (!isModified) {
+        if (!buffer.modified) {
             reloadKeepingPosition();
             if (host != null) {
-                host.toast("Reloaded " + currentFile.getName() + " from disk");
+                host.toast("Reloaded " + file.getName() + " from disk");
             }
-        } else if (!diskConflictShown) {
-            diskConflictShown = true;
-            showInfo("This file changed on disk while you were editing it.",
-                     "Reload", this::reloadKeepingPosition, "Keep Mine", () -> {
-                         knownModified = currentFile.lastModified();
-                         knownSize = currentFile.length();
-                         infoBar.setVisible(false);
-                     });
+        } else if (!buffer.diskConflictShown) {
+            buffer.diskConflictShown = true;
+            showInfoAll("This file changed on disk while you were editing it.",
+                        "Reload", this::reloadKeepingPosition, "Keep Mine", () -> {
+                            buffer.knownModified = file.lastModified();
+                            buffer.knownSize = file.length();
+                        });
         }
     }
 
     private void reloadKeepingPosition() {
         int caret = editorArea.getCaretPosition();
         int scroll = editorScrollPane.getVerticalScrollBar().getValue();
-        loadFile(currentFile);
+        loadFile(buffer.file);
         editorArea.setCaretPosition(Math.min(caret, editorArea.getDocument().getLength()));
         SwingUtilities.invokeLater(() -> editorScrollPane.getVerticalScrollBar().setValue(scroll));
         if (host != null) {
             host.tabStateChanged(this);
+        }
+    }
+
+    /** The banner above the code, in every view of the file: answering it in one answers it in all. */
+    private void showInfoAll(String text, String a, Runnable actionA, String b, Runnable actionB) {
+        for (CodeTab v : buffer.views()) {
+            v.showInfo(text, a, actionA, b, actionB);
+        }
+    }
+
+    private void hideInfoAll() {
+        for (CodeTab v : buffer.views()) {
+            v.infoBar.setVisible(false);
         }
     }
 
@@ -1215,11 +1391,11 @@ public class CodeTab extends JPanel {
         infoText.setText(text);
         infoActions.removeAll();
         EditorWidgets.FlatButton first = new EditorWidgets.FlatButton(a, null);
-        first.addActionListener(e -> { infoBar.setVisible(false); actionA.run(); });
+        first.addActionListener(e -> { hideInfoAll(); actionA.run(); });
         infoActions.add(first);
         if (b != null) {
             EditorWidgets.FlatButton second = new EditorWidgets.FlatButton(b, null);
-            second.addActionListener(e -> { infoBar.setVisible(false); if (actionB != null) actionB.run(); });
+            second.addActionListener(e -> { hideInfoAll(); if (actionB != null) actionB.run(); });
             infoActions.add(second);
         }
         infoBar.setVisible(true);
@@ -1228,8 +1404,8 @@ public class CodeTab extends JPanel {
     }
 
     private void autoDetectModeFromFile() {
-        if (currentFile == null) return;
-        String name = currentFile.getName().toLowerCase();
+        if (buffer.file == null) return;
+        String name = buffer.file.getName().toLowerCase();
 
         if (name.endsWith(".md") || name.endsWith(".markdown")) {
             setEditorMode(EditorMode.MARKDOWN);
@@ -1253,90 +1429,101 @@ public class CodeTab extends JPanel {
     // ---- Encoding and line endings -----------------------------------------
 
     public String getLineSeparator() {
-        return lineSeparator;
+        return buffer.lineSeparator;
     }
 
     public void setLineSeparator(String separator) {
-        if (!separator.equals(lineSeparator)) {
-            lineSeparator = separator;
-            isModified = true;
-            if (host != null) {
-                host.tabStateChanged(this);
-            }
+        if (!separator.equals(buffer.lineSeparator)) {
+            buffer.lineSeparator = separator;
+            buffer.formatDirty = true;
+            buffer.setModified(true);
+            bufferStateChanged();
         }
     }
 
     public Charset getCharset() {
-        return charset;
+        return buffer.charset;
     }
 
     public void setCharset(Charset cs) {
-        if (cs != null && !cs.equals(charset)) {
-            charset = cs;
-            isModified = true;
-            if (host != null) {
-                host.tabStateChanged(this);
-            }
+        if (cs != null && !cs.equals(buffer.charset)) {
+            buffer.charset = cs;
+            buffer.formatDirty = true;
+            buffer.setModified(true);
+            bufferStateChanged();
         }
     }
 
     /** Reads the file again in another encoding. */
     public void reopenWithCharset(Charset cs) {
-        if (currentFile == null || cs == null) {
+        File file = buffer.file;
+        if (file == null || cs == null) {
             return;
         }
+        final String text;
         try {
-            byte[] bytes = java.nio.file.Files.readAllBytes(currentFile.toPath());
-            String text = new String(bytes, cs).replace("\r\n", "\n").replace('\r', '\n');
-            isLoading = true;
-            editorArea.getDocument().removeUndoableEditListener(undoManager);
-            editorArea.setText(text);
-            editorArea.setCaretPosition(0);
-            undoManager.discardAllEdits();
-            charset = cs;
-            isModified = false;
-            insight.setBaseline(text);
+            byte[] bytes = java.nio.file.Files.readAllBytes(file.toPath());
+            text = new String(bytes, cs).replace("\r\n", "\n").replace('\r', '\n');
         } catch (IOException e) {
-            AppLogger.error("Failed to reopen " + currentFile.getName() + ": " + e.getMessage());
-        } finally {
-            editorArea.getDocument().addUndoableEditListener(undoManager);
-            isLoading = false;
+            AppLogger.error("Failed to reopen " + file.getName() + ": " + e.getMessage());
+            return;
         }
-        if (host != null) {
-            host.tabStateChanged(this);
+        buffer.keepOtherViews(this, () -> {
+            buffer.beginLoading();
+            try {
+                editorArea.setText(text);
+                editorArea.setCaretPosition(0);
+                buffer.charset = cs;
+                buffer.savedText = text;
+                buffer.formatDirty = false;
+            } finally {
+                buffer.endLoading(true);
+            }
+        });
+        for (CodeTab v : buffer.views()) {
+            v.insight.setBaseline(text);
         }
+        buffer.setModified(false);
+        bufferStateChanged();
     }
 
     public AutoIndenter getIndenter() {
         return indenter;
     }
 
-    /** Re-indents with tabs or spaces of a given width. */
+    /** Re-indents with tabs or spaces of a given width, in every view of the file. */
     public void setIndentation(boolean tabs, int size, boolean convert) {
-        indenter.setIndentation(tabs, size);
-        editorArea.setTabSize(size);
+        for (CodeTab v : buffer.views()) {
+            v.applyIndentation(tabs, size);
+        }
         if (convert) {
             EditorActions.convertIndentation(editorArea, tabs, size);
         }
-        if (host != null) {
-            host.tabStateChanged(this);
+        for (CodeTab v : buffer.views()) {
+            v.bufferStateChanged();
         }
     }
 
     // Getters & Setters
-    public boolean isModified() { return isModified; }
-    public File getFile() { return currentFile; }
+    public boolean isModified() { return buffer.modified; }
+    public File getFile() { return buffer.file; }
+
+    /** Names the buffer's file (Save As, or a file loaded into an empty tab); every view follows. */
     public void setFile(File file) {
-        this.currentFile = file;
-        applyLanguage(file);
-        insight.setFile(file);
-        autoDetectModeFromFile();
-        refreshChrome();
+        buffer.file = file;
+        for (CodeTab v : buffer.views()) {
+            v.applyLanguage(file);
+            v.insight.setFile(file);
+            v.autoDetectModeFromFile();
+            v.refreshChrome();
+            v.bufferStateChanged();
+        }
     }
     public EditorMode getCurrentMode() { return currentMode; }
     public void setSyncScroll(boolean enabled) { this.syncScroll = enabled; }
     public UndoManager getUndoManager() { return undoManager; }
     public CodeTextPane getEditorArea() { return editorArea; }
-    public void loadFileFromExternal(File file) { this.currentFile = file; loadFile(file); }
-    public boolean isRunnable() { return LanguageSpec.runCommandFor(language, currentFile) != null; }
+    public JScrollPane getScrollPane() { return editorScrollPane; }
+    public void loadFileFromExternal(File file) { buffer.file = file; loadFile(file); }
+    public boolean isRunnable() { return LanguageSpec.runCommandFor(language, buffer.file) != null; }
 }

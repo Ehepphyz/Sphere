@@ -22,14 +22,24 @@ public final class ObjectWriter {
 
     private final Streamers streamers;
     private final Set<String> foreignPrefixes;
+    private final int stlVersion;
 
     public ObjectWriter(Streamers streamers, Set<String> foreignPrefixes) {
+        this(streamers, foreignPrefixes, STL_VERSION);
+    }
+
+    /**
+     * @param stlVersion the version STL collections are written with: TStreamerInfo's own,
+     *                   9 for ROOT 6.20 and 10 for ROOT 6.36, as the descriptions written say
+     */
+    public ObjectWriter(Streamers streamers, Set<String> foreignPrefixes, int stlVersion) {
         this.streamers = streamers;
         this.foreignPrefixes = foreignPrefixes;
+        this.stlVersion = stlVersion;
     }
 
     /** ROOT's own classes without ClassDef, written as foreign ones (version 0 and checksum). */
-    private static final Set<String> ROOT_FOREIGN = Set.of("ROOT::TIOFeatures");
+    private static final Set<String> ROOT_FOREIGN = Set.of("ROOT::TIOFeatures", "ROOT::Geom::Vertex_t", "TGeoFacet");
 
     private boolean foreign(String className, Streamers.Info info) {
         if (info.version() > 1) return false;
@@ -152,7 +162,8 @@ public final class ObjectWriter {
         }
         if (t > Streamers.K_OFFSET_P && t < Streamers.K_OBJECT) {
             final int count = owner == null ? 0 : owner.integer(e.countName());
-            if (value == null || count <= 0) {
+            // an empty array is what ObjectReader makes of a null pointer (flag 0)
+            if (value == null || count <= 0 || length(value) == 0) {
                 b.i8(0);
                 return;
             }
@@ -162,7 +173,13 @@ public final class ObjectWriter {
         }
         switch (t) {
             case Streamers.K_OBJECT, Streamers.K_ANY -> writeClass(b, stripPointer(e.typeName()), value);
-            case Streamers.K_OBJECTP, Streamers.K_ANYP, Streamers.K_OBJECTPP, Streamers.K_ANYPP -> writeObjectAny(b, value);
+            // A pointer commented //-> is never null: TBufferFile::WriteFastArray (isPreAlloc)
+            // streams the object itself, with no class tag in front, as ObjectReader reads it.
+            case Streamers.K_OBJECTP, Streamers.K_ANYP -> {
+                final String cls = stripPointer(e.typeName());
+                writeClass(b, cls, value == null && isCollection(cls) ? new RList() : value);
+            }
+            case Streamers.K_OBJECTPP, Streamers.K_ANYPP -> writeObjectAny(b, value);
             case Streamers.K_TSTRING -> b.tstring(value == null ? "" : value.toString());
             case Streamers.K_TOBJECT -> writeTObject(b, (RObject) value);
             case Streamers.K_TNAMED -> writeTNamed(b, (RObject) value);
@@ -174,6 +191,11 @@ public final class ObjectWriter {
         String s = typeName.strip();
         while (s.endsWith("*")) s = s.substring(0, s.length() - 1).strip();
         return s;
+    }
+
+    /** The collections an empty list stands for, when a //-> pointer has nothing set. */
+    private static boolean isCollection(String className) {
+        return className.equals("TObjArray") || className.equals("TList") || className.equals("THashList");
     }
 
     /* ---- numbers ------------------------------------------------------------------ */
@@ -228,22 +250,27 @@ public final class ObjectWriter {
      * objects member by member (List of RObject), as ROOT writes them.
      */
     public void writeSTL(WBuffer b, String typeName, int ctype, Object value) {
+        final String t = typeName.strip().replace("std::", "");
+        if (t.startsWith("map<") || t.startsWith("multimap<")) {
+            writeMap(b, t, value);
+            return;
+        }
         final String inner = ObjectReader.innerType(typeName);
         final int basic = ctype > 0 && ctype < Streamers.K_OFFSET_L ? ctype : ObjectReader.basicType(inner);
         final int cntpos = b.reserveCount();
         final int n = length(value);
         if (basic != 0) {
-            b.i16(STL_VERSION);
+            b.i16(stlVersion);
             b.i32(n);
             writeBasicArray(b, basic, value, n);
         } else if (inner.equals("string") || inner.equals("std::string") || inner.equals("TString")) {
-            b.i16(STL_VERSION);
+            b.i16(stlVersion);
             b.i32(n);
             for (int i = 0; i < n; i++) b.tstring(String.valueOf(element(value, i)));
         } else {
             final Streamers.Info info = streamers.find(inner, -1);
             if (info == null) throw new IllegalStateException("no description of " + inner + " to write it with");
-            b.i16(STL_VERSION | RBuffer.STREAMED_MEMBER_WISE);
+            b.i16(stlVersion | RBuffer.STREAMED_MEMBER_WISE);
             if (foreign(inner, info)) {
                 b.i16(0);
                 b.u32(info.checksum());
@@ -256,6 +283,74 @@ public final class ObjectWriter {
             writeMemberWise(b, info, objects);
         }
         b.setCount(cntpos);
+    }
+
+    /**
+     * std::map, as ROOT writes it: member-wise, its elements being the
+     * pair&lt;K,V&gt; ROOT generates (version 0 and that pair's checksum), all
+     * the keys, then all the values. The value is a List of (key, value) Lists,
+     * which is what ObjectReader gives back.
+     */
+    private void writeMap(WBuffer b, String typeName, Object value) {
+        final String[] kv = templateArguments(typeName);
+        final int cntpos = b.reserveCount();
+        b.i16(stlVersion | RBuffer.STREAMED_MEMBER_WISE);
+        b.i16(0);
+        b.u32(pairChecksum(kv[0], kv[1]));
+        final List<?> pairs = value instanceof List<?> l ? l : List.of();
+        b.i32(pairs.size());
+        for (int side = 0; side < 2; side++) {
+            for (Object p : pairs) {
+                final Object v = p instanceof List<?> pl && pl.size() == 2 ? pl.get(side) : null;
+                writeValue(b, kv[side], v);
+            }
+        }
+        b.setCount(cntpos);
+    }
+
+    private void writeValue(WBuffer b, String type, Object v) {
+        final int basic = ObjectReader.basicType(type);
+        if (basic != 0) {
+            writeBasic(b, basic, v);
+        } else if (type.equals("string") || type.equals("TString")) {
+            b.tstring(v == null ? "" : v.toString());
+        } else if (type.contains("<")) {
+            writeSTL(b, type, 0, v);
+        } else {
+            writeClass(b, type, v);
+        }
+    }
+
+    /** The first two arguments of a template, "map<string,double>" giving {string, double}. */
+    static String[] templateArguments(String typeName) {
+        final String s = typeName.substring(typeName.indexOf('<') + 1, typeName.lastIndexOf('>'));
+        final List<String> args = new ArrayList<>();
+        int depth = 0;
+        int from = 0;
+        for (int i = 0; i < s.length(); i++) {
+            final char c = s.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == ',' && depth == 0) {
+                args.add(s.substring(from, i).strip());
+                from = i + 1;
+            }
+        }
+        args.add(s.substring(from).strip());
+        return new String[] {args.get(0), args.size() > 1 ? args.get(1) : ""};
+    }
+
+    /**
+     * TClass::GetCheckSum of the pair&lt;K,V&gt; a map holds: the class name, then
+     * each member's name and type, folded as id = id*3 + character (no bases,
+     * which a pair is not allowed to count).
+     */
+    static long pairChecksum(String key, String value) {
+        long id = 0;
+        for (String s : new String[] {"pair<" + key + "," + value + ">", "first", key, "second", value}) {
+            for (int i = 0; i < s.length(); i++) id = (id * 3 + s.charAt(i)) & 0xffffffffL;
+        }
+        return id;
     }
 
     private void writeMemberWise(WBuffer b, Streamers.Info info, List<RObject> objects) {

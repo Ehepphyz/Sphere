@@ -86,14 +86,14 @@ inline std::string N(double value) {
 
 inline std::string B(bool value) { return value ? "true" : "false"; }
 
-/** A ROOT colour index as #rrggbb, which is what the viewer paints with. */
+/** A ROOT color index as #rrggbb, which is what the viewer paints with. */
 inline std::string Color(Int_t index) {
   TColor *color = gROOT->GetColor(index);
   if (color == nullptr) return "null";
   return Q(color->AsHexString());
 }
 
-/** The palette COLZ, LEGO2 and SURF1 take their colours from. */
+/** The palette COLZ, LEGO2 and SURF1 take their colors from. */
 inline std::string Palette() {
   std::string out = "[";
   const Int_t n = gStyle->GetNumberOfColors();
@@ -371,7 +371,7 @@ inline std::string Pave(TPave *pave, const char *option) {
       if (text == nullptr) continue;
       if (!first) out += ",";
       first = false;
-      // AddText leaves colour, font, size and alignment at 0: the pave's own, as PaintPrimitives reads them.
+      // AddText leaves color, font, size and alignment at 0: the pave's own, as PaintPrimitives reads them.
       const Color_t color = text->GetTextColor() != 0 ? text->GetTextColor() : paveText->GetTextColor();
       out += "{\"s\":" + Q(text->GetTitle()) + ",\"tc\":" + Color(color);
       if (text->GetTextFont() != paveText->GetTextFont()) out += ",\"ef\":" + N(text->GetTextFont());

@@ -11,6 +11,7 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.geom.Arc2D;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.GeneralPath;
 import java.awt.geom.Line2D;
@@ -393,6 +394,182 @@ public final class EditorIcons {
             p.lineTo(x + s * 0.24f, y + s * 0.88f);
             p.closePath();
             g.draw(p);
+        });
+    }
+
+    // ---- Explorer ----------------------------------------------------------
+
+    /** A page with a plus at its foot: a new file. */
+    public static Icon newFile(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            GeneralPath p = new GeneralPath();
+            p.moveTo(x + s * 0.50f, y + s * 0.88f);
+            p.lineTo(x + s * 0.18f, y + s * 0.88f);
+            p.lineTo(x + s * 0.18f, y + s * 0.12f);
+            p.lineTo(x + s * 0.50f, y + s * 0.12f);
+            p.lineTo(x + s * 0.70f, y + s * 0.32f);
+            p.lineTo(x + s * 0.70f, y + s * 0.50f);
+            g.draw(p);
+            plus(g, x + s * 0.74f, y + s * 0.74f, s * 0.15f);
+        });
+    }
+
+    /** A folder with a plus at its corner: a new folder. */
+    public static Icon newFolder(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            GeneralPath p = new GeneralPath();
+            p.moveTo(x + s * 0.54f, y + s * 0.76f);
+            p.lineTo(x + s * 0.08f, y + s * 0.76f);
+            p.lineTo(x + s * 0.08f, y + s * 0.22f);
+            p.lineTo(x + s * 0.36f, y + s * 0.22f);
+            p.lineTo(x + s * 0.44f, y + s * 0.30f);
+            p.lineTo(x + s * 0.88f, y + s * 0.30f);
+            p.lineTo(x + s * 0.88f, y + s * 0.50f);
+            g.draw(p);
+            plus(g, x + s * 0.76f, y + s * 0.74f, s * 0.15f);
+        });
+    }
+
+    /** A circle that comes round to an arrow: read again. */
+    public static Icon refresh(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            g.draw(new Arc2D.Float(x + s * 0.2f, y + s * 0.2f, s * 0.6f, s * 0.6f, 90, 280, Arc2D.OPEN));
+            GeneralPath head = new GeneralPath();
+            head.moveTo(x + s * 0.66f, y + s * 0.44f);
+            head.lineTo(x + s * 0.80f, y + s * 0.30f);
+            head.lineTo(x + s * 0.92f, y + s * 0.46f);
+            g.draw(head);
+        });
+    }
+
+    /** A box with a minus in front of another: fold everything. */
+    public static Icon collapseAll(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            g.draw(new RoundRectangle2D.Float(x + s * 0.30f, y + s * 0.30f, s * 0.56f, s * 0.56f, 3, 3));
+            GeneralPath back = new GeneralPath();
+            back.moveTo(x + s * 0.16f, y + s * 0.70f);
+            back.lineTo(x + s * 0.16f, y + s * 0.16f);
+            back.lineTo(x + s * 0.70f, y + s * 0.16f);
+            g.draw(back);
+            g.draw(new Line2D.Float(x + s * 0.44f, y + s * 0.58f, x + s * 0.72f, y + s * 0.58f));
+        });
+    }
+
+    private static void plus(Graphics2D g, float cx, float cy, float r) {
+        g.draw(new Line2D.Float(cx - r, cy, cx + r, cy));
+        g.draw(new Line2D.Float(cx, cy - r, cx, cy + r));
+    }
+
+    // ---- Split groups ------------------------------------------------------
+
+    /** A frame cut by a vertical line: a new group to the right. */
+    public static Icon splitRight(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            g.draw(new RoundRectangle2D.Float(x + s * 0.14f, y + s * 0.18f, s * 0.72f, s * 0.64f, s * 0.16f, s * 0.16f));
+            g.draw(new Line2D.Float(x + s * 0.5f, y + s * 0.18f, x + s * 0.5f, y + s * 0.82f));
+        });
+    }
+
+    /** A frame cut by a horizontal line: a new group below. */
+    public static Icon splitDown(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            g.draw(new RoundRectangle2D.Float(x + s * 0.14f, y + s * 0.18f, s * 0.72f, s * 0.64f, s * 0.16f, s * 0.16f));
+            g.draw(new Line2D.Float(x + s * 0.14f, y + s * 0.5f, x + s * 0.86f, y + s * 0.5f));
+        });
+    }
+
+    /** Four cells: the 2×2 layout. */
+    public static Icon grid(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            g.draw(new RoundRectangle2D.Float(x + s * 0.14f, y + s * 0.18f, s * 0.72f, s * 0.64f, s * 0.16f, s * 0.16f));
+            g.draw(new Line2D.Float(x + s * 0.5f, y + s * 0.18f, x + s * 0.5f, y + s * 0.82f));
+            g.draw(new Line2D.Float(x + s * 0.14f, y + s * 0.5f, x + s * 0.86f, y + s * 0.5f));
+        });
+    }
+
+    /** Corners pointing out (maximize a group) or in (restore the layout). */
+    public static Icon maximize(int size, Supplier<Color> color, boolean restore) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            float a = s * 0.2f;
+            float b = s * 0.8f;
+            float k = s * 0.2f;
+            float[][] corners = { { a, a, 1, 1 }, { b, a, -1, 1 }, { a, b, 1, -1 }, { b, b, -1, -1 } };
+            for (float[] c : corners) {
+                float cx = x + c[0];
+                float cy = y + c[1];
+                float dx = c[2] * k;
+                float dy = c[3] * k;
+                GeneralPath p = new GeneralPath();
+                if (restore) {
+                    // an elbow set in from the corner, opening outwards
+                    p.moveTo(cx + dx, cy);
+                    p.lineTo(cx + dx, cy + dy);
+                    p.lineTo(cx, cy + dy);
+                } else {
+                    p.moveTo(cx + dx, cy);
+                    p.lineTo(cx, cy);
+                    p.lineTo(cx, cy + dy);
+                }
+                g.draw(p);
+            }
+        });
+    }
+
+    /**
+     * A window and an arrow leaving it by its top right corner (a group into a
+     * window of its own), or coming back into it (dock that window back).
+     */
+    public static Icon window(int size, Supplier<Color> color, boolean dock) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            GeneralPath frame = new GeneralPath();
+            frame.moveTo(x + s * 0.46f, y + s * 0.22f);
+            frame.lineTo(x + s * 0.14f, y + s * 0.22f);
+            frame.lineTo(x + s * 0.14f, y + s * 0.86f);
+            frame.lineTo(x + s * 0.78f, y + s * 0.86f);
+            frame.lineTo(x + s * 0.78f, y + s * 0.54f);
+            g.draw(frame);
+            float inner = 0.46f;
+            float outer = 0.88f;
+            float tx = dock ? inner : outer;
+            float ty = dock ? 1 - inner : 1 - outer;
+            g.draw(new Line2D.Float(x + s * (dock ? outer : inner), y + s * (dock ? 1 - outer : 1 - inner),
+                                    x + s * tx, y + s * ty));
+            // The head's arms point back along the shaft.
+            float k = dock ? -0.26f : 0.26f;
+            GeneralPath head = new GeneralPath();
+            head.moveTo(x + s * (tx - k), y + s * ty);
+            head.lineTo(x + s * tx, y + s * ty);
+            head.lineTo(x + s * tx, y + s * (ty + k));
+            g.draw(head);
+        });
+    }
+
+    /** Two links of a chain: views that scroll together. */
+    public static Icon link(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            java.awt.geom.AffineTransform t = g.getTransform();
+            g.rotate(-Math.PI / 4, x + s / 2f, y + s / 2f);
+            g.draw(new RoundRectangle2D.Float(x + s * 0.08f, y + s * 0.36f, s * 0.46f, s * 0.28f, s * 0.28f, s * 0.28f));
+            g.draw(new RoundRectangle2D.Float(x + s * 0.46f, y + s * 0.36f, s * 0.46f, s * 0.28f, s * 0.28f, s * 0.28f));
+            g.setTransform(t);
+        });
+    }
+
+    /** Two opposed arrows: swap or move between groups. */
+    public static Icon swap(int size, Supplier<Color> color) {
+        return new Glyph(size, color, (g, x, y, s) -> {
+            g.draw(new Line2D.Float(x + s * 0.18f, y + s * 0.36f, x + s * 0.82f, y + s * 0.36f));
+            GeneralPath top = new GeneralPath();
+            top.moveTo(x + s * 0.64f, y + s * 0.2f);
+            top.lineTo(x + s * 0.82f, y + s * 0.36f);
+            top.lineTo(x + s * 0.64f, y + s * 0.52f);
+            g.draw(top);
+            g.draw(new Line2D.Float(x + s * 0.18f, y + s * 0.66f, x + s * 0.82f, y + s * 0.66f));
+            GeneralPath bottom = new GeneralPath();
+            bottom.moveTo(x + s * 0.36f, y + s * 0.5f);
+            bottom.lineTo(x + s * 0.18f, y + s * 0.66f);
+            bottom.lineTo(x + s * 0.36f, y + s * 0.82f);
+            g.draw(bottom);
         });
     }
 

@@ -152,7 +152,7 @@ public final class LabSparse {
                     if (HistCompare.differ(h1.axes[0].binCenter(i), h2.axes[0].binCenter(i), errorLimit)
                         || HistCompare.differ(h1.axes[1].binCenter(j), h2.axes[1].binCenter(j), errorLimit)
                         || HistCompare.differ(h1.axes[2].binCenter(h), h2.axes[2].binCenter(h), errorLimit)) {
-                        out.note(cell + " centre");
+                        out.note(cell + " center");
                     }
                     if (HistCompare.differ(h1.content(bin), h2.content(bin), errorLimit)) {
                         out.note(cell + " content " + h1.content(bin) + " vs " + h2.content(bin));

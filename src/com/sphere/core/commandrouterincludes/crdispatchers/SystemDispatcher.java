@@ -78,7 +78,7 @@ public class SystemDispatcher implements CommandDispatcher {
 
         // Safely extract the root execution token for registration mapping using the shared tokenizer
         List<String> tokens = Tokenizer.DEFAULT.tokenize(command);
-        final String processToken = tokens.isEmpty() ? "unknown" : tokens.get(0);
+        final String programName = tokens.isEmpty() ? "unknown" : tokens.get(0);
 
         SwingWorker<Void, String> worker = new SwingWorker<>() {
             @Override
@@ -93,8 +93,9 @@ public class SystemDispatcher implements CommandDispatcher {
 
                 Process process = pb.start();
                 
-                // Register the process into execution visibility tracking bounds immediately
-                ctx.registerProcess(processToken, process);
+                // Register the process into execution visibility tracking bounds
+                // immediately, under a name no other run holds.
+                final String processToken = ctx.registerProcess(programName, process);
 
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                     String line;
@@ -104,7 +105,7 @@ public class SystemDispatcher implements CommandDispatcher {
                 } finally {
                     process.waitFor();
                     // Unregister process upon standard stream exit exhaustion
-                    ctx.unregisterProcess(processToken);
+                    ctx.unregisterProcess(processToken, process);
                 }
                 return null;
             }

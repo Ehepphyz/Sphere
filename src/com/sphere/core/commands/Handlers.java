@@ -103,8 +103,10 @@ public class Handlers {
 
         java.util.List<String> picked = categories.get(helpCategoryFor(query));
         if (picked == null) {
-            // Not a category: the start of a command, so ":help root hist" works.
-            final String prefix = ":" + query;
+            // Not a category: the start of a command, so ":help root hist" works,
+            // and so do the families listed inside system (":help vault", and
+            // ":help variables" for the :vars commands).
+            final String prefix = ":" + helpCategoryFor(query);
             picked = new java.util.ArrayList<>();
             for (String name : commands.keySet()) {
                 if (name.equals(prefix) || name.startsWith(prefix + " ")) {
@@ -187,7 +189,12 @@ public class Handlers {
 
     public static void quit(String input, CommandExecutionContext c) {
         AppLogger.info("Shutting down Sphere...");
-        System.exit(0);
+        // The editor asks about unsaved files first, which takes the event thread.
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            if (!com.sphere.Sphere.quit()) {
+                AppLogger.info("Quit cancelled.");
+            }
+        });
     }
 
     public static void editNfile(String input, CommandExecutionContext c) {
@@ -207,7 +214,7 @@ public class Handlers {
         java.nio.file.Path opened = target.toAbsolutePath().normalize();
         SwingUtilities.invokeLater(() -> {
             try {
-                com.sphere.ui.QuickCodeEditorFrame frame = com.sphere.Sphere.editorWindow();
+                com.sphere.ui.SphereCoderFrame frame = com.sphere.Sphere.editorWindow();
                 if (frame == null) {
                     AppLogger.error("The editor window is not open yet.");
                     return;
@@ -217,6 +224,27 @@ public class Handlers {
             } catch (Throwable t) {
                 AppLogger.error("Editor did not open " + opened + ": " + t.getMessage());
             }
+        });
+    }
+
+    /** :scode [file] - SphereCoder brought forward (with the last session's files), or opened on a file as :edit does. */
+    public static void sphereCoder(String input, CommandExecutionContext c) {
+        if (c.getArgs().length > 0) {
+            editNfile(input, c);
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
+            final com.sphere.ui.SphereCoderFrame frame = com.sphere.Sphere.editorWindow();
+            if (frame == null) {
+                AppLogger.error("The editor window is not open yet.");
+                return;
+            }
+            if ((frame.getExtendedState() & java.awt.Frame.ICONIFIED) != 0) {
+                frame.setExtendedState(frame.getExtendedState() & ~java.awt.Frame.ICONIFIED);
+            }
+            frame.setVisible(true);
+            frame.toFront();
+            frame.getEditor().requestFocusInWindow();
         });
     }
 
@@ -384,7 +412,16 @@ public class Handlers {
         }
         boolean confirmed = java.util.Arrays.asList(args).contains("--confirm");
         String name = args[0];
-        java.nio.file.Path project = workspaceRoot().resolve(name);
+        java.nio.file.Path root = workspaceRoot().toAbsolutePath().normalize();
+        java.nio.file.Path project = root.resolve(name).normalize();
+        // Only a folder directly under WorkSpace is a project. ".." or an
+        // absolute path resolved to a folder outside it, which --confirm then
+        // deleted: ":project delete .. --confirm" emptied Sphere's own folder.
+        if (!root.equals(project.getParent())) {
+            AppLogger.error("Not a project name: " + name + ". A project is a folder directly under "
+                            + root + ".");
+            return;
+        }
         if (!java.nio.file.Files.isDirectory(project)) {
             AppLogger.error("No project named " + name);
             return;
@@ -396,17 +433,21 @@ public class Handlers {
             AppLogger.raw("Type  :project delete " + name + " --confirm  to go ahead.");
             return;
         }
-        try (java.util.stream.Stream<java.nio.file.Path> walk =
-                java.nio.file.Files.walk(project)) {
-            java.util.List<java.nio.file.Path> all =
-                walk.sorted(java.util.Comparator.reverseOrder()).toList();
-            for (java.nio.file.Path f : all) {
-                java.nio.file.Files.deleteIfExists(f);
-            }
-            if (c.ctx != null && name.equals(c.ctx.getActiveProject())) {
+        // Through the delete :rm uses, which removes a Windows junction as the
+        // link it is: Files.walk went through one and emptied the data area a
+        // project pointed to.
+        try {
+            java.util.List<java.nio.file.Path> refused = com.sphere.core.fs.FsSupport.deleteTree(project);
+            if (c.ctx != null && name.equals(c.ctx.getActiveProject())
+                    && !java.nio.file.Files.exists(project)) {
                 c.ctx.setActiveProject(null);
             }
-            AppLogger.raw("Deleted " + project.toAbsolutePath());
+            if (refused.isEmpty()) {
+                AppLogger.raw("Deleted " + project);
+            } else {
+                AppLogger.error("Deleted part of " + project + ": "
+                                + com.sphere.core.fs.FsSupport.refusedSummary(refused));
+            }
         } catch (java.io.IOException ex) {
             AppLogger.error("Deletion stopped: " + ex.getMessage());
         }
@@ -440,28 +481,57 @@ public class Handlers {
         }
         boolean confirmed = java.util.Arrays.asList(c.getArgs()).contains("--confirm");
         java.util.List<java.nio.file.Path> victims = new java.util.ArrayList<>();
-        long bytes = 0;
+        final long[] found = new long[1];
         for (java.nio.file.Path project : projects) {
-            try (java.util.stream.Stream<java.nio.file.Path> walk =
-                    java.nio.file.Files.walk(project)) {
-                for (java.nio.file.Path f : walk.toList()) {
-                    String name = f.getFileName().toString();
-                    boolean junk = name.equals("__pycache__") || name.equals(".pytest_cache")
-                        || name.endsWith(".o") || name.endsWith(".obj") || name.endsWith(".class")
-                        || name.endsWith(".pyc") || name.endsWith(".d")
-                        || (java.nio.file.Files.isDirectory(f)
-                            && (name.equals("build") || name.equals("bin")));
-                    if (junk) {
-                        victims.add(f);
-                        long[] tally = java.nio.file.Files.isDirectory(f)
-                            ? tallyTree(f) : new long[]{1, 0, java.nio.file.Files.size(f)};
-                        bytes += tally[2];
+            // A folder that is junk is taken whole and not looked into, so a
+            // build/ holding .o files is one entry rather than both. What a
+            // junction leads to is not the project's and is not looked into
+            // either: Files.walk went through it and cleaned another tree. The
+            // project folder itself is never junk, even when it is called bin.
+            try {
+                java.nio.file.Files.walkFileTree(project, new java.nio.file.SimpleFileVisitor<>() {
+                    @Override
+                    public java.nio.file.FileVisitResult preVisitDirectory(
+                            java.nio.file.Path dir, java.nio.file.attribute.BasicFileAttributes attrs) {
+                        if (dir.equals(project)) {
+                            return java.nio.file.FileVisitResult.CONTINUE;
+                        }
+                        if (com.sphere.core.fs.FsSupport.isLinkedFolder(dir, attrs)) {
+                            return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                        }
+                        String name = dir.getFileName().toString();
+                        if (name.equals("__pycache__") || name.equals(".pytest_cache")
+                                || name.equals("build") || name.equals("bin")) {
+                            victims.add(dir);
+                            found[0] += tallyTree(dir)[2];
+                            return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                        }
+                        return java.nio.file.FileVisitResult.CONTINUE;
                     }
-                }
+
+                    @Override
+                    public java.nio.file.FileVisitResult visitFile(
+                            java.nio.file.Path file, java.nio.file.attribute.BasicFileAttributes attrs) {
+                        String name = file.getFileName().toString();
+                        if (name.endsWith(".o") || name.endsWith(".obj") || name.endsWith(".class")
+                                || name.endsWith(".pyc") || name.endsWith(".d")) {
+                            victims.add(file);
+                            found[0] += attrs.size();
+                        }
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public java.nio.file.FileVisitResult visitFileFailed(
+                            java.nio.file.Path file, java.io.IOException unreadable) {
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                });
             } catch (java.io.IOException ex) {
                 AppLogger.error(project.getFileName() + ": " + ex.getMessage());
             }
         }
+        final long bytes = found[0];
         if (victims.isEmpty()) {
             AppLogger.raw("Nothing to clean.");
             return;
@@ -476,18 +546,19 @@ public class Handlers {
         }
         int removed = 0;
         for (java.nio.file.Path v : victims) {
-            try (java.util.stream.Stream<java.nio.file.Path> walk =
-                    java.nio.file.Files.walk(v)) {
-                for (java.nio.file.Path f : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
-                    if (java.nio.file.Files.deleteIfExists(f)) {
-                        removed++;
-                    }
+            try {
+                java.util.List<java.nio.file.Path> refused = com.sphere.core.fs.FsSupport.deleteTree(v);
+                if (refused.isEmpty()) {
+                    removed++;
+                } else {
+                    AppLogger.error("Could not remove all of " + v + ": "
+                                    + com.sphere.core.fs.FsSupport.refusedSummary(refused));
                 }
             } catch (java.io.IOException ex) {
                 AppLogger.error("Could not remove " + v + ": " + ex.getMessage());
             }
         }
-        AppLogger.raw(removed + " entries removed, " + humanBytes(bytes) + " freed.");
+        AppLogger.raw(removed + " of " + victims.size() + " entries removed, " + humanBytes(bytes) + " freed.");
     }
 
     public static void workspaceDiag(String input, CommandExecutionContext c) {
@@ -1417,6 +1488,14 @@ public class Handlers {
 
     static final long TIMEOUT_MS = 5000L;
 
+    /**
+     * For a line that runs an event loop: a data frame's first action compiles
+     * its filters and reads the whole dataset, which takes far longer than five
+     * seconds. Waiting only five reported "No answer" and lost the result the
+     * engine was still computing. The same bound as a macro run with .x.
+     */
+    static final long LOOP_TIMEOUT_MS = 30L * 60 * 1000;
+
     static com.sphere.core.rootbackend.RootBackend backend(CommandExecutionContext c) {
         if (c == null || c.ctx == null || c.ctx.router == null) {
             AppLogger.error("Command execution context is lost or missing router driver configuration.");
@@ -1623,9 +1702,34 @@ public class Handlers {
             return "";
         }
         String s = input.trim();
-        return s.regionMatches(true, 0, command, 0, command.length())
-            ? s.substring(command.length()).trim()
-            : s.replaceFirst("^:root\\s+", "").trim();
+        if (s.regionMatches(true, 0, command, 0, command.length())) {
+            return s.substring(command.length()).trim();
+        }
+        // The same words spaced differently: find() matched ":root  rdf histo"
+        // word by word, so the arguments start after the last of those words,
+        // not after ":root", which handed "rdf histo ..." to the handler.
+        int at = 0;
+        for (String word : command.trim().split("\\s+")) {
+            while (at < s.length() && Character.isWhitespace(s.charAt(at))) {
+                at++;
+            }
+            final int end = at + word.length();
+            if (!s.regionMatches(true, at, word, 0, word.length())
+                || (end < s.length() && !Character.isWhitespace(s.charAt(end)))) {
+                return s.replaceFirst("^:root\\s+", "").trim();
+            }
+            at = end;
+        }
+        return s.substring(at).trim();
+    }
+
+    /**
+     * Text as the inside of a C++ string literal. A Windows path or a quoted
+     * word in an expression went in as typed: "D:\data\x.root" became a hex
+     * escape the interpreter refused, and a quote ended the literal early.
+     */
+    static String lit(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     static void usage(String text) {
@@ -1650,7 +1754,12 @@ public class Handlers {
 
     /** Runs one C++ expression in the engine's interpreter and prints the result. */
     static void cling(CommandExecutionContext c, String expression) {
-        String answer = clingAnswer(c, expression);
+        cling(c, expression, TIMEOUT_MS);
+    }
+
+    /** The same, waiting as long as `timeoutMillis` for the answer. */
+    static void cling(CommandExecutionContext c, String expression, long timeoutMillis) {
+        String answer = clingAnswer(c, expression, timeoutMillis);
         if (answer != null) {
             AppLogger.result(answer);
         }
@@ -1658,11 +1767,15 @@ public class Handlers {
 
     /** Same, but hands the answer back instead of printing it. Null when none came. */
     static String clingAnswer(CommandExecutionContext c, String expression) {
+        return clingAnswer(c, expression, TIMEOUT_MS);
+    }
+
+    static String clingAnswer(CommandExecutionContext c, String expression, long timeoutMillis) {
         com.sphere.core.rootbackend.RootBackend b = backend(c);
         if (b == null) {
             return null;
         }
-        String answer = b.executeClingAwait(expression, TIMEOUT_MS);
+        String answer = b.executeClingAwait(expression, timeoutMillis);
         if (answer == null) {
             AppLogger.error("No answer for: " + expression);
             return null;

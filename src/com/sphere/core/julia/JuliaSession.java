@@ -237,8 +237,24 @@ public final class JuliaSession implements VariableSources.Source {
         send(operation, payload, ANSWER_TIMEOUT_MS);
     }
 
+    /**
+     * One command and its answer at a time. The Variables tab refreshes from a
+     * thread of its own: its VARS, sent while a RUN was going, cleared the
+     * queue the RUN's answer was about to land in, and one of the two then
+     * waited ten minutes for an answer that had already come. Not the
+     * session's own lock, which shutdown takes: a long run must not keep
+     * ":julia stop" waiting.
+     */
+    private final Object conversation = new Object();
+
     /** Sends one command and waits for its answer; false when none came. */
     private boolean send(String operation, String payload, long timeoutMillis) {
+        synchronized (conversation) {
+            return exchange(operation, payload, timeoutMillis);
+        }
+    }
+
+    private boolean exchange(String operation, String payload, long timeoutMillis) {
         if (!isRunning()) {
             AppLogger.error("No Julia session. Start one with :julia start.");
             return false;

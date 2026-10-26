@@ -7,10 +7,9 @@ import java.util.prefs.Preferences;
 import java.util.concurrent.CompletableFuture;
 
 import com.sphere.ui.ConsoleUI;
-import com.sphere.ui.QuickCodeEditorFrame;
+import com.sphere.ui.SphereCoderFrame;
 import com.sphere.fonts.FontLoader;
 import com.sphere.components.FileExplorer;
-import com.sphere.components.SnippetsPanel;
 import com.sphere.utils.SessionManager;
 import com.sphere.utils.SettingsManager;
 import com.sphere.utils.StartupDiagnostic;
@@ -150,8 +149,8 @@ public class Sphere extends JFrame {
     private static RootBackend rootBackend;
 
     // Persistent workspace frame instance for editing text files internally
-    private com.sphere.ui.QuickCodeEditorFrame editorFrame;
-    private static com.sphere.ui.QuickCodeEditorFrame activeEditorFrame;
+    private com.sphere.ui.SphereCoderFrame editorFrame;
+    private static com.sphere.ui.SphereCoderFrame activeEditorFrame;
 
     // Layout components
     private JSplitPane leftVerticalSplit;
@@ -214,6 +213,8 @@ public class Sphere extends JFrame {
     private TerminalManager terminals;
     /** Runs what is typed at the prompt in the order it was typed. */
     private final com.sphere.core.CommandSequencer commandSequencer = new com.sphere.core.CommandSequencer();
+    /** Lines ended with Shift+Enter, sent with the next Enter as one block. */
+    private final java.util.List<String> composedLines = new java.util.ArrayList<>();
 
     public Sphere() {
         this(new CommandRouter());
@@ -402,7 +403,8 @@ public class Sphere extends JFrame {
     private void initWorkbench() {
         initFrame();
         initMenuBar(); // Registered the central application menu bar routing loop
-        this.editorFrame = new QuickCodeEditorFrame(null);
+        // The main editor window: it brings back the last session's split layout and files.
+        this.editorFrame = new SphereCoderFrame(null, true);
         activeEditorFrame = this.editorFrame;
 
         activeWindow = this;
@@ -517,7 +519,8 @@ public class Sphere extends JFrame {
         // single 256 pixel image down to 16.
         IconManager.applyAppIcon(this);
 
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        // Closing goes through quit(), which asks about unsaved files first.
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
 
         // The free area of the screen the window opens on, taskbar or dock taken
         // out. getMaximumWindowBounds() is meant to say this, but several Linux
@@ -766,8 +769,9 @@ public class Sphere extends JFrame {
         bottomRightTabs.setUI(new SPTabbedPaneUI());
         bottomRightTabs.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
         
-        // Injecting the shared editor frame reference context into the Snippets panel constructor
-        bottomRightTabs.addTab("Snippets", new SnippetsPanel(this.commandInputField, this.editorFrame));
+        // snippets/ and user_scripts/ in one tab: searched, checked, and run with a form for their arguments
+        bottomRightTabs.addTab("Code Vault",
+            new com.sphere.components.vault.CodeVaultPanel(this.commandInputField, this.editorFrame));
 
         rightVerticalSplit = new PersistentSplitPane(
                 JSplitPane.VERTICAL_SPLIT,
@@ -868,7 +872,7 @@ public class Sphere extends JFrame {
      * Exposes the active mode hook safely to external execution threads.
      */
     /** The editor window, so a console command can open a file in it. */
-    public static com.sphere.ui.QuickCodeEditorFrame editorWindow() {
+    public static com.sphere.ui.SphereCoderFrame editorWindow() {
         return activeEditorFrame;
     }
 
@@ -998,13 +1002,31 @@ public class Sphere extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                // Ensure internal text editor resource allocations cleanly wind down
-                if (editorFrame != null) {
-                    editorFrame.dispose();
-                }
-                session.close();
+                // The session log is closed by the shutdown hook; closing it here
+                // too wrote its last line twice.
+                quit();
             }
         });
+    }
+
+    /**
+     * Ends Sphere once the editor has asked about every unsaved file.
+     *
+     * The close box, ":quit" and the settings editor's restart each ended the
+     * program on the spot, and the files being edited went with it. Runs on
+     * the event thread; returns false, and Sphere keeps running, when the
+     * user cancels.
+     */
+    public static boolean quit() {
+        final com.sphere.ui.SphereCoderFrame editor = activeEditorFrame;
+        if (editor != null && editor.getEditor() != null && !editor.getEditor().prepareToQuit()) {
+            return false;
+        }
+        if (editor != null) {
+            editor.dispose();
+        }
+        System.exit(0);
+        return true;
     }
 
     /* -------------------------------------------------------------------------
@@ -1015,12 +1037,16 @@ public class Sphere extends JFrame {
             @Override
             public void keyPressed(KeyEvent e) {
 
-                // Multi-line input processing: Shift+Enter inserts newline
+                // Multi-line input: Shift+Enter ends a line without sending it, and
+                // the next Enter sends every line so far as one block. Inserting
+                // "\n" into the field could not work: a JTextField turns it into a
+                // blank, so the two lines became one.
                 if (e.getKeyCode() == KeyEvent.VK_ENTER && e.isShiftDown()) {
-                    String text = commandInputField.getText();
-                    int pos = commandInputField.getCaretPosition();
-                    commandInputField.setText(text.substring(0, pos) + "\n" + text.substring(pos));
-                    commandInputField.setCaretPosition(pos + 1);
+                    final String line = commandInputField.getText();
+                    composedLines.add(line);
+                    AppLogger.raw("... " + line);
+                    commandInputField.setText("");
+                    assignPendingMarker(true);
                     e.consume();
                     return;
                 }
@@ -1029,6 +1055,10 @@ public class Sphere extends JFrame {
                 // lines, never a whole session's work.
                 if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
                     commandInputField.setText("");
+                    if (!composedLines.isEmpty()) {
+                        composedLines.clear();
+                        assignPendingMarker(false);
+                    }
                     router.abandonPendingBlock();
                     e.consume();
                     return;
@@ -1049,7 +1079,11 @@ public class Sphere extends JFrame {
                 // Inline history regex search constraints: Ctrl+R
                 if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_R) {
                     String pattern = commandInputField.getText();
-                    commandInputField.setText(historyManager.search(pattern));
+                    String found = historyManager.search(pattern);
+                    // A search that finds nothing leaves the line as typed; it used to erase it.
+                    if (found != null && !found.isEmpty()) {
+                        commandInputField.setText(found);
+                    }
                     e.consume();
                 }
                 
@@ -1060,11 +1094,29 @@ public class Sphere extends JFrame {
 
     private void attachCommandExecutionHandler() {
         commandInputField.addActionListener(e -> {
-            String input = commandInputField.getText();
-            if (input == null || input.isEmpty()) return;
-
-            AppLogger.recall(input);
-            historyManager.add(input);
+            final String typed = commandInputField.getText() == null ? "" : commandInputField.getText();
+            final String input;
+            if (!composedLines.isEmpty()) {
+                // The lines Shift+Enter set aside, then this one, as one block.
+                composedLines.add(typed);
+                input = String.join("\n", composedLines);
+                for (String line : composedLines) {
+                    historyManager.add(line);
+                }
+                composedLines.clear();
+                assignPendingMarker(false);
+                AppLogger.recall(typed);
+            } else if (typed.isEmpty()) {
+                // An empty Enter is how a block is closed in a language mode: it
+                // used to be dropped here, so a Python loop waited for a line
+                // holding a space. Outside a mode there is nothing to send.
+                if (router.getMode() == null) return;
+                input = typed;
+            } else {
+                input = typed;
+                AppLogger.recall(input);
+                historyManager.add(input);
+            }
             historyManager.save();
 
             commandInputField.setText("");
@@ -1094,7 +1146,8 @@ public class Sphere extends JFrame {
 
                         String text = commandInputField.getText();
                         String suggestion = router.autoComplete(text);
-                        if (suggestion != null) {
+                        // Null is "nothing to add": the line stays as typed.
+                        if (suggestion != null && !suggestion.isEmpty() && !suggestion.equals(text)) {
                             SwingUtilities.invokeLater(() -> commandInputField.setText(suggestion));
                         }
                         return true;
@@ -1129,6 +1182,12 @@ public class Sphere extends JFrame {
         // Before anything else, so that whatever fails below is said rather than
         // written to a terminal that may not exist.
         com.sphere.core.JavaErrors.install();
+
+        // Sphere speaks U.S. English, whatever the system's language: before any window, so the dialogs
+        // Java provides (file chooser, Yes/No, color chooser) are in English too, and numbers are written
+        // with a decimal point. On a French Windows they came out in French, with decimal commas.
+        java.util.Locale.setDefault(java.util.Locale.US);
+        javax.swing.JComponent.setDefaultLocale(java.util.Locale.US);
 
         String os = System.getProperty("os.name").toLowerCase();
 

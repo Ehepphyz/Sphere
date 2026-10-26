@@ -184,7 +184,7 @@ public final class ImageFileIO {
             return null;
         }
         final Raster raster = image.getRaster();
-        final String kind = raster.getNumBands() - (image.getColorModel().hasAlpha() ? 1 : 0) >= 3 ? "colour" : "grey";
+        final String kind = raster.getNumBands() - (image.getColorModel().hasAlpha() ? 1 : 0) >= 3 ? "color" : "gray";
         return switch (raster.getDataBuffer().getDataType()) {
             case DataBuffer.TYPE_BYTE -> null;
             case DataBuffer.TYPE_USHORT -> "16-bit " + kind;

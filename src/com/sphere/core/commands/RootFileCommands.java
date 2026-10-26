@@ -144,7 +144,7 @@ public final class RootFileCommands {
             return;
         }
         String a0 = a;
-        Handlers.cling(c, "TFile::Open(\"" + a0 + "\",\"UPDATE\")");
+        Handlers.cling(c, "TFile::Open(\"" + Handlers.lit(a0) + "\",\"UPDATE\")");
     }
 
     public static void rootFilePwd(String i, CommandExecutionContext c) {
@@ -158,7 +158,7 @@ public final class RootFileCommands {
             return;
         }
         String a0 = a;
-        Handlers.cling(c, "TFile::Open(\"" + a0 + "\",\"RECREATE\")");
+        Handlers.cling(c, "TFile::Open(\"" + Handlers.lit(a0) + "\",\"RECREATE\")");
     }
 
     public static void rootFileRmdir(String i, CommandExecutionContext c) {
@@ -270,7 +270,7 @@ public final class RootFileCommands {
             return;
         }
         String a0 = a;
-        Handlers.cling(c, "TFile::Open(\"" + a0 + "\")");
+        Handlers.cling(c, "TFile::Open(\"" + Handlers.lit(a0) + "\")");
     }
 
     public static void rootSetCachePolicy(String i, CommandExecutionContext c) {
@@ -422,7 +422,7 @@ public final class RootFileCommands {
             Handlers.usage(":root file makeproject <file> <directory>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + w[0] + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + w[0] + "\"); } f->MakeProject(\"" + w[1] + "\", \"*\", \"recreate++\"); f->Close(); return std::string(\"written to " + w[1] + "\"); }()");
+        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + Handlers.lit(w[0]) + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + Handlers.lit(w[0]) + "\"); } f->MakeProject(\"" + Handlers.lit(w[1]) + "\", \"*\", \"recreate++\"); f->Close(); return std::string(\"written to " + Handlers.lit(w[1]) + "\"); }()");
     }
 
     public static void rootFileStreamers(String i, CommandExecutionContext c) {
@@ -431,7 +431,7 @@ public final class RootFileCommands {
             Handlers.usage(":root file streamers <file>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + w[0] + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + w[0] + "\"); } f->ShowStreamerInfo(); f->Close(); return std::string(\"\"); }()");
+        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + Handlers.lit(w[0]) + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + Handlers.lit(w[0]) + "\"); } f->ShowStreamerInfo(); f->Close(); return std::string(\"\"); }()");
     }
 
     public static void rootFileVersion(String i, CommandExecutionContext c) {
@@ -440,7 +440,7 @@ public final class RootFileCommands {
             Handlers.usage(":root file version <file>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + w[0] + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + w[0] + "\"); } std::string out = std::to_string(f->GetVersion()) + \"  \" + std::to_string(f->GetSize()) + \" bytes  compression \" + std::to_string(f->GetCompressionLevel()); f->Close(); return out; }()");
+        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + Handlers.lit(w[0]) + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + Handlers.lit(w[0]) + "\"); } std::string out = std::to_string(f->GetVersion()) + \"  \" + std::to_string(f->GetSize()) + \" bytes  compression \" + std::to_string(f->GetCompressionLevel()); f->Close(); return out; }()");
     }
 
     /** <name> <url> */
@@ -450,7 +450,7 @@ public final class RootFileCommands {
             Handlers.usage(":root xrootd open <name> <url>");
             return;
         }
-        Handlers.cling(c, "SphereBridge::Keep<TFile>(\"" + w[0] + "\", TFile::Open(\"" + w[1] + "\"), \"TFile\")");
+        Handlers.cling(c, "SphereBridge::Keep<TFile>(\"" + w[0] + "\", TFile::Open(\"" + Handlers.lit(w[1]) + "\"), \"TFile\")");
     }
 
     /** <url> */

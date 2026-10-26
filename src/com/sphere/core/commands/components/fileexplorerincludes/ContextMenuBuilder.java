@@ -9,26 +9,41 @@ import java.awt.*;
 import java.text.CharacterIterator;
 import java.text.StringCharacterIterator;
 
-import com.sphere.components.FileExplorer;
-import com.sphere.components.QuickCodeEditor;
+import com.sphere.components.SphereCoder;
 import com.sphere.components.MdTexEditor;
 import com.sphere.components.UndoRedoUtility;
 import com.sphere.theme.ThemeManager;
 import com.sphere.theme.ThemePalette;
 import com.sphere.fonts.FontLoader;
 import com.sphere.utils.IconManager;
-import com.sphere.ui.QuickCodeEditorFrame;
+import com.sphere.ui.SphereCoderFrame;
 import com.sphere.core.python.jupyterlab.JupylabXeditor;
 
 public class ContextMenuBuilder {
 
+    /** Thin 1px separator line matching UI style guidelines */
+    private static final class ThinSeparator extends JSeparator {
+        @Override
+        public void paint(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setColor(new Color(255, 255, 255, 30));
+            g2.drawLine(6, 0, getWidth() - 6, 0);
+            g2.dispose();
+        }
+    }
+
+    /** The menu's separator, for items another explorer adds after the built ones. */
+    public static JSeparator thinSeparator() {
+        return new ThinSeparator();
+    }
+
     /* FULL mode (right-click contextual menu execution) */
-    public static JPopupMenu createMenu(File selectedFile, String mode, FileExplorer explorer, QuickCodeEditorFrame editorFrame) {
+    public static JPopupMenu createMenu(File selectedFile, String mode, FileTreeView explorer, SphereCoderFrame editorFrame) {
         return createMenu(selectedFile, mode, null, explorer, editorFrame);
     }
 
     /* Main context construction entry point */
-    public static JPopupMenu createMenu(File sourceFile, String mode, File targetFolder, FileExplorer explorer, QuickCodeEditorFrame editorFrame) {
+    public static JPopupMenu createMenu(File sourceFile, String mode, File targetFolder, FileTreeView explorer, SphereCoderFrame editorFrame) {
         JPopupMenu menu = new JPopupMenu() {
             @Override
             protected void paintComponent(Graphics g) {
@@ -49,17 +64,6 @@ public class ContextMenuBuilder {
         };
         menu.setOpaque(false);
         menu.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
-
-        // Thin 1px separator line matching UI style guidelines
-        class ThinSeparator extends JSeparator {
-            @Override
-            public void paint(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setColor(new Color(255, 255, 255, 30));
-                g2.drawLine(6, 0, getWidth() - 6, 0);
-                g2.dispose();
-            }
-        }
 
         /* -------------------------------------------------------------
          * NEW FILE / NEW FOLDER INTERACTIONS
@@ -87,6 +91,16 @@ public class ContextMenuBuilder {
             editItem.addActionListener(e -> handleEdit(sourceFile, editorFrame));
             menu.add(editItem);
 
+            if (sourceFile.isFile() && editorFrame != null
+                    && !com.sphere.components.imaging.ImageFileIO.isImage(sourceFile)
+                    && !com.sphere.components.rootview.RootFile.isRootFile(sourceFile)
+                    && !sourceFile.getName().toLowerCase().endsWith(".ipynb")) {
+                // SphereCoder beside what is already open: a split group on the right.
+                JMenuItem sideItem = createModernMenuItem("Open to the Side");
+                sideItem.addActionListener(e -> editorFrame.openFileToSide(sourceFile));
+                menu.add(sideItem);
+            }
+
             if (com.sphere.components.rootlab.RootLabPanel.exists()) {
                 // The ROOT Lab reads any CERN data file, and every one in a folder.
                 JMenuItem lab = createModernMenuItem(sourceFile.isDirectory()
@@ -94,6 +108,23 @@ public class ContextMenuBuilder {
                 lab.addActionListener(e -> com.sphere.components.rootlab.RootLabPanel.instance()
                         .open(sourceFile.toPath()));
                 menu.add(lab);
+            }
+
+            if (sourceFile.isFile() && sourceFile.getName().toLowerCase().endsWith(".gdml")) {
+                // A Geant4 geometry opens in the geometry editor; Edit keeps the XML
+                JMenuItem g4 = createModernMenuItem("Open in G4editor");
+                g4.addActionListener(e -> SwingUtilities.invokeLater(() ->
+                        com.sphere.core.commands.G4Commands.openEditor(sourceFile.toPath())));
+                menu.add(g4);
+            }
+
+            if (sourceFile.isFile() && sourceFile.getName().toLowerCase().endsWith(".root")
+                    && holdsGeometry(sourceFile)) {
+                // A ROOT file holding a TGeoManager is a geometry G4editor reads and edits
+                JMenuItem g4 = createModernMenuItem("Open geometry in G4editor");
+                g4.addActionListener(e -> SwingUtilities.invokeLater(() ->
+                        com.sphere.core.commands.G4Commands.openEditor(sourceFile.toPath())));
+                menu.add(g4);
             }
 
             JMenuItem duplicate = createModernMenuItem("Duplicate");
@@ -246,7 +277,7 @@ public class ContextMenuBuilder {
         return item;
     }
 
-    private static JMenuItem createModernMenuItem(String text) {
+    public static JMenuItem createModernMenuItem(String text) {
         JMenuItem item = new JMenuItem(text) {
             @Override
             protected void paintComponent(Graphics g) {
@@ -283,7 +314,7 @@ public class ContextMenuBuilder {
     /* -------------------------------------------------------------
      * FILE CREATION INTERACTION
      *-------------------------------------------------------------*/
-    private static void createNewFile(File folder, FileExplorer explorer) {
+    private static void createNewFile(File folder, FileTreeView explorer) {
         String name = JOptionPane.showInputDialog("Enter file name:");
         if (name == null || name.trim().isEmpty()) return;
 
@@ -302,7 +333,7 @@ public class ContextMenuBuilder {
     /* -------------------------------------------------------------
      * DIRECTORY CREATION INTERACTION
      *-------------------------------------------------------------*/
-    private static void createNewFolder(File folder, FileExplorer explorer) {
+    private static void createNewFolder(File folder, FileTreeView explorer) {
         String name = JOptionPane.showInputDialog("Enter folder name:");
         if (name == null || name.trim().isEmpty()) return;
 
@@ -317,7 +348,7 @@ public class ContextMenuBuilder {
     /* -------------------------------------------------------------
      * RESOURCE DUPLICATION
      *-------------------------------------------------------------*/
-    private static void duplicateFile(File file, FileExplorer explorer) {
+    private static void duplicateFile(File file, FileTreeView explorer) {
         File parent = file.getParentFile();
         String base = file.getName();
         String copyName = base + "_copy";
@@ -363,7 +394,7 @@ public class ContextMenuBuilder {
     /* -------------------------------------------------------------
      * SYSTEM MUTATION ROUTINES (RENAME, DELETE, COPY, MOVE)
      *-------------------------------------------------------------*/
-    private static void handleRename(File file, FileExplorer explorer) {
+    private static void handleRename(File file, FileTreeView explorer) {
         // FIXED: Re-added the default text input value containing the file's current name
         String newName = JOptionPane.showInputDialog("Enter new name:", file.getName());
         if (newName == null || newName.trim().isEmpty()) return;
@@ -376,13 +407,14 @@ public class ContextMenuBuilder {
         }
 
         if (file.renameTo(dest)) {
+            explorer.fileMoved(file, dest);
             explorer.refreshNode(file.getParentFile());
         } else {
             JOptionPane.showMessageDialog(null, "Failed to rename file.");
         }
     }
 
-    private static void handleDelete(File file, FileExplorer explorer) {
+    private static void handleDelete(File file, FileTreeView explorer) {
         int confirm = JOptionPane.showConfirmDialog(
                 null,
                 "Delete " + file.getName() + "?",
@@ -459,21 +491,23 @@ public class ContextMenuBuilder {
      * symbolic link, or a Windows junction (which Java does not report as a
      * link). Its real path is then not its parent's real path plus its name.
      */
-    private static boolean pointsElsewhere(Path entry) throws IOException {
-        if (Files.isSymbolicLink(entry)) {
-            return true;
-        }
-        final Path parent = entry.getParent();
-        if (parent == null || entry.getFileName() == null) {
+    /**
+     * True when a ROOT file holds a geometry (a TGeoManager key). Only the key
+     * list is read, which costs a few small reads whatever the file's size.
+     */
+    private static boolean holdsGeometry(File file) {
+        try {
+            return !com.sphere.core.geant4.TGeoReader.geometries(file.toPath()).isEmpty();
+        } catch (IOException | RuntimeException notReadable) {
             return false;
         }
-        final String expected = parent.toRealPath().resolve(entry.getFileName().toString()).toString();
-        final String real = entry.toRealPath().toString();
-        final boolean windows = File.separatorChar == '\\';
-        return windows ? !real.equalsIgnoreCase(expected) : !real.equals(expected);
     }
 
-    private static void performCopyMove(File source, File targetDir, boolean isMove, FileExplorer explorer) {
+    private static boolean pointsElsewhere(Path entry) throws IOException {
+        return com.sphere.core.fs.FsSupport.pointsElsewhere(entry);
+    }
+
+    private static void performCopyMove(File source, File targetDir, boolean isMove, FileTreeView explorer) {
         if (source.equals(targetDir)) {
             JOptionPane.showMessageDialog(null, "Cannot move/copy into itself.");
             return;
@@ -511,6 +545,7 @@ public class ContextMenuBuilder {
                 }
             }
 
+            if (isMove) explorer.fileMoved(source, targetPath.toFile());
             explorer.refreshNode(targetDir);
             if (isMove) explorer.refreshNode(source.getParentFile());
 
@@ -542,7 +577,7 @@ public class ContextMenuBuilder {
     /* -------------------------------------------------------------
      * WORKSPACE EDITOR INITIALIZATION
      * -------------------------------------------------------------*/
-    private static void handleEdit(File file, QuickCodeEditorFrame editorFrame) {
+    private static void handleEdit(File file, SphereCoderFrame editorFrame) {
         if (file == null || !file.isFile()) {
             JOptionPane.showMessageDialog(null, "Cannot edit a directory.");
             return;

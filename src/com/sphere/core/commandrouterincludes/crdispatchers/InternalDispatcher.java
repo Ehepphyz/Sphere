@@ -55,7 +55,7 @@ public class InternalDispatcher implements CommandDispatcher {
         if (trimmedInput.startsWith(":root ")) {
             String rawArgs = trimmedInput.substring(":root ".length()).trim();
 
-            // Context requis par les méthodes de Handlers
+            // Context the Handlers methods need
             CommandExecutionContext execContext = new CommandExecutionContext(ctx, trimmedInput);
 
             List<String> blocks = extractAllSnippetBlocks(rawArgs);
@@ -74,13 +74,13 @@ public class InternalDispatcher implements CommandDispatcher {
                         return;
                     }
 
-                    // CORRECTION: Ajout du 2ème argument (execContext)
+                    // The second argument (execContext) is required
                     com.sphere.core.commands.Handlers.sendToRootBridge("CLING_EXEC " + resolved, execContext);
                 }
                 return;
             }
 
-            // CORRECTION: Ajout du 2ème argument (execContext)
+            // The second argument (execContext) is required
             com.sphere.core.commands.Handlers.sendToRootBridge(rawArgs, execContext);
             return;
         }
@@ -110,7 +110,7 @@ public class InternalDispatcher implements CommandDispatcher {
         } else if (lang == null || lang.isBlank()) {
             AppLogger.error("No language after ':': write \":py <code>\".");
         } else if (ctx.backends != null && ctx.backends.containsKey(lang)) {
-            executeBackend(ctx, pc);
+            executeBackend(ctx, pc, trimmedInput);
         } else {
             AppLogger.error("Unknown internal command or language backend identifier: " + trimmedInput);
         }
@@ -119,8 +119,9 @@ public class InternalDispatcher implements CommandDispatcher {
     /**
      * Resolves snippets and executes code via the target language backend safely.
      */
-    private void executeBackend(CommandContext ctx, ParsedCommand pc) {
-        String rawArgs = String.join(" ", pc.macroTokens).trim();
+    private void executeBackend(CommandContext ctx, ParsedCommand pc, String input) {
+        // As typed: macroTokens alone dropped every flag, so ":py -c ..." lost its "-c".
+        String rawArgs = com.sphere.core.commandrouterincludes.CommandParser.remainderAfterLanguage(input);
         if (rawArgs.isEmpty()) {
             // An empty line was handed to the backend, which ran it in silence.
             AppLogger.error("Nothing to run for '" + pc.languageOrApp + "'.");

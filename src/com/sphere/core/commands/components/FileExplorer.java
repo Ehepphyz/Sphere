@@ -2,9 +2,10 @@ package com.sphere.components;
 
 import com.sphere.components.fileexplorerincludes.ContextMenuBuilder;
 import com.sphere.components.fileexplorerincludes.FileTreeCellRenderer;
+import com.sphere.components.fileexplorerincludes.FileTreeView;
 import com.sphere.theme.ThemeManager;
 import com.sphere.fonts.FontLoader;
-import com.sphere.ui.QuickCodeEditorFrame;
+import com.sphere.ui.SphereCoderFrame;
 
 import javax.swing.*;
 import javax.swing.event.TreeExpansionEvent;
@@ -25,7 +26,7 @@ import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
 import com.sphere.utils.AppLogger;
 
-public class FileExplorer extends JTree {
+public class FileExplorer extends JTree implements FileTreeView {
 
     // Drag state (public so renderer can read them)
     public boolean isDragging = false;
@@ -68,7 +69,7 @@ public class FileExplorer extends JTree {
     private static final int SCROLL_MARGIN = 20;
     private static final int SCROLL_STEP = 16;
 
-    private QuickCodeEditorFrame editorFrame;
+    private SphereCoderFrame editorFrame;
 
     /** Listing of dot files, driven by the context menu. Off by default. */
     private boolean showHidden = false;
@@ -77,7 +78,7 @@ public class FileExplorer extends JTree {
      * Constructs a new File Explorer sidebar component linked to the shared workspace editor.
      * @param editorFrame The persistent workbench frame used to open code and text files.
      */
-    public FileExplorer(QuickCodeEditorFrame editorFrame) {
+    public FileExplorer(SphereCoderFrame editorFrame) {
 
         super(createTreeModel());
         this.editorFrame = editorFrame;
@@ -170,6 +171,14 @@ public class FileExplorer extends JTree {
     /** True when dot files are listed. */
     public boolean isShowHidden() {
         return showHidden;
+    }
+
+    /** The editor follows a file renamed or moved here, so its tab does not point at nothing. */
+    @Override
+    public void fileMoved(File from, File to) {
+        if (editorFrame != null) {
+            editorFrame.getEditor().fileMoved(from, to);
+        }
     }
 
     /** Shows or hides dot files and rebuilds the tree so the change is immediate. */

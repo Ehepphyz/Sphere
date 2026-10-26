@@ -69,19 +69,25 @@ public class SettingsEditorWindow extends JFrame {
                 boolean systemPathChanged = !originalSystemPathSnapshot.equals(getSystemPathDataSnapshot());
                 
                 if (systemPathChanged) {
-                    // Inform user of successful save, warn about application shutdown/restart requirement
-                    JOptionPane.showMessageDialog(this,
-                            "Configuration saved successfully.\n\n" +
-                            "Critical system paths have been modified. The application will now close.\n" +
-                            "Please relaunch the software to generate fresh dynamic configurations.",
-                            "System Changes Applied",
-                            JOptionPane.WARNING_MESSAGE);
-                    
-                    // Wipe out everything inside the config/ folder recursively to force dynamic rebuilds
+                    // What config/ derives from the old paths is rebuilt at the next
+                    // launch; what the user wrote there is kept.
                     clearConfigDirectory(new File("config"));
-                    
-                    // Terminate the JVM to enforce fresh environmental setups on relaunch
-                    System.exit(0);
+
+                    // Closing used to be imposed with System.exit, which lost every
+                    // unsaved file in the editor. It is offered now, and goes through
+                    // Sphere.quit, which asks about those files first.
+                    int choice = JOptionPane.showConfirmDialog(this,
+                            "Configuration saved successfully.\n\n" +
+                            "Critical system paths have been modified. They take effect\n" +
+                            "when Sphere is next started.\n\n" +
+                            "Close Sphere now?",
+                            "System Changes Applied",
+                            JOptionPane.YES_NO_OPTION,
+                            JOptionPane.WARNING_MESSAGE);
+                    dispose();
+                    if (choice == JOptionPane.YES_OPTION) {
+                        com.sphere.Sphere.quit();
+                    }
                 } else {
                     JOptionPane.showMessageDialog(this, 
                             "Configuration changes were saved successfully.", 
@@ -160,15 +166,26 @@ public class SettingsEditorWindow extends JFrame {
     }
 
     /**
-     * Empties config/ so that it is rebuilt. A folder inside is deleted without
-     * following links: the previous recursion went through a link or junction
-     * placed there and emptied whatever it pointed at.
+     * The files of config/ that are the user's own rather than derived from the
+     * paths: the commands they chose to trust. Deleting them with the caches
+     * threw that list away at every change of interpreter.
+     */
+    private static final java.util.Set<String> KEPT_IN_CONFIG = java.util.Set.of("trusted_commands.src");
+
+    /**
+     * Empties config/ so that it is rebuilt, keeping what the user wrote there.
+     * A folder inside is deleted without following links: the previous
+     * recursion went through a link or junction placed there and emptied
+     * whatever it pointed at.
      */
     private void clearConfigDirectory(File directory) {
         if (directory.exists() && directory.isDirectory()) {
             File[] files = directory.listFiles();
             if (files != null) {
                 for (File f : files) {
+                    if (KEPT_IN_CONFIG.contains(f.getName())) {
+                        continue;
+                    }
                     if (f.isDirectory()) {
                         com.sphere.components.fileexplorerincludes.ContextMenuBuilder.deleteDirectoryRecursive(f);
                     } else {

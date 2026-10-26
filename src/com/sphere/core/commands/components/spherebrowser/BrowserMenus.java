@@ -197,7 +197,7 @@ final class BrowserMenus {
         final JMenu view = new JMenu("View");
         view.add(item("Editor", () -> editor(b, c)));
         view.add(item("Toolbar: the canvas's views", () -> doc.showView("Canvas")));
-        final JCheckBoxMenuItem paper = new JCheckBoxMenuItem("Theme colours (off: ROOT's white paper)", c.isThemePaper());
+        final JCheckBoxMenuItem paper = new JCheckBoxMenuItem("Theme colors (off: ROOT's white paper)", c.isThemePaper());
         paper.addActionListener(e -> c.setThemePaper(paper.isSelected()));
         view.add(paper);
         view.addSeparator();
@@ -469,7 +469,7 @@ final class BrowserMenus {
                     + String.format("  #%06x", c.getRGB() & 0xFFFFFF);
             }
         };
-        window(parent, "ROOT colours", new javax.swing.JScrollPane(grid));
+        window(parent, "ROOT colors", new javax.swing.JScrollPane(grid));
     }
 
     /** ROOT's fonts: each code, its family, a sample. */
@@ -555,7 +555,7 @@ final class BrowserMenus {
         final JCheckBoxMenuItem status = new JCheckBoxMenuItem("Status Bar", true);
         status.addActionListener(e -> b.showStatusBar(status.isSelected()));
         view.add(status);
-        view.add(item("ROOT colours", () -> colors(b.getRootPane())));
+        view.add(item("ROOT colors", () -> colors(b.getRootPane())));
         view.add(item("ROOT fonts", () -> fonts(b.getRootPane())));
         view.add(item("ROOT markers", () -> markers(b.getRootPane())));
         bar.add(view);

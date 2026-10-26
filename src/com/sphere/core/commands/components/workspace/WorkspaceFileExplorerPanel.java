@@ -2,8 +2,8 @@ package com.sphere.components.workspace;
 
 import com.sphere.utils.AppLogger;
 import com.sphere.utils.IconManager;
-import com.sphere.components.QuickCodeEditor;
-import com.sphere.ui.QuickCodeEditorFrame;
+import com.sphere.components.SphereCoder;
+import com.sphere.ui.SphereCoderFrame;
 import com.sphere.fonts.FontLoader;
 import com.sphere.theme.ThemeManager;
 import com.sphere.theme.ThemePalette;
@@ -39,7 +39,7 @@ public class WorkspaceFileExplorerPanel extends JPanel {
     private DefaultMutableTreeNode rootNode;
     private JScrollPane scrollPane;
 
-    private QuickCodeEditorFrame editorFrame;
+    private SphereCoderFrame editorFrame;
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
 
     // Map from relative path to tree node
@@ -100,7 +100,7 @@ public class WorkspaceFileExplorerPanel extends JPanel {
      * Connects the shared workspace frame to this explorer context for centralized tab routing.
      * @param editorFrame The active workspace frame instance.
      */
-    public void setEditorFrame(QuickCodeEditorFrame editorFrame) {
+    public void setEditorFrame(SphereCoderFrame editorFrame) {
         this.editorFrame = editorFrame;
     }
 
@@ -841,7 +841,7 @@ public class WorkspaceFileExplorerPanel extends JPanel {
 
         // Instantiate the frame if it is missing or has been disposed
         if (editorFrame == null || !editorFrame.isDisplayable()) {
-            editorFrame = new com.sphere.ui.QuickCodeEditorFrame(null);
+            editorFrame = new com.sphere.ui.SphereCoderFrame(null);
         }
 
         // Route the file internal load stream directly via the shared editor frame layout

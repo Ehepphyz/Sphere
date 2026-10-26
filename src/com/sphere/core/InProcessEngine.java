@@ -229,7 +229,7 @@ public enum InProcessEngine {
 
     /** A few commands to type once in the engine's mode. */
     public String modeExamples() {
-        return this == FASTJET ? "'read <file>', 'jets 20', 'def ak4 antikt:0.4'" : "'obs tau21', 'groom sd 0 0.1', 'flavour'";
+        return this == FASTJET ? "'read <file>', 'jets 20', 'def ak4 antikt:0.4'" : "'obs tau21', 'groom sd 0 0.1', 'flavor'";
     }
 
     /** Runs the probe. Never throws: a failure is the probe's answer. */

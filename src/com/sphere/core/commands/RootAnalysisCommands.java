@@ -449,7 +449,7 @@ public final class RootAnalysisCommands {
             Handlers.usage(":root roofit load <name> <file> <workspace>".trim());
             return;
         }
-        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + w[1] + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + w[1] + "\"); } RooWorkspace *ws = (RooWorkspace *)f->Get(\"" + w[2] + "\"); if (ws == nullptr) { return std::string(\"ERROR: no workspace called " + w[2] + "\"); } SphereBridge::Keep<RooWorkspace>(\"" + w[0] + "\", ws, \"RooWorkspace\"); return std::string(\"" + w[0] + " bound\"); }()");
+        Handlers.cling(c, "[]{ TFile *f = TFile::Open(\"" + Handlers.lit(w[1]) + "\"); if (f == nullptr || f->IsZombie()) { return std::string(\"ERROR: cannot read " + Handlers.lit(w[1]) + "\"); } RooWorkspace *ws = (RooWorkspace *)f->Get(\"" + w[2] + "\"); if (ws == nullptr) { return std::string(\"ERROR: no workspace called " + w[2] + "\"); } SphereBridge::Keep<RooWorkspace>(\"" + w[0] + "\", ws, \"RooWorkspace\"); return std::string(\"" + w[0] + " bound\"); }()");
     }
 
     /** <name> <class> <size> */

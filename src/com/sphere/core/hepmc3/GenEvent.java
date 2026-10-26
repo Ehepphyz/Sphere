@@ -771,6 +771,11 @@ public final class GenEvent {
                         for (Map.Entry<Integer, Attribute> vt2 : vt1.entrySet()) {
                             if (vt2.getKey() <= rootid) changed.add(Map.entry(vt2.getKey(), vt2.getValue()));
                         }
+                        // Each key moves up by one into the slot the previous one
+                        // left, so the one closest to zero goes first. In the map's
+                        // own order (as in HepMC3's C++) -5 landed on -4 before -4
+                        // had moved, and every vertex attribute past the root was lost.
+                        changed.sort((a, b) -> Integer.compare(b.getKey(), a.getKey()));
                         for (Map.Entry<Integer, Attribute> val : changed) {
                             vt1.remove(val.getKey());
                             vt1.put(val.getKey() == rootid ? 0 : val.getKey() + 1, val.getValue());

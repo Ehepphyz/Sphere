@@ -142,6 +142,12 @@ public class GenericEnvManagerDialog extends JDialog {
                 String cleanRawPath = rawPath.trim();
                 publish("[INFO] Retrieved Profile Path: " + cleanRawPath);
 
+                // GEANT4_DIR names an installation, possibly inside WSL, not a program:
+                // what answers is Sphere's engine, geant4-bridge, built against it.
+                if (backend == EnvBackend.GEANT4) {
+                    return geant4RoundTrip(cleanRawPath, this::publish);
+                }
+
                 boolean isDirectoryTarget =
                         configKey.toUpperCase().contains("DIR") ||
                         configKey.toUpperCase().contains("HOME");
@@ -336,6 +342,18 @@ public class GenericEnvManagerDialog extends JDialog {
                 // =============================================================
                 // TOOLCHAIN INTEGRATION TEST (For C or C++)
                 // =============================================================
+                // A folder is not something to run: the tool is the one inside it
+                String program = verifiedPath;
+                if (new java.io.File(verifiedPath).isDirectory()) {
+                    String tool = backend.getCheckCommand().split(" ")[0];
+                    program = toolIn(verifiedPath, tool, configKey);
+                    if (program == null) {
+                        publish("[ERROR] " + verifiedPath + " holds no " + tool + " (looked in it and in its bin folder).");
+                        publish("[PROMPT] Set " + configKey + " to " + tool + " itself, or to the folder that holds it.");
+                        return "ERROR";
+                    }
+                }
+
                 if (backend == EnvBackend.CPP || backend == EnvBackend.C) {
                     publish("\n----------------------------------------------------------------");
                     publish("[INFO] RUNNING END-TO-END TOOLCHAIN TEST (compile, link, run)");
@@ -344,7 +362,7 @@ public class GenericEnvManagerDialog extends JDialog {
                     // successful compilation without starting either: the "compiler"
                     // was a mock that always reported exit code 0, so a missing or
                     // broken g++ showed ONLINE. The compiler is now really run.
-                    return toolchainRoundTrip(verifiedPath, backend == EnvBackend.CPP, this::publish);
+                    return toolchainRoundTrip(program, backend == EnvBackend.CPP, this::publish);
                 }
 
                 // =============================================================
@@ -356,7 +374,7 @@ public class GenericEnvManagerDialog extends JDialog {
                     String[] commandTokens = backend.getCheckCommand().split(" ");
                     List<String> commandList = new ArrayList<>();
 
-                    commandList.add(verifiedPath);
+                    commandList.add(program);
                     for (int i = 1; i < commandTokens.length; i++) {
                         commandList.add(commandTokens[i]);
                     }
@@ -510,6 +528,90 @@ public class GenericEnvManagerDialog extends JDialog {
             return "Invalid Timestamp (" + timestampUs + ")";
         }
     }
+    /** The program named tool in a folder or its bin folder, else wherever settings.conf and the PATH lead. */
+    private String toolIn(String folder, String tool, String configKey) {
+        final boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+        for (String sub : new String[] {"", "bin"}) {
+            for (String ext : windows ? new String[] {".exe", ".bat", ".cmd", ""} : new String[] {""}) {
+                final java.io.File f = new java.io.File(new java.io.File(folder, sub), tool + ext);
+                if (f.isFile() && (windows || f.canExecute())) {
+                    return f.getAbsolutePath();
+                }
+            }
+        }
+        final String found = settings.resolveTool(configKey, tool);
+        return found != null && new java.io.File(found).isFile() ? found : null;
+    }
+
+    /**
+     * Finds the Geant4 that GEANT4_DIR names (here or inside WSL), makes sure
+     * geant4-bridge is built against it, starts it and asks it for its version.
+     * ONLINE only when Geant4 itself answered.
+     */
+    private String geant4RoundTrip(String declared, java.util.function.Consumer<String> say) {
+        final java.util.function.Function<String, String> conf = key -> {
+            try {
+                return settings.getProperty(key);
+            } catch (RuntimeException e) {
+                return null;
+            }
+        };
+        say.accept("[INFO] Looking for the Geant4 installation ...");
+        final com.sphere.core.geantbackend.Geant4Locator.Install g4 = com.sphere.core.geantbackend.Geant4Locator.best(conf);
+        if (g4 == null) {
+            say.accept("[ERROR] No Geant4 at " + declared + ": no bin/geant4-config nor CMake package there.");
+            say.accept("[PROMPT] GEANT4_DIR is the folder Geant4 was installed to, the one holding bin/geant4-config.");
+            say.accept("[PROMPT] On Windows, a Linux path such as /home/me/geant4 names a Geant4 inside WSL.");
+            return "ERROR";
+        }
+        if (!g4.origin().contains("GEANT4_DIR")) {
+            say.accept("[WARN] " + declared + " holds no Geant4; using the one found as " + g4.origin() + ".");
+        }
+        say.accept("[SUCCESS] " + g4);
+        say.accept("  > " + g4.datasets().size() + " data sets declared by geant4-config");
+
+        say.accept("\n[INFO] Checking geant4-bridge, the engine Sphere runs Geant4 through ...");
+        final com.sphere.core.geantbackend.Geant4BridgeCompiler.Result r =
+            com.sphere.core.geantbackend.Geant4BridgeCompiler.getOrBuild(conf, line -> say.accept("  > " + line), false);
+        if (!r.ok()) {
+            say.accept("[ERROR] " + r.message());
+            return "ERROR";
+        }
+        say.accept("[SUCCESS] Engine " + (r.built() ? "built" : "up to date") + ": " + r.binary());
+
+        say.accept("[INFO] Starting the engine and asking Geant4 for its version ...");
+        final long t0 = System.nanoTime();
+        try (com.sphere.core.geantbackend.Geant4Bridge b =
+                 com.sphere.core.geantbackend.Geant4BridgeCompiler.start(r, conf, line -> say.accept("  > " + line))) {
+            final java.util.Map<String, Object> v = b.call("version", java.util.Map.of()).get(60, TimeUnit.SECONDS);
+            final java.util.List<?> lists = com.sphere.core.geantbackend.G4Json.list(v, "physicsLists");
+            final java.util.List<?> missing = com.sphere.core.geantbackend.G4Json.list(v, "missingDatasets");
+            // G4VERSION_NUMBER: 1140 is 11.4.0; G4Date reads "(4-December-2025)"
+            final int n = (int) com.sphere.core.geantbackend.G4Json.num(v, "versionNumber", 0);
+            say.accept(String.format(Locale.ROOT, "  > Geant4 %d.%d.%d of %s, answered in %.0f ms", n / 100, n / 10 % 10, n % 10,
+                com.sphere.core.geantbackend.G4Json.str(v, "date", "?").replaceAll("[()]", "").strip(),
+                (System.nanoTime() - t0) / 1e6));
+            say.accept("  > " + (lists == null ? 0 : lists.size()) + " reference physics lists, through " + b.transport());
+            if (missing != null && !missing.isEmpty()) {
+                say.accept("[WARN] Data sets missing, physics that needs them will fail: " + missing);
+            }
+            say.accept("[SUCCESS] Geant4 answers through geant4-bridge: G4editor's runs and :g4 run will work.");
+            return "ONLINE";
+        } catch (TimeoutException e) {
+            say.accept("[ERROR] The engine started but did not answer within 60 s.");
+            return "ERROR";
+        } catch (ExecutionException e) {
+            say.accept("[ERROR] The engine answered with an error: " + e.getCause().getMessage());
+            return "ERROR";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "ERROR";
+        } catch (java.io.IOException | RuntimeException e) {
+            say.accept("[ERROR] The engine could not be started: " + e.getMessage());
+            return "ERROR";
+        }
+    }
+
     /**
      * Compiles a small program with the configured compiler, runs it, and checks
      * what it prints. ONLINE only when all three steps really happened.

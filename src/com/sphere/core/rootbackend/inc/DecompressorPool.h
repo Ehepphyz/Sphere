@@ -97,7 +97,7 @@ decompress_record(const std::uint8_t *src, std::size_t src_size,
 
     if (!block.valid) {
       if (blocks == 0) {
-        result.error = std::string("unrecognised or truncated block (tag '") +
+        result.error = std::string("unrecognized or truncated block (tag '") +
                        static_cast<char>(src[offset]) +
                        static_cast<char>(src[offset + 1]) + "')";
         return result;

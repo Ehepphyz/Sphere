@@ -26,9 +26,17 @@ public class PythonBackend implements Backend {
     
     // Track current running process for graceful/forced destruction from UI
     private Process currentProcess;
+    /**
+     * PYTHON_RUN_TIMEOUT in settings.conf: how long a script may run, 0 (the
+     * default) for as long as it takes. It used to be 60 s, the only way a
+     * script could be stopped; :kill python does that now, so a long analysis
+     * is no longer cut off.
+     */
+    private final long runTimeoutSeconds;
 
     public PythonBackend() {
         SettingsManager settings = new SettingsManager();
+        this.runTimeoutSeconds = timeoutSeconds(settings, "PYTHON_RUN_TIMEOUT", 0L);
         String os = System.getProperty("os.name").toLowerCase();
         String executableName = os.contains("win") ? "python.exe" : "python";
 
@@ -57,6 +65,27 @@ public class PythonBackend implements Backend {
         return venvManager.getPythonExecutable();
     }
 
+    /** Seconds a run may take, as settings.conf gives them; 0 waits for the end. */
+    public static long timeoutSeconds(SettingsManager settings, String key, long fallback) {
+        final String given = settings.getProperty(key);
+        if (given == null || given.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(given.trim()));
+        } catch (NumberFormatException notSeconds) {
+            AppLogger.warn(key + " in settings.conf is not a number of seconds (" + given.trim()
+                           + "); " + fallback + " s are used.");
+            return fallback;
+        }
+    }
+
+    /** The table :kill reads, or null when no console is running. */
+    public static com.sphere.core.commandrouterincludes.CommandContext processTable() {
+        final com.sphere.core.CommandRouter router = com.sphere.core.CommandRouter.active();
+        return router == null ? null : router.getCommandContext();
+    }
+
     /**
      * Forcibly terminates the running python sub-process (e.g. from a UI Stop button).
      */
@@ -71,7 +100,8 @@ public class PythonBackend implements Backend {
         PythonProcessRunner.PythonResult result = executeAndReturn(args, logCommand);
         // Fallback logging behavior for the fire-and-forget implementation
         if (result.timedOut()) {
-            AppLogger.error("Python command timed out.");
+            // Already said by the runner, with how long it waited and how to change it.
+            return;
         } else if (result.exitCode() != 0 && !result.stderr().isEmpty()) {
             AppLogger.error("Python command failed with exit code " + result.exitCode());
         }
@@ -149,21 +179,15 @@ public class PythonBackend implements Backend {
             int cIndex = tokens.indexOf("-c");
             int mIndex = tokens.indexOf("-m");
 
+            // "-m" and "-c" used to be gated: a module had to be a pip package, so
+            // the standard library (-m venv, -m json.tool, -m http.server) was
+            // refused, and code that merely contained "open(" was refused too.
+            // The interpreter says itself when a module does not exist.
             if (mIndex != -1 && tokens.size() > mIndex + 1) {
-                String module = tokens.get(mIndex + 1);
-                if (!SecurityManager.isModuleAllowed(module)) {
-                    AppLogger.error("Security: Module '" + module + "' is not authorized.");
-                    return null;
-                }
                 command.addAll(tokens);
             } else if (cIndex != -1 && tokens.size() > cIndex + 1) {
                 InlineCode inline = InlineCodeParser.parse(cleanArgs);
-                String code = inline.code;
-                if (!SecurityManager.isCommandSafe(code)) {
-                    AppLogger.error("Security: Direct code execution blocked or failed safety validation.");
-                    return null;
-                }
-                
+
                 // Reconstruct the system arguments layout explicitly using parsed parts
                 command.add("-c");
                 command.add(inline.code);
@@ -172,15 +196,16 @@ public class PythonBackend implements Backend {
                 }
             } else if (firstToken.endsWith(".py") || (firstToken.startsWith("\"") && firstToken.endsWith(".py\"")) || (firstToken.startsWith("'") && firstToken.endsWith(".py'"))) {
                 String cleanPath = firstToken.replaceAll("^[\"']|[\"']$", "");
-                File scriptFile = new File(cleanPath);
+                // Looked for in the folder "cd" moved to, where the script runs:
+                // a bare File resolved it against the folder Sphere started in.
+                File scriptFile = com.sphere.core.fs.WorkingDirectory.get().resolve(cleanPath).toFile();
                 if (!scriptFile.exists() || !scriptFile.isFile()) {
                     AppLogger.error("Error: Python script not found -> " + scriptFile.getAbsolutePath());
                     return null;
                 }
-                if (!SecurityManager.isModuleAllowed(scriptFile.getAbsolutePath())) {
-                    AppLogger.error("Security: Script '" + scriptFile.getAbsolutePath() + "' is not authorized.");
-                    return null;
-                }
+                // There used to be a check here that compared the script's full
+                // path with the names of the installed pip packages, which no
+                // path ever matches: every ":py script.py" was refused.
                 // The script runs as __main__ with its own arguments, inside a
                 // namespace Sphere keeps, so the Variables tab is filled without
                 // the script importing or calling anything. Collecting variables
@@ -188,8 +213,7 @@ public class PythonBackend implements Backend {
                 // script to run the plain way rather than not running at all.
                 try {
                     if (com.sphere.components.variables.PythonProbe.isWrapping()) {
-                        command.add("-c");
-                        command.add(com.sphere.components.variables.PythonProbe.WRAPPER);
+                        command.addAll(com.sphere.components.variables.PythonProbe.launcher());
                     }
                 } catch (Throwable unusable) {
                     command.clear();
@@ -340,7 +364,6 @@ public class PythonBackend implements Backend {
     private final class PythonProcessRunner {
         // Replace the old rigid line with this adaptive initialization:
         private static final ExecutorService EXECUTOR = com.sphere.utils.ThreadUtils.createAdaptiveExecutor();
-        private static final long TIMEOUT_SECONDS = 60L;
 
         public static final class PythonResult {
             private final String stdout;
@@ -421,6 +444,8 @@ public class PythonBackend implements Backend {
             try {
                 ProcessBuilder pb = new ProcessBuilder(command);
                 pb.redirectErrorStream(false);
+                // In the folder "cd" moved to, like every other command the console runs.
+                pb.directory(com.sphere.core.fs.WorkingDirectory.get().toFile());
                 // import sphere_spx works, and finds what the other engines exported.
                 com.sphere.core.bridge.Bridge.environment(pb.environment());
                 try {
@@ -446,6 +471,11 @@ public class PythonBackend implements Backend {
                 if (listener != null) listener.onStderrLine(e.getMessage());
                 return new PythonResult("", e.getMessage(), -1, false);
             }
+
+            // Named in the table :kill reads, as a shell command is: nothing but
+            // the timeout could stop a script before.
+            final com.sphere.core.commandrouterincludes.CommandContext table = processTable();
+            final String token = table == null ? null : table.registerProcess("python", process);
 
             StringBuilder stdoutBuilder = new StringBuilder();
             StringBuilder stderrBuilder = new StringBuilder();
@@ -501,13 +531,23 @@ public class PythonBackend implements Backend {
             int exitCode = -1;
 
             try {
-                process.onExit().orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
+                CompletableFuture<Process> exit = process.onExit();
+                if (runTimeoutSeconds > 0) {
+                    exit = exit.orTimeout(runTimeoutSeconds, TimeUnit.SECONDS);
+                }
+                exit.join();
                 exitCode = process.exitValue();
             } catch (CompletionException ex) {
                 if (ex.getCause() instanceof TimeoutException) {
                     timedOut = true;
+                    process.descendants().forEach(ProcessHandle::destroyForcibly);
                     process.destroyForcibly();
-                    AppLogger.error("Python process execution timed out.");
+                    AppLogger.error("Python process execution timed out after " + runTimeoutSeconds
+                                    + " s (PYTHON_RUN_TIMEOUT in settings.conf, 0 for no limit).");
+                }
+            } finally {
+                if (table != null) {
+                    table.unregisterProcess(token, process);
                 }
             }
 

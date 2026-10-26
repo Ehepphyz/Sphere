@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Locale;
 
 import com.sphere.utils.SessionManager;
-import com.sphere.components.QuickCodeEditor;
+import com.sphere.components.SphereCoder;
 import com.sphere.utils.SettingsManager;
 import com.sphere.components.SessionSelectionDialog;
 import com.sphere.utils.AppLogger;
@@ -39,7 +39,7 @@ public class ConsoleUI extends JPanel {
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
     private final JTextPane logArea;
     private final SessionManager session;
-    private final QuickCodeEditorFrame editorFrame;
+    private final SphereCoderFrame editorFrame;
     private final CppDiagnosticsEngine diagnosticsEngine;
     
     // Shared reference to the persistent language server sub-processes managed by the core engine
@@ -92,7 +92,7 @@ public class ConsoleUI extends JPanel {
      * @param cppBackend        The core C++ service orchestration backend managing background sub-processes.
      * @param settings          The persistent shared configuration state context.
      */
-    public ConsoleUI(SessionManager session, QuickCodeEditorFrame editorFrame, CppDiagnosticsEngine diagnosticsEngine, com.sphere.core.cpp.CppBackend cppBackend, SettingsManager settings) {
+    public ConsoleUI(SessionManager session, SphereCoderFrame editorFrame, CppDiagnosticsEngine diagnosticsEngine, com.sphere.core.cpp.CppBackend cppBackend, SettingsManager settings) {
         this.session = session;
         this.editorFrame = editorFrame;
         this.diagnosticsEngine = diagnosticsEngine != null ? diagnosticsEngine : new CppDiagnosticsEngine();

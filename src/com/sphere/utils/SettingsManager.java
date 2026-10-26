@@ -913,6 +913,15 @@ public class SettingsManager {
     public String resolvePath(String key, String executableName, StringBuilder reason) {
         String raw = getProperty(key);
         if (raw == null || raw.isBlank()) return null;
+        // A path with spaces is often written in quotes, as a shell wants it.
+        // The quotes are not part of it, and on Windows a quote is not even a
+        // character a path may hold: Paths.get threw, and the backend that
+        // asked (Python, C++, Julia...) failed to start over a quoting habit.
+        raw = raw.trim();
+        if (raw.length() > 1 && ((raw.startsWith("\"") && raw.endsWith("\""))
+                                 || (raw.startsWith("'") && raw.endsWith("'")))) {
+            raw = raw.substring(1, raw.length() - 1).trim();
+        }
         // A null name used to reach toLowerCase() below and throw, which the outer
         // catch reported as an invalid path: the caller never learned why.
         if (executableName == null) {
@@ -937,7 +946,20 @@ public class SettingsManager {
 
         // 2. Uniformly resolve system-specific file separator boundaries
         String localized = raw.replace("/", File.separator).replace("\\", File.separator);
-        Path p = Paths.get(localized).normalize();
+        // Outside the try below, a character no path may hold (< > | * ?) threw
+        // out of here and took down the backend being built, instead of being
+        // reported as the unusable setting it is.
+        final Path p;
+        try {
+            p = Paths.get(localized).normalize();
+        } catch (java.nio.file.InvalidPathException notAPath) {
+            note(reason, "the declared path is not a valid path here (" + notAPath.getReason() + ")");
+            if (reason == null) {
+                // The probe form stays silent; its caller reports the reason.
+                AppLogger.warn("settings.conf: " + key + " is not a usable path: " + raw);
+            }
+            return null;
+        }
         File f = p.toFile();
 
         try {

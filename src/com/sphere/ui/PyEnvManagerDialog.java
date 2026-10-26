@@ -1891,10 +1891,12 @@ public class PyEnvManagerDialog extends JDialog {
         com.sphere.utils.WebLinks.open(url);
     }
 
+    /** Through FsSupport, which removes a junction inside the environment without emptying its target. */
     private static void deleteTree(Path p) throws IOException {
-        if (!Files.exists(p)) return;
-        try (var s = Files.walk(p)) {
-            for (Path q : s.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(q);
+        if (!Files.exists(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
+        final List<Path> refused = com.sphere.core.fs.FsSupport.deleteTree(p);
+        if (!refused.isEmpty()) {
+            throw new IOException(com.sphere.core.fs.FsSupport.refusedSummary(refused));
         }
     }
 

@@ -301,7 +301,7 @@ final class RootArgsDialog {
             final JButton other = new JButton("Other…");
             other.addActionListener(a -> {
                 menu.setVisible(false);
-                final Color c = JColorChooser.showDialog(b, "Colour", chosen[0]);
+                final Color c = JColorChooser.showDialog(b, "Color", chosen[0]);
                 if (c != null) {
                     chosen[0] = c;
                     show.run();

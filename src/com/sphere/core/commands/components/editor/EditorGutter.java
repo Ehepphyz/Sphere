@@ -58,6 +58,15 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
     private int lastDigits = 0;
     private int lastWidth = 0;
     private byte[] changes = new byte[0];
+    private final BreakpointModel.Listener breakpointRepaint = m -> repaint();
+
+    /** Stops following breakpoints that outlive this gutter (a closed split). */
+    public void dispose() {
+        if (breakpoints != null) {
+            breakpoints.removeListener(breakpointRepaint);
+        }
+        component.getDocument().removeDocumentListener(this);
+    }
 
     public EditorGutter(JTextComponent component, BreakpointModel breakpoints) {
         this.component = component;
@@ -70,7 +79,7 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
         component.getDocument().addDocumentListener(this);
         component.addCaretListener(this);
         if (breakpoints != null) {
-            breakpoints.addListener(m -> repaint());
+            breakpoints.addListener(breakpointRepaint);
         }
 
         // The strip is sized from the editor's font, so a font change has to be

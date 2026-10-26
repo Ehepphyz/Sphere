@@ -92,12 +92,12 @@ public final class HistCompare {
                 for (int k = 0; k <= nz; ++k) {
                     final String cell = h1.dimension == 1 ? "bin " + i
                         : h1.dimension == 2 ? "bin (" + i + "," + j + ")" : "bin (" + i + "," + j + "," + k + ")";
-                    check(out, cell + " x centre", h1.xaxis.binCenter(i), h2.xaxis.binCenter(i), errorLimit);
+                    check(out, cell + " x center", h1.xaxis.binCenter(i), h2.xaxis.binCenter(i), errorLimit);
                     if (h1.dimension > 1) {
-                        check(out, cell + " y centre", h1.yaxis.binCenter(j), h2.yaxis.binCenter(j), errorLimit);
+                        check(out, cell + " y center", h1.yaxis.binCenter(j), h2.yaxis.binCenter(j), errorLimit);
                     }
                     if (h1.dimension > 2) {
-                        check(out, cell + " z centre", h1.zaxis.binCenter(k), h2.zaxis.binCenter(k), errorLimit);
+                        check(out, cell + " z center", h1.zaxis.binCenter(k), h2.zaxis.binCenter(k), errorLimit);
                     }
                     final int b = h1.bin(i, j, k);
                     check(out, cell + " content", h1.content(b), h2.content(b), errorLimit);

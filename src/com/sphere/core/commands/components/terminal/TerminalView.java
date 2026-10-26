@@ -418,7 +418,7 @@ public class TerminalView extends JPanel implements TerminalEngine.OutputListene
         String esc = "\u001B[";
         StringBuilder out = new StringBuilder("\n");
         out.append("  theme      ")
-           .append(themeFile == null ? "aucun fichier trouve, palette de secours"
+           .append(themeFile == null ? "no file found, fallback palette"
                                      : themeFile.toString())
            .append("\n  standard   ");
         for (int code = 30; code <= 37; code++) {

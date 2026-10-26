@@ -74,7 +74,7 @@ final class AnalysisPanel extends JPanel {
         final JPanel top = ImagingTheme.stack(false);
         top.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
         if (hist == null) {
-            final JLabel none = label("<html>This view holds no histogram to analyse: open one from a .root file, "
+            final JLabel none = label("<html>This view holds no histogram to analyze: open one from a .root file, "
                 + "or choose the pad that holds it in the bar above.</html>");
             none.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
             none.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -85,7 +85,7 @@ final class AnalysisPanel extends JPanel {
             twoD(top);
         } else {
             top.add(row(label("A TH3: its 3D view shows iso-surfaces, voxels and clouds; "
-                + "project it in ROOT to analyse a slice.")));
+                + "project it in ROOT to analyze a slice.")));
         }
         add(top, BorderLayout.NORTH);
         final JScrollPane scroll = new JScrollPane(out);
@@ -118,7 +118,7 @@ final class AnalysisPanel extends JPanel {
         top.add(row(label("Bayesian Blocks p₀"), p0,
             button("Blocks", "Scargle's optimal binning: edges only where the rate truly changes", this::blocks),
             button("Compare with…", "Kolmogorov-Smirnov and χ² homogeneity with another open histogram", this::compare),
-            button("Ratio with…", "The ratio to another open histogram, normalised", this::ratio)));
+            button("Ratio with…", "The ratio to another open histogram, normalized", this::ratio)));
         final double r0 = (hist.x.hi - hist.x.lo) / 60;
         resolution.setText(String.format(Locale.ROOT, "%.4g", r0));
         top.add(row(label("Search: background"), background, label("resolution σ"), resolution, label("masses"), steps,

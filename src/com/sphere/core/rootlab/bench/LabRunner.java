@@ -141,7 +141,7 @@ public final class LabRunner {
         for (LabTest test : tests) {
             LabResult r;
             if (cancelled.get()) {
-                r = new LabResult(suite.id(), test.id(), test.title(), LabStatus.SKIPPED, "run cancelled", List.of(), 0);
+                r = new LabResult(suite.id(), test.id(), test.title(), LabStatus.SKIPPED, "run canceled", List.of(), 0);
             } else if (suite.network() && !network) {
                 r = new LabResult(suite.id(), test.id(), test.title(), LabStatus.SKIPPED,
                     "reads from root.cern: allow network tests to run it", List.of(), 0);

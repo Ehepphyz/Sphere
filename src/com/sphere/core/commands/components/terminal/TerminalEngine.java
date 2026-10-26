@@ -83,8 +83,8 @@ public class TerminalEngine {
     private final File workingDirectory;
     private final CopyOnWriteArrayList<OutputListener> listeners = new CopyOnWriteArrayList<>();
 
-    private Process process;
-    private BufferedWriter writer;
+    private volatile Process process;
+    private volatile BufferedWriter writer;
     private Thread readerThread;
     private volatile boolean starting;
     private boolean forceColor = true;
@@ -181,9 +181,13 @@ public class TerminalEngine {
      * without one, and a line-based reader held it back until the next command.
      */
     private void read(Charset charset) {
+        final Process live = process;
+        if (live == null) {
+            return;
+        }
         char[] buffer = new char[4096];
         try (BufferedReader in = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), charset))) {
+                new InputStreamReader(live.getInputStream(), charset))) {
             int count;
             while ((count = in.read(buffer)) != -1) {
                 String chunk = new String(buffer, 0, count);
@@ -196,6 +200,10 @@ public class TerminalEngine {
             }
         } catch (IOException e) {
             // the pipe closes when the shell exits, which is not a failure
+        }
+        // Ended by itself ("exit"), not by stop(), which lets go of it first.
+        if (live == process) {
+            fireOutput("\n[i] The shell has exited. The next command starts a new one.\n");
         }
     }
 
@@ -234,6 +242,15 @@ public class TerminalEngine {
      * line back itself, and writing it here as well showed every command twice.
      */
     public void sendCommand(String cmd) {
+        // After "exit" the pipe stayed closed, every line failed to send and
+        // start() did nothing, since a process was still held: the tab was dead
+        // until it was closed. A new shell is started for the line instead.
+        final Process live = process;
+        if (live != null && !live.isAlive()) {
+            process = null;
+            writer = null;
+            start();
+        }
         starting = false;      // the first thing the user types ends the startup
         sendRaw(cmd);
     }

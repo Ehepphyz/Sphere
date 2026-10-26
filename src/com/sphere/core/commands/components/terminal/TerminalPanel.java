@@ -201,7 +201,7 @@ public class TerminalPanel extends JPanel {
         if (!searching) {
             searching = true;
             searchTerm = "";
-            show("(reverse-i-search)  ↵ pour lancer, Échap pour sortir");
+            show("(reverse-i-search)  ↵ to run, Esc to exit");
             return;
         }
         searchTerm = input.getText();

@@ -2840,8 +2840,13 @@ public final class RootBackend implements AutoCloseable, Backend {
             return;
         }
         AppLogger.debug("RootBackend dispatching non-blocking command over SHM: " + command);
-        if (processBridge != null) {
-            processBridge.pushCommand(command);
+        // Through sendCommand, which puts a line longer than the 44 bytes of a
+        // message on the shared heap. The bridge's own push wrote it inline, so
+        // every line of ":root" mode past 44 bytes reached Cling cut short.
+        if (processBridge != null
+                && !sendCommand(CMD_CLING_EXEC, 0, nextRequestId(), command)) {
+            AppLogger.error("The ROOT engine did not take the command (its queue or"
+                            + " its shared heap is full): " + command);
         }
     }
 

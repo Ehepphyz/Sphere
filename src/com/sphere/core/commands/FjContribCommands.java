@@ -108,7 +108,7 @@ public final class FjContribCommands {
         ContribSpecs.register();
         CommandDefinitions.register(":fjco help", "What the fjcontrib commands do, in the order an analysis uses them", FjContribCommands::help);
         CommandDefinitions.register(":fjco version", "The fjcontrib release translated, and how it is checked; references under Citations in the console menu", FjContribCommands::version);
-        CommandDefinitions.register(":fjco list", "The 26 contribs, by what they are for. Usage: :fjco list [clustering|flavour|grooming|substructure|pileup|shapes]", FjContribCommands::list);
+        CommandDefinitions.register(":fjco list", "The 26 contribs, by what they are for. Usage: :fjco list [clustering|flavor|grooming|substructure|pileup|shapes]", FjContribCommands::list);
         CommandDefinitions.register(":fjco info", "What a contrib does, how to reach it, what to cite. Usage: :fjco info <contrib>", FjContribCommands::info);
         CommandDefinitions.register(":fjco validate", "Run the contribs' own example programs and compare with the C++ outputs, to the character. Usage: :fjco validate [contrib] [--dir fjcontrib-folder]", FjContribCommands::validate);
         CommandDefinitions.register(":fjco bib", "Write the BibTeX of the contribs used (or all). Usage: :fjco bib <file.bib> [--all]", FjContribCommands::bib);
@@ -123,7 +123,8 @@ public final class FjContribCommands {
         CommandDefinitions.register(":fjco rho", "Pileup density of the current event by every estimator. Usage: :fjco rho [--rapmax y]", FjContribCommands::rho);
         CommandDefinitions.register(":fjco subtract", "Subtract pileup from the current event and compare the jets. Usage: :fjco subtract <cs|ics|softkiller|generic> [param] [--ptmin GeV]", FjContribCommands::subtract);
         CommandDefinitions.register(":fjco arena", "Overlay pileup on the events and score every method against the truth. Usage: :fjco arena [--mu n] [--events n] [--ptmin GeV] [--charged f] [--seed s]", FjContribCommands::arena);
-        CommandDefinitions.register(":fjco flavour", "Jet flavour by net anti-kt, IFN, CMP, GHS and SDF; compare, IRC-test, FlavorCone. Usage: :fjco flavour [compare|irc|cone] [--only b] [--njets n] [--ptmin GeV] [--trials n] [--eps e]", FjContribCommands::flavour);
+        CommandDefinitions.register(":fjco flavor", "Jet flavor by net anti-kt, IFN, CMP, GHS and SDF; compare, IRC-test, FlavorCone. Usage: :fjco flavor [compare|irc|cone] [--only b] [--njets n] [--ptmin GeV] [--trials n] [--eps e]", FjContribCommands::flavour);
+        CommandDefinitions.register(":fjco flavour", "Same as :fjco flavor", FjContribCommands::flavour);
         CommandDefinitions.register(":fjco toy", "Toy events with a boosted object, parton level with PDG codes. Usage: :fjco toy <qcd|quark|gluon|w|z|higgs|top> [events] [--pt GeV] [--soft n] [--seed s] [--recoil] [as <sample>]", FjContribCommands::toy);
         CommandDefinitions.register(":fjco sample", "Keep, reload, drop and list named event samples. Usage: :fjco sample <save|use|drop|list> [name]", FjContribCommands::sample);
         CommandDefinitions.register(":fjco rank", "Rank observables by how well they separate two samples (AUC, rejection). Usage: :fjco rank <signal> <background> [obs...] [--njets n] [--ptmin GeV]", FjContribCommands::rank);
@@ -275,7 +276,7 @@ public final class FjContribCommands {
         AppLogger.raw("               :fjco cluster <spec> compares one with the active jets");
         AppLogger.raw("  substructure :fjco obs tau21 d2 nsd ... | groom sd 0 0.1 | lund [jet] | lundmap");
         AppLogger.raw("  pileup       :fjco rho | subtract cs|ics|softkiller|generic | arena --mu 60");
-        AppLogger.raw("  flavour      :fjco flavour | flavour compare | flavour irc | flavour cone");
+        AppLogger.raw("  flavor       :fjco flavor | flavor compare | flavor irc | flavor cone");
         AppLogger.raw("  decide       :fjco rank <signal> <background> [obs...]   AUC and rejection of each observable");
         AppLogger.raw("  engines      :fjco hist <obs> [--root name] | export <f.csv|f.spx> | bridge [obs...] as <name>");
         AppLogger.raw("  trust        :fjco validate [--dir <fjcontrib>] | selftest | bench");
@@ -290,7 +291,7 @@ public final class FjContribCommands {
 
     public static void list(String i, CommandExecutionContext c) {
         final Args a = new Args(i, ":fjco list");
-        final String want = a.word(0, "").toLowerCase(Locale.ROOT);
+        final String want = a.word(0, "").toLowerCase(Locale.ROOT).replace("flavour", "flavor");
         final Map<String, Integer> checked = new LinkedHashMap<>();
         for (Example e : Examples.all()) checked.merge(e.contrib().toLowerCase(Locale.ROOT), 1, Integer::sum);
         for (ContribCatalog.Category cat : ContribCatalog.Category.values()) {
@@ -416,8 +417,8 @@ public final class FjContribCommands {
         for (Map.Entry<String, String> e : JetSpecs.extensions().entrySet()) {
             AppLogger.raw("  " + e.getValue().replace("[fjcontrib] ", ""));
         }
-        AppLogger.raw("  ifn and cmp read each particle's flavour from its PDG code (LHE, HepMC, ':fjco toy');");
-        AppLogger.raw("  qcdaware reads it too, and labels each jet with the flavour of its history.");
+        AppLogger.raw("  ifn and cmp read each particle's flavor from its PDG code (LHE, HepMC, ':fjco toy');");
+        AppLogger.raw("  qcdaware reads it too, and labels each jet with the flavor of its history.");
     }
 
     public static void cluster(String i, CommandExecutionContext c) {
@@ -474,7 +475,7 @@ public final class FjContribCommands {
         if (p instanceof VariableRPlugin) return "R_eff";
         if (p instanceof QCDAwarePlugin) return "label";
         if (p instanceof com.sphere.core.fjcontrib.ifnplugin.IFNPlugin
-            || p instanceof com.sphere.core.fjcontrib.cmpplugin.CMPPlugin) return "flavour";
+            || p instanceof com.sphere.core.fjcontrib.cmpplugin.CMPPlugin) return "flavor";
         return "";
     }
 
@@ -994,13 +995,14 @@ public final class FjContribCommands {
 
     public static void flavour(String i, CommandExecutionContext c) {
         if (!haveEvents()) return;
-        final Args a = new Args(i, ":fjco flavour");
+        // :fjco flavour, the U.K. spelling, is read too
+        final Args a = new Args(i, i.trim().regionMatches(true, 0, ":fjco flavour", 0, 13) ? ":fjco flavour" : ":fjco flavor");
         final String sub = a.word(0, "").toLowerCase(Locale.ROOT);
         final FlavourLab.Options o = FlavourLab.Options.defaults()
             .withOnly(flavourCode(a.sopt("only", "0")))
             .withJets((int) a.opt("njets", 2), a.opt("ptmin", 20));
         if (!FlavourLab.hasPdgCodes(currentEvent())) {
-            AppLogger.warn("The events carry no PDG codes, so every particle is flavourless: read an LHE or HepMC file, "
+            AppLogger.warn("The events carry no PDG codes, so every particle is flavorless: read an LHE or HepMC file, "
                 + "or make events with ':fjco toy'.");
         }
         try {
@@ -1008,7 +1010,7 @@ public final class FjContribCommands {
                 case "" -> {
                     final List<FlavourLab.Labelled> ls = FlavourLab.label(currentEvent(), o);
                     AppLogger.result(f("Event %d, the %d leading anti-kt R = %g jets above %g GeV%s:", FastJetCommands.currentIndex(),
-                        o.njets(), o.r(), o.ptmin(), o.only() > 0 ? ", flavour " + o.only() + " only" : ""));
+                        o.njets(), o.r(), o.ptmin(), o.only() > 0 ? ", flavor " + o.only() + " only" : ""));
                     final StringBuilder head = new StringBuilder(f("%5s %10s %8s", "jet", "pt", "rap"));
                     for (FlavourLab.Algo al : FlavourLab.Algo.values()) head.append(f(" %14s", al.label()));
                     AppLogger.raw(head.toString());
@@ -1020,9 +1022,9 @@ public final class FjContribCommands {
                 }
                 case "compare" -> {
                     final FlavourLab.Comparison cmp = FlavourLab.compare(events(), o, threads(a));
-                    AppLogger.result(f("%d leading jets of %d events: how often each definition flavours a jet, and agrees with each other one (%.0f ms):",
+                    AppLogger.result(f("%d leading jets of %d events: how often each definition flavors a jet, and agrees with each other one (%.0f ms):",
                         cmp.jets(), cmp.events(), cmp.millis()));
-                    final StringBuilder head = new StringBuilder(f("  %-12s %10s", "", "flavoured"));
+                    final StringBuilder head = new StringBuilder(f("  %-12s %10s", "", "flavored"));
                     for (FlavourLab.Algo b : FlavourLab.Algo.values()) head.append(f(" %11s", b.label()));
                     AppLogger.raw(head.toString());
                     for (FlavourLab.Algo x : FlavourLab.Algo.values()) {
@@ -1053,7 +1055,7 @@ public final class FjContribCommands {
                         AppLogger.raw(f("  %-12s %10.1f%% %10.1f%% %10.1f%% %10.1f%%   %s", al.label(), 100 * r.softRate(0, al),
                             100 * r.softRate(1, al), 100 * r.collinearRate(0, al), 100 * r.collinearRate(1, al), verdict));
                     }
-                    AppLogger.raw(f("  (%d trials, %.1f s) Net flavour is expected to fail. SDF is proven safe through NNLO "
+                    AppLogger.raw(f("  (%d trials, %.1f s) Net flavor is expected to fail. SDF is proven safe through NNLO "
                         + "(arXiv:2205.01109); a soft pair placed at random, each quark on its own, goes beyond that.",
                         r.trials(), r.millis() / 1000));
                     AppLogger.raw("  IFN, CMP (with its default correction) and GHS v2 are built safe at all orders (arXiv:2306.07314).");
@@ -1061,7 +1063,7 @@ public final class FjContribCommands {
                 case "cone" -> {
                     final int flav = flavourCode(a.sopt("flav", "5"));
                     final List<PseudoJet> jets = FlavourLab.flavorCone(currentEvent(), flav, a.opt("seedpt", 5), a.opt("rcut", 0.5));
-                    AppLogger.result(f("FlavorCone jets around flavour-%d seeds above %g GeV, rcut = %g: %d", flav,
+                    AppLogger.result(f("FlavorCone jets around flavor-%d seeds above %g GeV, rcut = %g: %d", flav,
                         a.opt("seedpt", 5), a.opt("rcut", 0.5), jets.size()));
                     for (int k = 0; k < jets.size(); k++) {
                         final PseudoJet j = jets.get(k);
@@ -1069,10 +1071,10 @@ public final class FjContribCommands {
                             j.constituents().size()));
                     }
                 }
-                default -> Handlers.usage(":fjco flavour [compare|irc|cone] [--only b] [--njets n] [--ptmin GeV] [--trials n] [--eps e]");
+                default -> Handlers.usage(":fjco flavor [compare|irc|cone] [--only b] [--njets n] [--ptmin GeV] [--trials n] [--eps e]");
             }
         } catch (RuntimeException e) {
-            AppLogger.error("Flavour analysis failed: " + e.getMessage());
+            AppLogger.error("Flavor analysis failed: " + e.getMessage());
         }
     }
 
@@ -1432,14 +1434,14 @@ public final class FjContribCommands {
     }
 
     public static void selftest(String i, CommandExecutionContext c) {
-        AppLogger.result("fjcontrib self test, on toy events with flavour (the :fjet events are not touched):");
+        AppLogger.result("fjcontrib self test, on toy events with flavor (the :fjet events are not touched):");
         int failures = 0;
         final List<List<PseudoJet>> tops = BoostedToys.generate(BoostedToys.Kind.TOP, new BoostedToys.Options(8, 500, 20, 7, 0.12, 1.0, 0.1, true));
         final List<List<PseudoJet>> qcd = BoostedToys.generate(BoostedToys.Kind.QCD, new BoostedToys.Options(8, 500, 20, 8, 0.12, 1.0, 0.1, true));
         final List<List<PseudoJet>> sample = new ArrayList<>(tops);
         sample.addAll(qcd);
         failures += check(ircOfIfnKinematics(sample), "IFN jets have exactly anti-kt's momenta, to the bit");
-        failures += check(flavourConserved(sample), "IFN conserves the event's net flavour over all its jets");
+        failures += check(flavourConserved(sample), "IFN conserves the event's net flavor over all its jets");
         failures += check(ghsKeepsJets(sample), "GHS dresses the hard anti-kt jets without touching their momenta");
         failures += check(cmpSmallA(sample), "CMP with a -> 0 gives anti-kt's jets");
         failures += check(softDropZeroCut(sample), "Soft Drop with zcut = 0 returns the whole jet");
@@ -1448,7 +1450,7 @@ public final class FjContribCommands {
         failures += check(qcdAwareConserves(sample), "QCD-aware jets conserve the net quark number of the partons");
         failures += check(dynamicRadius(sample), "DynamicR jets of one particle have R_d = R0, larger ones R0 + sigma");
         failures += check(parallelEqualsSerial(sample), "the observable table is the same to the bit on 1 thread and on all");
-        failures += check(ircSafeFlavours(sample), "IFN, CMP and GHS keep their labels under soft quark pairs; net flavour does not");
+        failures += check(ircSafeFlavours(sample), "IFN, CMP and GHS keep their labels under soft quark pairs; net flavor does not");
         AppLogger.result(failures == 0 ? "All checks passed." : failures + " check(s) failed.");
     }
 

@@ -17,7 +17,7 @@ public class WindowManager {
     private static final Map<EnvBackend, GenericEnvManagerDialog> windowCache = new HashMap<>();
     
     // Cache to prevent duplicate editor instances of the same configuration file in memory
-    private static final Map<String, QuickCodeEditorFrame> editorCache = new HashMap<>();
+    private static final Map<String, SphereCoderFrame> editorCache = new HashMap<>();
 
     /**
      * Resolves, synchronizes, and displays both the requested environment dashboard 
@@ -45,7 +45,7 @@ public class WindowManager {
             showFileInEditor(configFile);
             
             // Optional Quality-of-Life: Auto-focus the search context for this backend
-            QuickCodeEditorFrame editorFrame = editorCache.get(configFile.getAbsolutePath());
+            SphereCoderFrame editorFrame = editorCache.get(configFile.getAbsolutePath());
             if (editorFrame != null) {
                 // Look up the exact text key inside settings.conf (e.g., "PYTHON_EXEC")
                 String searchKey = backend.getConfigKey();
@@ -66,13 +66,13 @@ public class WindowManager {
 
     /**
      * Dedicated operational channel to view or edit any system file safely inside
-     * a single-instance QuickCodeEditor frame.
+     * a single-instance SphereCoder frame.
      *
      * Returns the frame now showing the file, or null when the file went to a
      * viewer of its own, so a caller that has something to say about the file
      * can reach the editor holding it.
      */
-    public static QuickCodeEditorFrame showFileInEditor(File file) {
+    public static SphereCoderFrame showFileInEditor(File file) {
         if (file == null) return null;
 
         // This path builds the frame directly rather than going through
@@ -86,16 +86,20 @@ public class WindowManager {
             com.sphere.ui.RootViewerFrame.show(file);
             return null;
         }
+        if (file.length() > com.sphere.components.editor.EditorFileIO.MAX_OPEN_BYTES) {
+            com.sphere.components.editor.LargeFileViewer.show(file);
+            return null;
+        }
 
         String absolutePath = file.getAbsolutePath();
-        QuickCodeEditorFrame editorFrame = editorCache.get(absolutePath);
+        SphereCoderFrame editorFrame = editorCache.get(absolutePath);
 
         // Lazy Loading: Build the code editor window only if it isn't currently tracking the file
         if (editorFrame == null || !editorFrame.isDisplayable()) {
-            editorFrame = new QuickCodeEditorFrame(file);
+            editorFrame = new SphereCoderFrame(file);
             
             // Clean up memory cache context footprints when the physicist exits the frame manually
-            final QuickCodeEditorFrame frameReference = editorFrame;
+            final SphereCoderFrame frameReference = editorFrame;
             editorFrame.addWindowListener(new java.awt.event.WindowAdapter() {
                 @Override
                 public void windowClosed(java.awt.event.WindowEvent e) {

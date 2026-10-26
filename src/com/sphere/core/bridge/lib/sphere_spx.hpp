@@ -303,7 +303,7 @@ public:
         return x >= xs_[0] && x <= xs_[nx_ - 1] && q2 >= q2s_[0] && q2 <= q2s_[nq_ - 1];
     }
 
-    /** x f(x, Q^2) of one member; 0 for a flavour the set does not carry. */
+    /** x f(x, Q^2) of one member; 0 for a flavor the set does not carry. */
     double xfxQ2(int pid, double x, double q2, int member = 0) const {
         const int f = flavor(pid);
         if (f < 0 || member < 0 || member >= static_cast<int>(nm_)) return 0.0;
@@ -314,7 +314,7 @@ public:
     }
     double xfxQ(int pid, double x, double q, int member = 0) const { return xfxQ2(pid, x, q * q, member); }
 
-    /** Every flavour from -6 to 6 at once, LHAPDF's xfxQ2(x, Q2, vector) order: index pid+6, gluon at 6. */
+    /** Every flavor from -6 to 6 at once, LHAPDF's xfxQ2(x, Q2, vector) order: index pid+6, gluon at 6. */
     std::vector<double> xfxQ2All(double x, double q2, int member = 0) const {
         std::vector<double> out(13);
         for (int p = -6; p <= 6; ++p) out[p + 6] = xfxQ2(p == 0 ? 21 : p, x, q2, member);

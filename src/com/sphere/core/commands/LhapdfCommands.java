@@ -69,7 +69,7 @@ public final class LhapdfCommands {
         CommandDefinitions.register(":lpdf uncertainty", "PDFSet::uncertainty. Usage: :lpdf uncertainty <handle> <pid> <x> <Q> [--cl 68.27] [--alternative]", LhapdfCommands::uncertainty);
         CommandDefinitions.register(":lpdf correlation", "PDFSet::correlation. Usage: :lpdf correlation <handle> <pidA> <xA> <QA> <pidB> <xB> <QB>", LhapdfCommands::correlation);
         CommandDefinitions.register(":lpdf members", "Every member's value at a point. Usage: :lpdf members <handle> <pid> <x> <Q>", LhapdfCommands::members);
-        CommandDefinitions.register(":lpdf table", "x f for every flavour across x. Usage: :lpdf table <handle> [Q] [--points n]", LhapdfCommands::table);
+        CommandDefinitions.register(":lpdf table", "x f for every flavor across x. Usage: :lpdf table <handle> [Q] [--points n]", LhapdfCommands::table);
         CommandDefinitions.register(":lpdf reweight", "Reweight an LHE file to another set. Usage: :lpdf reweight <file.lhe> <from> <to> [--members] [--write out.lhe] [--cl 68.27]", LhapdfCommands::reweight);
         CommandDefinitions.register(":lpdf close", "Close a handle, or all. Usage: :lpdf close [handle]", LhapdfCommands::close);
     }

@@ -36,12 +36,13 @@ public class CommandDefinitions {
         register(":version", "Display active Sphere platform version details", Handlers::version);
         register(":quit", "Safely terminate and exit the Sphere session", Handlers::quit);
         register(":edit", "Open a file for editing in the default editor", Handlers::editNfile);
+        register(":scode", "Open SphereCoder, Sphere's code editor, on a file when one is given. Usage: :scode [file]", Handlers::sphereCoder);
         register(":echo", "Evaluate and print runtime variables or raw terminal text output", Handlers::echoCommand);
         register(":set", "Assign or update an application runtime context variable", Handlers::setCommand);
         register(":create new", "Create a new file within the active directory", Handlers::createNew);
 
         // --- ROOT Lab: CERN data files and ROOT's test programs, in Java ---
-        register(":rootlab", "ROOT Lab: ROOT's test programs in Java, and CERN data files checked and summarised", RootLabCommands::overview);
+        register(":rootlab", "ROOT Lab: ROOT's test programs in Java, and CERN data files checked and summarized", RootLabCommands::overview);
         register(":rootlab test", "Run ROOT's test programs ported to Java. Usage: :rootlab test [suite ...] [--network]", RootLabCommands::test);
         register(":rootlab open", "Open a data file, a folder of them or a URL in the ROOT Lab tab. Usage: :rootlab open <file|folder|url>", RootLabCommands::openInLab);
         register(":rootlab fsck", "Check a ROOT file record by record (checksums, directories, recovery). Usage: :rootlab fsck <file|url> [--deep]", RootLabCommands::fsck);
@@ -49,6 +50,23 @@ public class CommandDefinitions {
         register(":rootlab stats", "Statistics of a tree branch, local or remote. Usage: :rootlab stats <file|url> <tree> <branch> [entries]", RootLabCommands::stats);
         register(":rootlab sniff", "Say what a data file is (ROOT, HepMC, LHE, YODA, SLHA...). Usage: :rootlab sniff <file>", RootLabCommands::sniff);
 
+        // --- Geant4: G4editor (works without Geant4) and geant4-bridge (needs Geant4, never ROOT) ---
+        register(":g4editor", "Open G4editor, the Geant4 geometry editor: draw with the mouse, type exact values. Usage: :g4editor [design.gdml|geometry.root]", G4Commands::editor);
+        register(":g4 convert", "Convert a geometry between GDML and ROOT (TGeoManager), without ROOT. Usage: :g4 convert <in> <out.root|out.gdml> [portable]", G4Commands::convert);
+        register(":g4", "Geant4 in Sphere: G4editor and the geant4-bridge engine", G4Commands::overview);
+        register(":g4 locate", "Geant4 installations found: settings.conf GEANT4_DIR, PATH, conda, virtual environments", G4Commands::locate);
+        register(":g4 material", "Radiation and interaction lengths of a material. Usage: :g4 material <name> [thickness]", G4Commands::material);
+        register(":g4 check", "Check a GDML design for overlaps. Usage: :g4 check <design.gdml> [points]", G4Commands::check);
+        register(":g4 info", "Volumes, masses and material budget of a GDML design. Usage: :g4 info <design.gdml>", G4Commands::info);
+        register(":g4 export", "Write a complete Geant4 C++ application for a design. Usage: :g4 export <design.gdml> <folder>", G4Commands::export);
+        register(":g4 do", "Run a G4editor console command on a GDML file and save it. Usage: :g4 do <design.gdml> <command>", G4Commands::doCommand);
+        register(":g4 bridge", "The Geant4 engine in geantbackend/. Usage: :g4 bridge build|status|test|stop", G4Commands::bridge);
+        register(":g4 run", "Run a design in Geant4. Usage: :g4 run <design.gdml> <events> [particle] [energy]", G4Commands::run);
+        register(":g4 commands", "Geant4's UI commands (master): the directories, a directory, a command's help, or a search. Usage: :g4 commands [/dir/|/command|word]", G4Commands::uiCommands);
+        register(":g4 ui", "Apply a Geant4 UI command in the engine, checked first. Usage: :g4 ui /run/verbose 1", G4Commands::ui);
+        register(":g4 macro", "Check a macro against Geant4's commands: unknown commands, missing or wrong parameters. Usage: :g4 macro <file.mac>", G4Commands::macro);
+        register(":g4 build", "Compile a Geant4 application (CMakeLists.txt + main .cc, as the Geant4 examples) against the Geant4 found. Usage: :g4 build <folder> [clean]", G4Commands::buildApp);
+        register(":g4 sim", "Compile if needed, then run a Geant4 application in batch on a macro. Usage: :g4 sim <folder> [macro.mac] [args...] | :g4 sim stop", G4Commands::sim);
         // --- Workspace & Project Management ---
         register(":project new", "Create and initialize a new project", Handlers::projectNew);
         register(":project open", "Open an existing project from disk", Handlers::projectOpen);
@@ -276,6 +294,8 @@ public class CommandDefinitions {
         RootDemoCommands.register();
         // --- The bridge: every engine reads what the others export ---
         BridgeCommands.register();
+        // --- The Code Vault: snippets/ and user_scripts/ searched, checked and run ---
+        VaultCommands.register();
         register(":root cut new", "Name a selection so it can be reused and combined", RootGraphicsCommands::rootCutNew);
         register(":root cut and", "Both selections at once. Usage: :root cut and <out> <a> <b>", RootGraphicsCommands::rootCutAnd);
         register(":root cut or", "Either selection. Usage: :root cut or <out> <a> <b>", RootGraphicsCommands::rootCutOr);
@@ -497,7 +517,7 @@ public class CommandDefinitions {
         register(":root draw marker", "Draw a marker. Usage: :root draw marker <x> <y> <style>", RootGraphicsCommands::rootDrawMarker);
         register(":root palette set", "Choose a color palette. Usage: :root palette set <n>", RootGraphicsCommands::rootPaletteSet);
         register(":root palette invert", "Reverse the current color palette", RootGraphicsCommands::rootPaletteInvert);
-        register(":root palette grayscale", "Draw in shades of grey. Usage: :root palette grayscale <0|1>", RootGraphicsCommands::rootPaletteGrayscale);
+        register(":root palette grayscale", "Draw in shades of gray. Usage: :root palette grayscale <0|1>", RootGraphicsCommands::rootPaletteGrayscale);
         register(":root palette contours", "Number of contour levels. Usage: :root palette contours <n>", RootGraphicsCommands::rootPaletteContours);
         register(":root friend add", "Attach a friend tree. Usage: :root friend add <tree> <friend> <file>", RootTreeCommands::rootFriendAdd);
         register(":root friend list", "The friends of a tree. Usage: :root friend list <tree>", RootTreeCommands::rootFriendList);
@@ -786,8 +806,8 @@ public class CommandDefinitions {
         register(":root pca eigen", "The eigenvalues. Usage: :root pca eigen <name>", RootPhysicsCommands::rootPcaEigen);
         register(":root pca covariance", "The covariance matrix. Usage: :root pca covariance <name>", RootPhysicsCommands::rootPcaCovariance);
         register(":root unfold new", "Bind an SVD unfolding. Usage: :root unfold new <name> <measured> <reconstructed> <truth> <response>", RootHistCommands::rootUnfoldNew);
-        register(":root unfold run", "Unfold with a regularisation. Usage: :root unfold run <name> <k> <hist>", RootHistCommands::rootUnfoldRun);
-        register(":root unfold dvector", "The d vector, which says where to cut the regularisation. Usage: :root unfold dvector <name>", RootHistCommands::rootUnfoldDVector);
+        register(":root unfold run", "Unfold with a regularization. Usage: :root unfold run <name> <k> <hist>", RootHistCommands::rootUnfoldRun);
+        register(":root unfold dvector", "The d vector, which says where to cut the regularization. Usage: :root unfold dvector <name>", RootHistCommands::rootUnfoldDVector);
         register(":root unfold singular", "The singular values of the response. Usage: :root unfold singular <name>", RootHistCommands::rootUnfoldSingular);
         register(":root decomp svd", "Singular values of a bound matrix. Usage: :root decomp svd <matrix>", RootPhysicsCommands::rootDecompSvd);
         register(":root decomp lu", "LU decomposition of a bound matrix. Usage: :root decomp lu <matrix>", RootPhysicsCommands::rootDecompLu);
@@ -821,7 +841,7 @@ public class CommandDefinitions {
         register(":root fitres pname", "Name of one fitted parameter. Usage: :root fitres pname <name> <index>", RootHistCommands::rootFitresPname);
         register(":root fitres correlation", "Correlation between two parameters. Usage: :root fitres correlation <name> <i> <j>", RootHistCommands::rootFitresCorrelation);
         register(":root fitres covariance", "The covariance matrix of a kept fit. Usage: :root fitres covariance <name>", RootHistCommands::rootFitresCovariance);
-        register(":root fitres status", "What the minimiser returned. Usage: :root fitres status <name>", RootHistCommands::rootFitresStatus);
+        register(":root fitres status", "What the minimizer returned. Usage: :root fitres status <name>", RootHistCommands::rootFitresStatus);
         register(":root fitres valid", "Whether the fit converged. Usage: :root fitres valid <name>", RootHistCommands::rootFitresValid);
         register(":root fitres print", "Everything about a kept fit. Usage: :root fitres print <name>", RootHistCommands::rootFitresPrint);
         register(":root func set", "Set one parameter. Usage: :root func set <function> <index> <value>", RootHistCommands::rootFuncSet);
@@ -877,9 +897,9 @@ public class CommandDefinitions {
         register(":root roofit var", "Declare an observable. Usage: :root roofit var <workspace> <name> <low> <high>", RootAnalysisCommands::rootRoofitVar);
         register(":root roofit generate", "Throw a toy dataset from a pdf. Usage: :root roofit generate <workspace> <pdf> <observable> <events> <name>", RootAnalysisCommands::rootRoofitGenerate);
         register(":root roofit fitsave", "Fit and keep the result. Usage: :root roofit fitsave <name> <workspace> <pdf> <data>", RootAnalysisCommands::rootRoofitFitSave);
-        register(":root roofit status", "What the minimiser returned. Usage: :root roofit status <result>", RootAnalysisCommands::rootRoofitStatus);
+        register(":root roofit status", "What the minimizer returned. Usage: :root roofit status <result>", RootAnalysisCommands::rootRoofitStatus);
         register(":root roofit edm", "Estimated distance to the minimum. Usage: :root roofit edm <result>", RootAnalysisCommands::rootRoofitEdm);
-        register(":root roofit minnll", "The minimised negative log likelihood. Usage: :root roofit minnll <result>", RootAnalysisCommands::rootRoofitMinNll);
+        register(":root roofit minnll", "The minimized negative log likelihood. Usage: :root roofit minnll <result>", RootAnalysisCommands::rootRoofitMinNll);
         register(":root roofit correlation", "Correlation between two fitted parameters. Usage: :root roofit correlation <result> <a> <b>", RootAnalysisCommands::rootRoofitCorrelation);
         register(":root roofit printfit", "Everything about a kept fit. Usage: :root roofit printfit <result>", RootAnalysisCommands::rootRoofitPrintFit);
         register(":root roofit vars", "The variables of a workspace. Usage: :root roofit vars <workspace>", RootAnalysisCommands::rootRoofitVars);
@@ -904,6 +924,12 @@ public class CommandDefinitions {
         register(":root rdf runs", "How many times the frame has been looped over. Usage: :root rdf runs <name>", RootTreeCommands::rootRdfRuns);
         register(":root rdf slots", "How many threads the frame will use. Usage: :root rdf slots <name>", RootTreeCommands::rootRdfSlots);
         register(":root rdf stats", "Mean, spread and count of a column in one pass. Usage: :root rdf stats <name> <column>", RootTreeCommands::rootRdfStats);
+        // RDataFrame over the data sources that are not a TTree (RDataSource)
+        register(":root rdf csv", "Bind a frame to a CSV file. Usage: :root rdf csv [<name>] <file.csv> [--delimiter=<char>|tab|space] [--no-header]", RootTreeCommands::rootRdfCsv);
+        register(":root rdf sqlite", "Bind a frame to an SQLite query. Usage: :root rdf sqlite [<name>] <file.sqlite> <SELECT ...>", RootTreeCommands::rootRdfSqlite);
+        register(":root rdf ntuple", "Bind a frame to an RNTuple. Usage: :root rdf ntuple [<name>] <ntuple> <file>", RootTreeCommands::rootRdfNtuple);
+        register(":root rdf empty", "A frame of N entries and no column, to fill with define. Usage: :root rdf empty [<name>] <entries>", RootTreeCommands::rootRdfEmpty);
+        register(":root rdf source", "The data source a frame reads, and its columns. Usage: :root rdf source [<name>]", RootTreeCommands::rootRdfSource);
         register(":root sys ls", "What a directory holds, through ROOT. Usage: :root sys ls [directory]", RootEngineCommands::rootSysLs);
         register(":root sys exists", "Whether a path is there. Usage: :root sys exists <path>", RootEngineCommands::rootSysExists);
         register(":root sys mkdir", "Create a directory on disk. Usage: :root sys mkdir <path>", RootEngineCommands::rootSysMkdir);
@@ -1073,17 +1099,37 @@ public class CommandDefinitions {
     }
 
     /**
+     * Families that are Sphere's own housekeeping rather than an engine or a
+     * domain, listed by :help inside "system" instead of as categories of their
+     * own, in this order, each one kept together. ":help vault" still lists one
+     * of them alone, through the start of the command names.
+     */
+    private static final List<String> SYSTEM_FAMILIES =
+        List.of("vault", "tools", "vars", "log", "snippet", "env", "config", "bridge", "backend", "workspace");
+
+    /**
      * Commands grouped the way :help shows them.
      *
      * A command with several words belongs to its first word, which is what the
      * user types after :help. A one-word command has no family of its own and
-     * joins "general", except the ones declared above with their own section.
+     * joins "system", except the ones declared above with their own section,
+     * and except a word that heads one of SYSTEM_FAMILIES (":vault", ":vars"),
+     * which stays with the rest of its family.
      */
     public static Map<String, List<String>> sections() {
         Map<String, List<String>> grouped = new LinkedHashMap<>();
+        Map<String, List<String>> folded = new LinkedHashMap<>();
+        for (String family : SYSTEM_FAMILIES) {
+            folded.put(family, new ArrayList<>());
+        }
         for (String name : INTERNAL_COMMANDS.keySet()) {
             final String[] words = name.trim().split("\\s+");
-            final String family = (words.length > 1) ? words[0].replaceFirst("^:+", "") : "system";
+            final String head = words[0].replaceFirst("^:+", "");
+            if (folded.containsKey(head)) {
+                folded.get(head).add(name);
+                continue;
+            }
+            final String family = (words.length > 1) ? head : "system";
             grouped.computeIfAbsent(family, key -> new ArrayList<>()).add(name);
         }
         for (Map.Entry<String, String[]> entry : EXTERNAL_COMMANDS.entrySet()) {
@@ -1100,6 +1146,11 @@ public class CommandDefinitions {
         for (String family : lonely) {
             grouped.computeIfAbsent("system", key -> new ArrayList<>())
                    .addAll(grouped.remove(family));
+        }
+        for (List<String> family : folded.values()) {
+            if (!family.isEmpty()) {
+                grouped.computeIfAbsent("system", key -> new ArrayList<>()).addAll(family);
+            }
         }
 
         // System first: those are the commands read before any other.

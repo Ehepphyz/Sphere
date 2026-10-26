@@ -137,7 +137,7 @@ mutable struct PDFSet            # mutable: passed as one pointer, not copied fi
     logq2::Vector{Float64}
     xf::Vector{Float64}
     weighted::Bool
-    lookup::Vector{Int}          # 1..13 for pid -6..6, 14 gluon, 15 photon; 0-based flavour or -1
+    lookup::Vector{Int}          # 1..13 for pid -6..6, 14 gluon, 15 photon; 0-based flavor or -1
     asq2::Vector{Float64}
     aslog::Vector{Float64}
     asval::Vector{Float64}
@@ -327,7 +327,7 @@ function continuation(p::PDFSet, base, f, x, q2)
     return I(x, q2)
 end
 
-"""x f(x, Q²) of one member (0 is the central one); 0 for a flavour the set does not carry."""
+"""x f(x, Q²) of one member (0 is the central one); 0 for a flavor the set does not carry."""
 function xfxQ2(p::PDFSet, pid::Integer, x::Real, q2::Real, member::Integer = 0)
     f = flavor(p, pid)
     (f < 0 || member < 0 || member >= p.nm) && return 0.0

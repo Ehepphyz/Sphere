@@ -83,8 +83,10 @@ public class RemovePlugin implements CommandRouter.CommandPlugin {
             return;
         }
 
-        // A symbolic link is removed as a link, never followed into its target
-        if (Files.isSymbolicLink(target)) {
+        // A symbolic link or a Windows junction is removed as a link, never
+        // followed into its target. Java sees a junction as a plain folder, so
+        // "-r" used to empty the folder it pointed to.
+        if (Files.isSymbolicLink(target) || isJunction(target)) {
             try {
                 Files.delete(target);
                 AppLogger.success("Removed link " + target);
@@ -149,6 +151,17 @@ public class RemovePlugin implements CommandRouter.CommandPlugin {
         }.execute();
     }
 
+    /** A folder that is a junction or mount point rather than a folder of its own. */
+    private static boolean isJunction(Path target) {
+        try {
+            BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class,
+                                                             LinkOption.NOFOLLOW_LINKS);
+            return attrs.isDirectory() && FsSupport.isLinkedFolder(target, attrs);
+        } catch (IOException unreadable) {
+            return false;
+        }
+    }
+
     /** files, folders, bytes */
     private long[] tally(Path root) {
         long[] t = new long[3];
@@ -163,6 +176,10 @@ public class RemovePlugin implements CommandRouter.CommandPlugin {
 
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    // What a junction points to is not deleted, so it is not counted.
+                    if (FsSupport.isLinkedFolder(dir, attrs)) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
                     t[1]++;
                     return FileVisitResult.CONTINUE;
                 }

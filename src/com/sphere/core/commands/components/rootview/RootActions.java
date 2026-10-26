@@ -537,7 +537,7 @@ public final class RootActions {
         if (v instanceof float[] a) return a.length / 3 + " points";
         if (v instanceof int[] a) return a.length + " integers";
         if (v instanceof String[] a) return a.length + " labels";
-        if (v instanceof Color c) return String.format("#%06x (ROOT colour %d)", c.getRGB() & 0xFFFFFF, RootColors.index(c));
+        if (v instanceof Color c) return String.format("#%06x (ROOT color %d)", c.getRGB() & 0xFFFFFF, RootColors.index(c));
         if (v instanceof List<?> l) return l.size() + " objects";
         if (v instanceof Double d) return String.format(Locale.ROOT, "%.10g", d);
         if (v instanceof String s) return "\"" + s + "\"";
@@ -612,15 +612,15 @@ public final class RootActions {
             final AxisStyle st = style(t);
             st.ndivisions = i(a, 0, 510);
             st.optimize = b(a, 1, true);
-            return "divisions " + st.ndivisions + (st.optimize ? "" : " (not optimised)");
+            return "divisions " + st.ndivisions + (st.optimize ? "" : " (not optimized)");
         }).current = t -> new Object[]{(long) style(t).ndivisions, style(t).optimize};
         def("TAttAxis::SetAxisColor", (t, a) -> {
             style(t).axisColor = withAlpha(c(a, 0, Color.BLACK), d(a, 1, 1));
-            return "axis colour set";
+            return "axis color set";
         }).current = t -> new Object[]{style(t).axisColor == null ? Color.BLACK : style(t).axisColor, 1.0};
         def("TAttAxis::SetLabelColor", (t, a) -> {
             style(t).labelColor = withAlpha(c(a, 0, Color.BLACK), d(a, 1, 1));
-            return "label colour set";
+            return "label color set";
         }).current = t -> new Object[]{style(t).labelColor == null ? Color.BLACK : style(t).labelColor, 1.0};
         def("TAttAxis::SetLabelFont", (t, a) -> {
             style(t).labelFont = i(a, 0, 42);
@@ -652,7 +652,7 @@ public final class RootActions {
         }).current = t -> new Object[]{style(t).titleSize};
         def("TAttAxis::SetTitleColor", (t, a) -> {
             style(t).titleColor = c(a, 0, Color.BLACK);
-            return "title colour set";
+            return "title color set";
         }).current = t -> new Object[]{style(t).titleColor == null ? Color.BLACK : style(t).titleColor};
         def("TAttAxis::SetTitleFont", (t, a) -> {
             style(t).titleFont = i(a, 0, 42);
@@ -1009,7 +1009,7 @@ public final class RootActions {
         }).state = t -> t.scene.fixedAspect;
         def("TCanvas::SetGrayscale", (t, a) -> {
             t.scene.grayscale = b(a, 0, true);
-            return t.scene.grayscale ? "greyscale" : "colours";
+            return t.scene.grayscale ? "grayscale" : "colors";
         }).state = t -> t.scene.grayscale;
         def("TCanvas::SetCanvasSize", (t, a) -> {
             t.scene.width = Math.max(10, i(a, 0, 700));
@@ -1141,7 +1141,7 @@ public final class RootActions {
         }).current = t -> new Object[]{item(t).name};
         def("TPave::SetShadowColor", (t, a) -> {
             pave(t).shadowColor = c(a, 0, Color.BLACK);
-            return "shadow colour set";
+            return "shadow color set";
         }).current = t -> new Object[]{pave(t).shadowColor == null ? Color.BLACK : pave(t).shadowColor};
 
         def("TPaveText::Clear", (t, a) -> {
@@ -1239,7 +1239,7 @@ public final class RootActions {
             final int k = entryAt(t);
             if (k < 0) throw new IllegalStateException("no entry under the mouse");
             pave(t).lines.get(k).text = s(a, 0, "");
-            return "entry relabelled";
+            return "entry relabeled";
         }).current = t -> {
             final int k = entryAt(t);
             return new Object[]{k < 0 ? "" : pave(t).lines.get(k).text};
@@ -1492,7 +1492,7 @@ public final class RootActions {
         });
         def("TView3D::Centered", (t, a) -> {
             view(t).zoom = 1;
-            return "centred";
+            return "centered";
         });
         def("TView3D::Front", (t, a) -> angles(t, 0, 270, "front"));
         def("TView3D::Side", (t, a) -> angles(t, 0, 0, "side"));

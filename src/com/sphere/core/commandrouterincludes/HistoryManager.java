@@ -39,7 +39,8 @@ public class HistoryManager {
         if (input == null || !input.startsWith("!")) return input;
 
         if (input.equals("!!")) {
-            return last() != null ? last() : input;
+            String found = lastCommand();
+            return found != null ? found : input;
         }
 
         if (input.startsWith("!?")) {
@@ -49,12 +50,35 @@ public class HistoryManager {
         }
 
         if (input.matches("!\\d+")) {
-            int index = Integer.parseInt(input.substring(1));
+            // "!99999999999" overflowed parseInt and the exception escaped.
+            final int index;
+            try {
+                index = Integer.parseInt(input.substring(1));
+            } catch (NumberFormatException tooLarge) {
+                return input;
+            }
             String found = get(index);
             return (found != null) ? found : input;
         }
 
         return input;
+    }
+
+    /**
+     * The last entry that is a command rather than a history reference. The
+     * console's history file keeps lines as typed, "!!" among them, and this
+     * list starts from that file: "!!" then expanded to "!!" and was refused.
+     */
+    private String lastCommand() {
+        for (int i = history.size() - 1; i >= 0; i--) {
+            String entry = history.get(i);
+            if (!isReference(entry)) return entry;
+        }
+        return null;
+    }
+
+    private static boolean isReference(String entry) {
+        return entry.equals("!!") || entry.startsWith("!?") || entry.matches("!\\d+");
     }
 
     public synchronized String last() {
@@ -67,7 +91,8 @@ public class HistoryManager {
 
     public synchronized String searchContains(String pattern) {
         for (int i = history.size() - 1; i >= 0; i--) {
-            if (history.get(i).contains(pattern)) return history.get(i);
+            // "!?foo" typed earlier contains "foo" too, and is no command to rerun.
+            if (history.get(i).contains(pattern) && !isReference(history.get(i))) return history.get(i);
         }
         return null;
     }

@@ -62,7 +62,7 @@ public final class SpxExport {
             if (!Arrays.equals(g.xKnotValues(), xs) || !Arrays.equals(g.q2KnotValues(), q2s)
                 || !Arrays.equals(g.flavors(), pids)) {
                 throw new IOException("Member " + m + " of " + set.name()
-                    + " has knots or flavours of its own; LHAPDF sets share them, and so must the bridge.");
+                    + " has knots or flavors of its own; LHAPDF sets share them, and so must the bridge.");
             }
         }
         final int nx = xs.length;

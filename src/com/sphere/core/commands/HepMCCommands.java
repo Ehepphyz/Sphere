@@ -339,7 +339,7 @@ public final class HepMCCommands {
         }
         if (fmt.equals("auto")) {
             final Reader r = ReaderFactory.deduceReader(file.toString());
-            if (r == null) throw new IOException("HepMC3 recognises none of its formats in " + file.getFileName());
+            if (r == null) throw new IOException("HepMC3 recognizes none of its formats in " + file.getFileName());
             return r;
         }
         if (fmt.equals("root") || fmt.equals("roottree")) return new ReaderRootTree(file.toString());
@@ -1091,7 +1091,7 @@ public final class HepMCCommands {
                     return;
                 }
                 final String text = byId.getValue().serialize();
-                AppLogger.raw(f("  %-24s %6d  %s", byName.getKey(), byId.getKey(), text == null ? "(unserialisable)" : text));
+                AppLogger.raw(f("  %-24s %6d  %s", byName.getKey(), byId.getKey(), text == null ? "(unserializable)" : text));
             }
         }
         if (n == 0) AppLogger.raw("  none");

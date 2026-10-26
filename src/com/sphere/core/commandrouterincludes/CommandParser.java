@@ -51,6 +51,29 @@ public final class CommandParser {
         return cmd;
     }
 
+    /**
+     * What follows ":lang" or "::lang", exactly as typed: flags, quotes and the
+     * order kept. parse() files the second word of a macro under filepath and
+     * every flag under macroFlags, so code rebuilt from macroTokens alone lost
+     * both: "::py script.py" ran nothing, ":py -c ..." lost its "-c".
+     */
+    public static String remainderAfterLanguage(String rawLine) {
+        if (rawLine == null) {
+            return "";
+        }
+        String line = rawLine.strip();
+        if (line.startsWith("::")) {
+            line = line.substring(2).strip();
+        } else if (line.startsWith(":")) {
+            line = line.substring(1).strip();
+        }
+        int space = 0;
+        while (space < line.length() && !Character.isWhitespace(line.charAt(space))) {
+            space++;
+        }
+        return line.substring(space).strip();
+    }
+
     private static void tokenizeSegment(String segmentText, boolean isSnippetScope, ParsedCommand cmd) {
         // Use your application's Tokenizer instead of basic regex split
         List<String> rawTokens = Tokenizer.DEFAULT.tokenize(segmentText);

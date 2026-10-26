@@ -326,19 +326,27 @@ public class CommandRouter {
         ctx.history = history;
         ctx.tokenizer = Tokenizer.DEFAULT;
 
-        // Register dispatchers with priority levels
+        // Register dispatchers with priority levels. A dispatcher that owns one
+        // prefix is asked before the two that take every ":" line and every "::"
+        // line: below them, :madgraph, :herwig and :geant4 were never reached and
+        // answered "Unknown internal command".
+        registry.addDispatcher(new MadGraphDispatcher(), 11);
+        registry.addDispatcher(new Geant4Dispatcher(), 11);
+        registry.addDispatcher(new HerwigDispatcher(), 11);
         registry.addDispatcher(new InternalDispatcher(), 10);
         registry.addDispatcher(new OneShotDispatcher(), 10);
-        registry.addDispatcher(new MadGraphDispatcher(), 9);
-        
+
+        // Behind them on purpose: ":root ..." belongs to InternalDispatcher, which
+        // runs the :root commands of CommandDefinitions, and "::root file.C" to
+        // OneShotDispatcher, which runs the macro as "::root [@ file.C]" does.
+        // It is still asked for the live backend (getRootBackend).
         this.rootDispatcher = new RootDispatcher();
         registry.addDispatcher(this.rootDispatcher, 9);
-        
-        registry.addDispatcher(new Geant4Dispatcher(), 9);
-        registry.addDispatcher(new HerwigDispatcher(), 9);
-        registry.addDispatcher(new PluginDispatcher(), 8);
-        registry.addDispatcher(new SnippetDispatcher(), 2);
-        registry.addDispatcher(new SmartDispatcher(), 1);
+
+        // PluginDispatcher, SnippetDispatcher and SmartDispatcher are not
+        // registered: the registry only receives ":" lines, and those three only
+        // answer others. Plugins are tried in processInput, [@ ...] blocks go to
+        // executeHybridAsync, and find, search and plot are shell commands.
 
         // Populate known commands for auto-completion and validation
         com.sphere.core.commands.CommandDefinitions.all().keySet().forEach(knownCommands::add);
@@ -547,6 +555,10 @@ public class CommandRouter {
 
     public void processInput(String input) {
         if (input == null) return;
+        if (input.indexOf('\n') >= 0) {
+            processLines(input);
+            return;
+        }
         if (input.isBlank()) {
             // A blank line is how a block is closed, so inside a mode it has to
             // reach the buffer instead of being dropped as an empty command.
@@ -583,8 +595,9 @@ public class CommandRouter {
             knownCommands.add(firstToken);
         }
 
-        if (handleCd(command) || handlePwd(command) || handlePushd(command)
-                || handlePopd(command) || handleDirs(command)) {
+        if (!isCodeInMode(command)
+                && (handleCd(command) || handlePwd(command) || handlePushd(command)
+                    || handlePopd(command) || handleDirs(command))) {
             return;
         }
 
@@ -681,6 +694,24 @@ public class CommandRouter {
         executeHybridAsync(command);
     }
 
+    /**
+     * Several lines sent at once, as Shift+Enter composes them. Each goes
+     * through processInput in order, as though Enter had followed it; a line
+     * handed whole to cmd.exe ran its first line only. In a language mode the
+     * block is then closed, since the Enter that sent them means "run it".
+     * Fortran is left as it is: its program grows and has no block to close.
+     */
+    private void processLines(String block) {
+        for (String line : block.split("\r?\n", -1)) {
+            processInput(line);
+        }
+        final String mode = currentMode.get();
+        if (com.sphere.core.exec.CodeBuffer.collects(mode) && !"fortran".equals(mode)
+                && !com.sphere.core.exec.CodeBuffer.isEmpty(mode)) {
+            processInput("");
+        }
+    }
+
     /** The name a running command answers to: its program, without its path. */
     private static String shellToken(String executable) {
         String name = executable;
@@ -695,6 +726,20 @@ public class CommandRouter {
         return name.isBlank() ? "shell" : name;
     }
 
+    /** The name a command is listed under: its program, or for "cmd /c line" and "bash -c line" the line's. */
+    private static String processName(List<String> cmd) {
+        if (cmd.isEmpty()) {
+            return "shell";
+        }
+        if (cmd.size() == 3 && ("/c".equalsIgnoreCase(cmd.get(1)) || "-c".equals(cmd.get(1)))) {
+            final List<String> words = Tokenizer.DEFAULT.tokenize(cmd.get(2));
+            if (!words.isEmpty()) {
+                return shellToken(words.get(0));
+            }
+        }
+        return shellToken(cmd.get(0));
+    }
+
     /** The commands running right now, by the name :kill takes. */
     public java.util.Map<String, Process> runningCommands() {
         return ctx == null ? java.util.Map.of() : ctx.getActiveProcesses();
@@ -705,7 +750,40 @@ public class CommandRouter {
         return ctx != null && ctx.killProcess(name);
     }
 
+    /** The five words the console answers itself rather than handing them on. */
+    private static final List<String> DIRECTORY_WORDS = List.of("cd", "pwd", "pushd", "popd", "dirs");
+
+    /**
+     * What, right after one of those words, makes the line code: an assignment
+     * (=, +=, //=...), a comparison (==), a call, an index, a tuple, an annotation.
+     * "cd ..", "cd /x" and "cd -" do not match, so they still move.
+     */
+    private static final Pattern CODE_AFTER_WORD =
+        Pattern.compile("^(=|[-+*/%&|^@]=|//=|\\*\\*=|>>=|<<=|[(\\[,:+])");
+
+    /**
+     * Whether a line of a language mode that starts like a directory command is
+     * code of that language. "dirs = [1, 2]" in Python mode and "cd = 5" in
+     * Julia used to be answered as dirs and cd, and never reached the
+     * interpreter. Outside a mode, or with the leading colon, it never is.
+     */
+    private boolean isCodeInMode(String cmd) {
+        if (currentMode.get() == null || cmd == null || cmd.trim().startsWith(":")) {
+            return false;
+        }
+        for (String word : DIRECTORY_WORDS) {
+            final String argument = shellWordArgument(cmd, word);
+            if (argument != null && CODE_AFTER_WORD.matcher(argument).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean isInternalSystemCommand(String cmd) {
+        if (isCodeInMode(cmd)) {
+            return false;
+        }
         return "".equals(shellWordArgument(cmd, "pwd"))
             || shellWordArgument(cmd, "popd") != null
             || shellWordArgument(cmd, "cd") != null
@@ -717,7 +795,7 @@ public class CommandRouter {
      * Rejects snippet invocations that would silently run the wrong thing.
      * Returns false once the reason has been reported.
      */
-    private static boolean validateSnippetInvocation(ParsedCommand pc,
+    private boolean validateSnippetInvocation(ParsedCommand pc,
                                                      List<String> snippetBlocks) {
         if (pc == null || !pc.hasSnippet) {
             return true;
@@ -743,7 +821,7 @@ public class CommandRouter {
         if ("root".equalsIgnoreCase(pc.languageOrApp)) {
             script = com.sphere.core.rootbackend.RootAclic.split(script)[0];
         }
-        File scriptFile = new File(script);
+        File scriptFile = inCurrentDirectory(script);
         if (!scriptFile.isFile()) {
             AppLogger.error("Snippet not found: " + script);
             return false;
@@ -890,7 +968,7 @@ public class CommandRouter {
             return;
         }
 
-        final String source = pc.snippetTokens.get(0);
+        final String source = inCurrentDirectory(pc.snippetTokens.get(0)).getPath();
         final List<String> compileFlags = new ArrayList<>(pc.macroTokens);
         final List<String> runtimeArgs =
             new ArrayList<>(pc.snippetTokens.subList(1, pc.snippetTokens.size()));
@@ -1005,16 +1083,15 @@ public class CommandRouter {
                     // A Python script runs inside Sphere's wrapper, which keeps its
                     // namespace and writes it down once the script is over. The
                     // script itself is untouched: same __main__, same arguments,
-                    // same exit code. The wrapper goes after the interpreter's own
-                    // options and before the script, which is where -c belongs.
+                    // same exit code. The wrapper's file goes after the interpreter's
+                    // own options and before the script, where a script would go.
                     if ("py".equalsIgnoreCase(pc.languageOrApp)
                         && com.sphere.components.variables.PythonProbe.isWrapping()
                         && !program.isEmpty()
                         && isScriptHere(program.get(0))
                         && !interpreterOptions.contains("-c")
                         && !interpreterOptions.contains("-m")) {
-                        cmd.add("-c");
-                        cmd.add(com.sphere.components.variables.PythonProbe.WRAPPER);
+                        cmd.addAll(com.sphere.components.variables.PythonProbe.launcher());
                     }
                     cmd.addAll(program);
                 } else if (rootCommand != null) {
@@ -1177,8 +1254,9 @@ public class CommandRouter {
                 // Named while it runs, so ":kill <name>" can reach it. Nothing
                 // registered a process before, so the registry the context keeps
                 // was always empty and ":kill" could only ever take a number.
-                final String token = cmd.isEmpty() ? "shell" : shellToken(cmd.get(0));
-                ctx.registerProcess(token, process);
+                // A line handed to the shell is named after the program it runs,
+                // not after cmd or bash; a second run of it gets a number.
+                final String token = ctx.registerProcess(processName(cmd), process);
                 com.sphere.core.telemetry.ProcessMemory.Watcher memory =
                     com.sphere.core.telemetry.ProcessMemory.watch(process);
                 final int status;
@@ -1192,7 +1270,7 @@ public class CommandRouter {
                     }
                     status = process.waitFor();
                 } finally {
-                    ctx.unregisterProcess(token);
+                    ctx.unregisterProcess(token, process);
                 }
                 memory.close();
                 // What a script cost, kept beside the compilations so that both can
@@ -1241,7 +1319,7 @@ public class CommandRouter {
      *
      * Returns null when the line is anything else.
      */
-    private static List<String> plainPythonRun(String rawInput) {
+    private List<String> plainPythonRun(String rawInput) {
         if (rawInput == null || !com.sphere.components.variables.PythonProbe.isWrapping()) {
             return null;
         }
@@ -1265,14 +1343,13 @@ public class CommandRouter {
                 break;
             }
         }
-        if (script < 0 || !new File(tokens.get(script)).isFile()) {
+        if (script < 0 || !inCurrentDirectory(tokens.get(script)).isFile()) {
             return null;
         }
 
         List<String> command = new ArrayList<>();
         command.add(tokens.get(0));
-        command.add("-c");
-        command.add(com.sphere.components.variables.PythonProbe.WRAPPER);
+        command.addAll(com.sphere.components.variables.PythonProbe.launcher());
         command.addAll(tokens.subList(script, tokens.size()));
         return command;
     }
@@ -1314,7 +1391,7 @@ public class CommandRouter {
      * these; with none given, the file runs in the session as it is.
      */
     private void runJuliaSnippet(ParsedCommand pc) {
-        final File script = new File(pc.snippetTokens.get(0));
+        final File script = inCurrentDirectory(pc.snippetTokens.get(0));
         final List<String> runtimeArgs =
             new ArrayList<>(pc.snippetTokens.subList(1, pc.snippetTokens.size()));
         final List<String> interpreterFlags = new ArrayList<>(pc.macroTokens);
@@ -1346,7 +1423,7 @@ public class CommandRouter {
      * the compiler, what sat inside or after it reaches the produced binary.
      */
     private void runFortranSnippet(ParsedCommand pc) {
-        final File source = new File(pc.snippetTokens.get(0));
+        final File source = inCurrentDirectory(pc.snippetTokens.get(0));
         final List<String> compileFlags = new ArrayList<>(pc.macroTokens);
         final List<String> runtimeArgs =
             new ArrayList<>(pc.snippetTokens.subList(1, pc.snippetTokens.size()));
@@ -1360,6 +1437,21 @@ public class CommandRouter {
                 return null;
             }
         }.execute();
+    }
+
+    /**
+     * A file named on the command line, in the folder "cd" moved to.
+     *
+     * new File(name) resolves against the folder Sphere was started from, which
+     * cd cannot move: after a cd, "::py [@ a.py]" answered "Snippet not found",
+     * and Julia, Fortran and C++ were handed the file of that other folder.
+     */
+    private File inCurrentDirectory(String name) {
+        try {
+            return currentDirectory.resolve(name).toFile();
+        } catch (java.nio.file.InvalidPathException notAPath) {
+            return new File(name);
+        }
     }
 
     /** A .py file that is really there, looked for where the run will happen. */
@@ -1607,11 +1699,57 @@ public class CommandRouter {
         if (statusBarUpdater != null) statusBarUpdater.accept(currentDirectory.toString());
     }
 
-    public String autoComplete(String prefix) {
-        if (prefix == null || prefix.isEmpty()) return "";
-        if (prefix.contains("/") || prefix.contains("\\") || prefix.startsWith("~") || prefix.startsWith(".")) {
-            return autoCompletePath(prefix);
+    /**
+     * Completes the line being typed, or returns null when there is nothing to add.
+     *
+     * Two faults are gone. Finding nothing returned "", which the prompt then
+     * wrote into the field: Tab on a word it did not know erased the line. And
+     * only a line that was a path as a whole was completed as one, so
+     * "cd Wor" or ":cat da" had nothing to offer. A line that begins a known
+     * command is completed as before; otherwise its last word is completed as
+     * a path, and the words before it are kept as typed.
+     */
+    public String autoComplete(String line) {
+        if (line == null || line.isEmpty()) return null;
+        final String command = completeCommand(line);
+        if (command != null) {
+            return command;
         }
+        final int start = lastWordStart(line);
+        final String word = line.substring(start);
+        if (word.isEmpty()) {
+            return null;
+        }
+        final boolean firstWord = line.substring(0, start).isBlank();
+        if (firstWord && !looksLikePath(word)) {
+            return null;
+        }
+        final String completed = autoCompletePath(word);
+        return completed == null ? null : line.substring(0, start) + completed;
+    }
+
+    private static boolean looksLikePath(String word) {
+        return word.contains("/") || word.contains("\\") || word.startsWith("~")
+            || word.startsWith(".") || word.startsWith("\"");
+    }
+
+    /** Where the last word starts: after the last blank that is not inside quotes. */
+    private static int lastWordStart(String line) {
+        int start = 0;
+        boolean quoted = false;
+        for (int i = 0; i < line.length(); i++) {
+            final char c = line.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (!quoted && Character.isWhitespace(c)) {
+                start = i + 1;
+            }
+        }
+        return start;
+    }
+
+    /** The known command the line begins, as far as the candidates agree; null when none. */
+    private String completeCommand(String prefix) {
         // knownCommands is a concurrent set, whose order is arbitrary: findFirst
         // completed ":r" to whichever of hundreds of ":root ..." entries the hash
         // put first, differently from one run to the next. Completion now goes
@@ -1622,7 +1760,7 @@ public class CommandRouter {
             .sorted()
             .toList();
         if (matches.isEmpty()) {
-            return "";
+            return null;
         }
         if (matches.size() == 1) {
             return matches.get(0);
@@ -1639,38 +1777,42 @@ public class CommandRouter {
     }
 
     /**
-     * Completes a path being typed.
+     * Completes a path being typed, or returns null when nothing matches.
      *
      * Both separators count on every system: a Windows user types ~\\ and a
      * WSL user types ~/ against the same tree, and only the second used to be
-     * expanded. A name that cannot be a path -- a glob still being typed, a
-     * quote -- is returned untouched rather than throwing.
+     * expanded. A name that cannot be a path -- a glob still being typed --
+     * gives null rather than throwing.
+     *
+     * The folder part is kept as it was typed, so a relative path stays
+     * relative and ~ stays ~; it used to come back absolute. A name holding a
+     * blank is put in quotes, so the word stays one word.
      */
     private String autoCompletePath(String prefix) {
-        final boolean onDirectory = prefix.endsWith("/") || prefix.endsWith("\\");
-        String typedText = com.sphere.core.fs.FsSupport.expandHome(prefix);
-
-        final Path typed;
-        try {
-            typed = Paths.get(typedText);
-        } catch (java.nio.file.InvalidPathException notAPath) {
-            return prefix;
+        final boolean quotedAlready = prefix.startsWith("\"");
+        String word = quotedAlready ? prefix.substring(1) : prefix;
+        if (word.endsWith("\"")) {
+            word = word.substring(0, word.length() - 1);
         }
+        if (word.equals("~")) {
+            return "~" + File.separator;
+        }
+        final int cut = Math.max(word.lastIndexOf('/'), word.lastIndexOf('\\'));
+        final String typedFolder = word.substring(0, cut + 1);
+        final String lastPart = word.substring(cut + 1);
 
         final Path base;
-        final String lastPart;
-        if (onDirectory) {
-            base = typed.isAbsolute() ? typed : currentDirectory.resolve(typed);
-            lastPart = "";
-        } else {
-            base = typed.isAbsolute() ? typed.getParent()
-                                      : currentDirectory.resolve(typed).getParent();
-            lastPart = typed.getFileName() != null ? typed.getFileName().toString() : "";
+        try {
+            final Path folder = Paths.get(typedFolder.isEmpty() ? "."
+                : com.sphere.core.fs.FsSupport.expandHome(typedFolder));
+            base = folder.isAbsolute() ? folder : currentDirectory.resolve(folder);
+        } catch (java.nio.file.InvalidPathException notAPath) {
+            return null;
         }
-        if (base == null || !Files.isDirectory(base)) return prefix;
+        if (!Files.isDirectory(base)) return null;
 
         String[] names = base.toFile().list();
-        if (names == null) return prefix;
+        if (names == null) return null;
         java.util.Arrays.sort(names);
 
         String chosen = firstStartingWith(names, lastPart, false);
@@ -1679,10 +1821,18 @@ public class CommandRouter {
             // have matched, so the second pass keeps the two behaving alike.
             chosen = firstStartingWith(names, lastPart, true);
         }
-        if (chosen == null) return prefix;
+        if (chosen == null) return null;
 
-        Path completed = base.resolve(chosen);
-        return Files.isDirectory(completed) ? completed + File.separator : completed.toString();
+        final boolean folder = Files.isDirectory(base.resolve(chosen));
+        final boolean quote = quotedAlready || (typedFolder + chosen).chars().anyMatch(Character::isWhitespace);
+        // The separator the user writes with, or the system's when none was typed
+        // yet; "/" inside quotes, where a backslash before the closing quote
+        // would escape it.
+        final String separator = quote ? "/"
+                               : typedFolder.isEmpty() ? File.separator
+                               : typedFolder.substring(typedFolder.length() - 1);
+        final String completed = typedFolder + chosen + (folder ? separator : "");
+        return quote ? "\"" + completed + "\"" : completed;
     }
 
     private static String firstStartingWith(String[] names, String part, boolean ignoringCase) {

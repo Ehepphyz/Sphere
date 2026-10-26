@@ -1332,19 +1332,43 @@ public final class RootPipelineWindow extends JFrame {
             return;
         }
         final List<String> commands = chain.commands();
-        say("Replaying " + commands.size() + " commands...", false);
+        working(true, "Replaying " + commands.size() + " commands...");
         AppLogger.info("Chain " + chain.name + ": replaying " + commands.size() + " commands.");
-        for (String one : commands) {
-            AppLogger.raw("  " + one);
-            com.sphere.core.CommandRouter router = com.sphere.core.CommandRouter.active();
-            if (router == null) {
-                say("No command router is available to replay it.", true);
-                return;
+
+        // Off the event thread: each stage waits for the engine's answer, and a
+        // stage that runs the event loop waits for the whole dataset, so the
+        // window froze until the chain had been replayed.
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                for (String one : commands) {
+                    AppLogger.raw("  " + one);
+                    com.sphere.core.CommandRouter router = com.sphere.core.CommandRouter.active();
+                    if (router == null) {
+                        return "No command router is available to replay it.";
+                    }
+                    router.processInput(one);
+                }
+                return null;
             }
-            router.processInput(one);
-        }
-        say("The chain has been replayed. :root rdf report " + chain.frame()
-            + " says what each cut kept.", false);
+
+            @Override
+            protected void done() {
+                working(false, null);
+                String failure;
+                try {
+                    failure = get();
+                } catch (Exception stopped) {
+                    failure = "The replay stopped: " + stopped.getMessage();
+                }
+                if (failure != null) {
+                    say(failure, true);
+                    return;
+                }
+                say("The chain has been replayed. :root rdf report " + chain.frame()
+                    + " says what each cut kept.", false);
+            }
+        }.execute();
     }
 
     /** Opens a chain that was saved earlier. */
@@ -1916,7 +1940,7 @@ public final class RootPipelineWindow extends JFrame {
         if (findings.isEmpty()) {
             return;
         }
-        com.sphere.ui.QuickCodeEditorFrame frame =
+        com.sphere.ui.SphereCoderFrame frame =
             com.sphere.ui.WindowManager.showFileInEditor(file);
         if (frame != null) {
             frame.getEditor().showDiagnostics(file, findings);

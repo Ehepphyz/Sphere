@@ -49,7 +49,9 @@ public class CopyMovePlugin implements CommandRouter.CommandPlugin {
         for (int i = 1; i < tokens.size(); i++) {
             String t = tokens.get(i);
             if (t.equals("--help")) { usage(name, moving); return; }
-            if (t.startsWith("-") && t.length() > 1 && !Files.exists(Paths.get(t))) {
+            // A file named "-x" is looked for where the console is, not where
+            // the JVM was started.
+            if (t.startsWith("-") && t.length() > 1 && !Files.exists(FsSupport.resolve(router, t))) {
                 for (int k = 1; k < t.length(); k++) {
                     switch (t.charAt(k)) {
                         case 'r': case 'R': recursive = true; break;
@@ -75,6 +77,16 @@ public class CopyMovePlugin implements CommandRouter.CommandPlugin {
         if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
             AppLogger.error("Source not found: " + source);
             return;
+        }
+        // A move deletes its source, so it is held to the guards of :rm: the
+        // home directory or a system tree could be moved away, and across two
+        // volumes that meant copied and then deleted.
+        if (moving) {
+            String reason = FsSupport.protectedReason(source);
+            if (reason != null) {
+                AppLogger.error("Refusing to move " + source + ": this is " + reason + ".");
+                return;
+            }
         }
         if (Files.isDirectory(source) && !recursive && !moving) {
             AppLogger.error(source.getFileName() + " is a directory. Use  :cp -r  to copy it.");
@@ -134,14 +146,21 @@ public class CopyMovePlugin implements CommandRouter.CommandPlugin {
         try {
             Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
         } catch (AtomicMoveNotSupportedException | DirectoryNotEmptyException crossDevice) {
-            // Different volumes, or a non empty directory: copy then delete
-            copyTree(source, target);
+            // Different volumes, or a non empty directory: copy then delete.
+            // The copy stops at the first entry it cannot read: skipped and
+            // then deleted with the rest of the source, that entry was lost.
+            copyTree(source, target, true);
             deleteTree(source);
         }
         return "Moved to " + target;
     }
 
     private String copyTree(Path source, Path target) throws IOException {
+        return copyTree(source, target, false);
+    }
+
+    /** strict: an entry that cannot be read fails the copy instead of being skipped. */
+    private String copyTree(Path source, Path target, boolean strict) throws IOException {
         long[] tally = new long[2];
         if (Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
             Files.walkFileTree(source, new SimpleFileVisitor<>() {
@@ -164,7 +183,11 @@ public class CopyMovePlugin implements CommandRouter.CommandPlugin {
                 }
 
                 @Override
-                public FileVisitResult visitFileFailed(Path file, IOException e) {
+                public FileVisitResult visitFileFailed(Path file, IOException e) throws IOException {
+                    if (strict) {
+                        throw new IOException("could not read " + file + " (" + e.getMessage()
+                                              + "); the source was left as it was", e);
+                    }
                     AppLogger.error("Skipped " + file + ": " + e.getMessage());
                     return FileVisitResult.CONTINUE;
                 }

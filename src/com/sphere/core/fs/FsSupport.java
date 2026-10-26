@@ -434,10 +434,29 @@ public final class FsSupport {
      * accepts on Unix, so a walk that stops on the first refusal empties the
      * tree on one system and half of it on the other. This one keeps going and
      * hands back the paths it had to leave, so the caller says what remains.
+     *
+     * A folder that leads somewhere else is removed as the link it is. Java
+     * reports a Windows junction as a plain folder, so the walk used to go
+     * through it and empty what it pointed to: ":rm -r" on a project holding a
+     * junction to a data area deleted the data area.
      */
     public static List<Path> deleteTree(Path root) throws IOException {
         final List<Path> refused = new ArrayList<>();
         Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir,
+                                                     java.nio.file.attribute.BasicFileAttributes attrs) {
+                if (!isLinkedFolder(dir, attrs)) {
+                    return FileVisitResult.CONTINUE;
+                }
+                try {
+                    Files.delete(dir);              // the junction itself, not its target
+                } catch (IOException held) {
+                    refused.add(dir);
+                }
+                return FileVisitResult.SKIP_SUBTREE;
+            }
+
             @Override
             public FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) {
                 try {
@@ -471,6 +490,50 @@ public final class FsSupport {
             }
         });
         return refused;
+    }
+
+    /**
+     * True when a folder met during a walk is a link to another place: a
+     * Windows junction or mount point, which Java does not report as a link.
+     *
+     * Only an entry the system marks as special (isOther) is looked at closer,
+     * so a plain tree costs nothing more and Unix, which has no junctions, is
+     * never asked. The real path then tells a junction from a folder that only
+     * carries a reparse point of its own, as OneDrive's do. A real path that
+     * cannot be read counts as a link: stopping there is the safe side.
+     */
+    public static boolean isLinkedFolder(Path dir, java.nio.file.attribute.BasicFileAttributes attrs) {
+        if (attrs.isSymbolicLink()) {
+            return true;
+        }
+        if (!attrs.isOther()) {
+            return false;
+        }
+        try {
+            return pointsElsewhere(dir);
+        } catch (IOException unreadable) {
+            return true;
+        }
+    }
+
+    /**
+     * True when a folder entry leads somewhere else than where it sits: a
+     * symbolic link, or a Windows junction. Its real path is then not its
+     * parent's real path plus its name.
+     */
+    public static boolean pointsElsewhere(Path entry) throws IOException {
+        if (Files.isSymbolicLink(entry)) {
+            return true;
+        }
+        final Path absolute = entry.toAbsolutePath().normalize();
+        final Path parent = absolute.getParent();
+        if (parent == null || absolute.getFileName() == null) {
+            return false;
+        }
+        final String expected = parent.toRealPath().resolve(absolute.getFileName().toString()).toString();
+        final String real = absolute.toRealPath().toString();
+        final boolean windows = java.io.File.separatorChar == '\\';
+        return windows ? !real.equalsIgnoreCase(expected) : !real.equals(expected);
     }
 
     /** The first few of what a delete left behind, for one line of report. */

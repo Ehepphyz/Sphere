@@ -185,8 +185,8 @@ public final class ContribCitations {
         component("valencia", "ValenciaPlugin", "Valencia jet algorithm", VALENCIA, VLC);
         component("variabler", "VariableR", "variable-R jets", VARIABLE_R);
         component("ifn", "IFNPlugin", "Interleaved Flavour Neutralisation", IFN);
-        component("cmp", "CMPPlugin", "CMP flavoured anti-kt", CMP, IFN);
-        component("ghs", "GHSAlgo", "GHS flavour dressing", GHS, GHS_ERRATUM, IFN);
+        component("cmp", "CMPPlugin", "CMP flavored anti-kt", CMP, IFN);
+        component("ghs", "GHSAlgo", "GHS flavor dressing", GHS, GHS_ERRATUM, IFN);
         component("sdf", "SDFPlugin", "Soft Drop Flavour", SDF);
     }
 

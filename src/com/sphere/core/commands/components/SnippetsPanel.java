@@ -24,7 +24,7 @@ import com.sphere.theme.ThemeManager;
 import com.sphere.theme.ThemePalette;
 import com.sphere.utils.AppLogger;
 import com.sphere.utils.IconManager;
-import com.sphere.ui.QuickCodeEditorFrame;
+import com.sphere.ui.SphereCoderFrame;
 
 public class SnippetsPanel extends JPanel {
 
@@ -33,7 +33,7 @@ public class SnippetsPanel extends JPanel {
     private JLabel statusLabel;
     private JTextField filterField;
     private JTextField targetField;
-    private QuickCodeEditorFrame editorFrame;
+    private SphereCoderFrame editorFrame;
 
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
     private final Path rootPath = Paths.get("snippets").toAbsolutePath().normalize();
@@ -157,7 +157,7 @@ public class SnippetsPanel extends JPanel {
 
     // Append inside the SnippetsPanel class hierarchy
 
-    public SnippetsPanel(JTextField targetField, QuickCodeEditorFrame editorFrame) {
+    public SnippetsPanel(JTextField targetField, SphereCoderFrame editorFrame) {
         this.targetField = targetField;
         this.editorFrame = editorFrame;
 

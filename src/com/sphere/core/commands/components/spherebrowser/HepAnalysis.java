@@ -1072,7 +1072,7 @@ public final class HepAnalysis {
         r.kind = "h1";
         r.className = "TH1D";
         r.name = a.name + "_over_" + b.name;
-        r.title = a.name + " / " + b.name + " (normalised)";
+        r.title = a.name + " / " + b.name + " (normalized)";
         r.x = a.x;
         r.yTitle = "ratio";
         r.v = new double[a.nx()];

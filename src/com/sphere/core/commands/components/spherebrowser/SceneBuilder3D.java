@@ -1051,10 +1051,10 @@ public final class SceneBuilder3D {
             s.palette = scale;
             s.valueLo = 0;
             s.valueHi = 1;
-            s.valueTitle = "colour scale";
+            s.valueTitle = "color scale";
             s.axisTitle[2] = "decoded value";
-            s.notes.add("colours read back on the " + scaleName + " scale: the heights are the plot's values "
-                + "(as a fraction of its colour bar)");
+            s.notes.add("colors read back on the " + scaleName + " scale: the heights are the plot's values "
+                + "(as a fraction of its color bar)");
         }
         return s;
     }

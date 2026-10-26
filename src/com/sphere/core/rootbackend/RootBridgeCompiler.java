@@ -231,9 +231,7 @@ public final class RootBridgeCompiler {
                 return binaryPath.toAbsolutePath().toString();
             }
 
-            AppLogger.info(built == null
-                ? "root-bridge was built before source tracking existed; rebuilding once."
-                : "The C++ sources changed since root-bridge was built; rebuilding.");
+            // Rebuilt without a word: the build's own progress says enough
             try {
                 Files.delete(binaryPath);
             } catch (IOException e) {

@@ -545,7 +545,7 @@ contains
     end if
   end function continuation
 
-  !> x f(x, Q^2) of one member (0 is the central one); 0 for a flavour the set does not carry.
+  !> x f(x, Q^2) of one member (0 is the central one); 0 for a flavor the set does not carry.
   real(real64) function spx_xfxq2(pdf, pid, x, q2, member) result(value)
     type(spx_pdf), intent(in) :: pdf
     integer, intent(in) :: pid

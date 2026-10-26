@@ -42,6 +42,13 @@ public class CppBackend implements Backend {
     private Process currentProcess;
     private final SettingsManager settings;
     private CppFormatterEngine formatterEngine;
+    /**
+     * CPP_RUN_TIMEOUT in settings.conf: how long a program may run, 0 (the
+     * default) for as long as it takes. It used to be 120 s, the only way a
+     * program could be stopped; :kill cpp-run does that now. A build keeps its
+     * own 120 s.
+     */
+    private final long runTimeoutSeconds;
 
     /**
      * Registers one toolchain from the path settings.conf gives for it. Absent or
@@ -63,6 +70,8 @@ public class CppBackend implements Backend {
 
     public CppBackend() {
         this.settings = new SettingsManager();
+        this.runTimeoutSeconds = com.sphere.core.python.PythonBackend.timeoutSeconds(
+            settings, "CPP_RUN_TIMEOUT", 0L);
         this.intellisenseBackend = new CppIntellisenseBackend();
         String os = System.getProperty("os.name").toLowerCase();
 
@@ -130,7 +139,8 @@ public class CppBackend implements Backend {
     public void execute(String args, boolean logCommand) {
         CppProcessRunner.CppResult result = executeAndReturn(args, logCommand);
         if (result.timedOut()) {
-            AppLogger.error("C++ pipeline timed out.");
+            // Already said by the runner, with how long it waited and how to change it.
+            return;
         } else if (result.exitCode() != 0 && !result.getStderr().isEmpty()) {
             AppLogger.error("C++ pipeline failed with exit code " + result.exitCode());
         }
@@ -759,6 +769,13 @@ public class CppBackend implements Backend {
             // it is followed while it runs.
             final com.sphere.core.telemetry.ProcessMemory.Watcher memory =
                 isCompileStep ? null : com.sphere.core.telemetry.ProcessMemory.watch(process);
+            // Named in the table :kill reads, as a shell command is: nothing but
+            // the timeout could stop a program before.
+            final com.sphere.core.commandrouterincludes.CommandContext table =
+                com.sphere.core.python.PythonBackend.processTable();
+            final String token = table == null ? null
+                : table.registerProcess(isCompileStep ? "cpp-build" : "cpp-run", process);
+            final long timeout = isCompileStep ? TIMEOUT_SECONDS : runTimeoutSeconds;
 
             CompletableFuture<Void> stdoutTask = CompletableFuture.runAsync(() -> {
                 try (BufferedReader reader = new BufferedReader(
@@ -797,16 +814,27 @@ public class CppBackend implements Backend {
             }, EXECUTOR);
 
             try {
-                process.onExit().orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
+                CompletableFuture<Process> exit = process.onExit();
+                if (timeout > 0) {
+                    exit = exit.orTimeout(timeout, TimeUnit.SECONDS);
+                }
+                exit.join();
                 exitCode = process.exitValue();
                 errorOccurred = (exitCode != 0);
             } catch (CompletionException ex) {
                 if (ex.getCause() instanceof TimeoutException) {
                     timedOut = true;
                     errorOccurred = true;
+                    process.descendants().forEach(ProcessHandle::destroyForcibly);
                     process.destroyForcibly();
+                    AppLogger.error((isCompileStep ? "The build" : "The program") + " was stopped after "
+                                    + timeout + " s" + (isCompileStep ? "."
+                                    : " (CPP_RUN_TIMEOUT in settings.conf, 0 for no limit)."));
                 }
             } finally {
+                if (table != null) {
+                    table.unregisterProcess(token, process);
+                }
                 // Safeguard boundary: Clean up volatile state references smoothly
                 synchronized (CppBackend.this) {
                     if (currentProcess == process) {

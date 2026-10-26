@@ -50,49 +50,22 @@ public class SecurityManager {
     }
 
     /**
-     * Inspects incoming execution syntax against critical keywords,
-     * benign system flags, and the local installed package metadata ecosystem.
+     * Whether a line typed at the console, or a tool path from settings.conf,
+     * may be run: anything that is not blank.
+     *
+     * It used to refuse everything whose first word was not an installed pip
+     * package and that was not written out in trusted_commands.src, and every
+     * line that merely contained "open(" or "socket". That stopped ordinary
+     * work -- ":py script.py", ":cpp main.cpp", a ":julia" one-liner, clangd's
+     * own path, the configured cmake -- and protected nothing: the same code
+     * ran unexamined through "::py [@ ...]", the shell fallback and the
+     * Terminal tab, and __import__('os').system went round the word list.
+     * What the user types is theirs to run, as in any shell. Keeping untrusted
+     * code away from the machine would take a separate, restricted process,
+     * not a list of words.
      */
     public static boolean isCommandSafe(String code) {
-        if (code == null || code.trim().isEmpty()) {
-            return false;
-        }
-
-        String cleaned = code.trim();
-
-        // Tier 1: Bypass completely if explicitly logged inside trusted list
-        if (isTrustedCommand(cleaned)) {
-            AppLogger.info("Security: Trusted command bypass active for: " + cleaned);
-            return true;
-        }
-
-        // Tier 2: Intercept global hard-blocked keywords to protect the underlying host runtime
-        String[] forbiddenKeywords = {"eval(", "exec(", "subprocess", "socket", "open("};
-        for (String keyword : forbiddenKeywords) {
-            if (cleaned.contains(keyword)) {
-                AppLogger.error("Security: Command blocked for safety reasons. '" + keyword + "' is dangerous.");
-                return false;
-            }
-        }
-
-        // Tier 3: Handle direct, informational Python CLI options (e.g., -V, --version, --help)
-        if (cleaned.startsWith("-") || cleaned.equalsIgnoreCase("help()")) {
-            return true;
-        }
-
-        // Tier 4: Modular package execution routing (e.g., allow ":py pip list" if "pip" is whitelisted)
-        // Tokenize command context to isolate the targeted execution hook token
-        String[] tokens = cleaned.split("\\s+");
-        if (tokens.length > 0) {
-            String baseModule = tokens[0];
-            if (isModuleAllowed(baseModule)) {
-                return true;
-            }
-        }
-
-        // Fallback catch-all error handling
-        //AppLogger.error("Security: Command blocked for safety reasons. '" + cleaned + "' is not whitelisted.");
-        return false; 
+        return code != null && !code.trim().isEmpty();
     }
 
     /**
@@ -112,29 +85,6 @@ public class SecurityManager {
                     .anyMatch(line -> line.equalsIgnoreCase(module.trim()));
         } catch (IOException e) {
             AppLogger.error("Error reading whitelist: " + e.getMessage());
-            return false;
-        }
-    }
-
-    private static boolean isTrustedCommand(String code) {
-        if (code == null || code.isEmpty()) {
-            return false;
-        }
-
-        final String cleanedCode = code.trim().replaceAll("^\"|\"$", "");
-
-        try {
-            File trustedFile = new File(TRUSTED_FILE);
-            if (!trustedFile.exists()) {
-                return false;
-            }
-
-            try (java.util.stream.Stream<String> lines = Files.lines(trustedFile.toPath())) {
-                return lines.anyMatch(line -> line.trim().equals(cleanedCode));
-            }
-
-        } catch (IOException e) {
-            AppLogger.error("Security: Failed to read trusted_commands.src: " + e.getMessage());
             return false;
         }
     }

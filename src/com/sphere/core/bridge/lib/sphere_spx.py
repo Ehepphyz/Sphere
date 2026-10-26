@@ -285,7 +285,7 @@ class PDFSet:
         return i(x, q2)
 
     def xfxQ2(self, pid, x, q2, member=0):
-        """x f(x, Q^2) of one member; 0 for a flavour the set does not carry."""
+        """x f(x, Q^2) of one member; 0 for a flavor the set does not carry."""
         f = self._lookup.get(pid, -1)
         if f < 0 or member < 0 or member >= self.nm or x <= 0.0 or q2 <= 0.0:
             return 0.0
