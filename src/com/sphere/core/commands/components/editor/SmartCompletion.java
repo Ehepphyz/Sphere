@@ -351,9 +351,21 @@ public final class SmartCompletion implements CompletionProvider {
             addFixed(out, typed, k, EditorIcons.Kind.KEYWORD, "keyword", 40, null);
         }
         for (String t : lang.types) {
-            KnowledgeBase.Member ctor = KnowledgeBase.member("ROOT", t);
+            KnowledgeBase.Member ctor = KnowledgeBase.constructor(t);
             String doc = ctor != null ? ctor.signature() + "\n" + ctor.doc : null;
             addFixed(out, prefix, t, EditorIcons.Kind.TYPE, KnowledgeBase.knows(t) ? "class" : "type", 38, doc);
+        }
+        // Geant4's classes once "G4" is typed: the catalog is read on that first G4
+        if (lang == LanguageSpec.CPP && prefix.length() >= 2 && prefix.regionMatches(true, 0, "G4", 0, 2)) {
+            KnowledgeBase.loadGeant4();
+            for (String t : KnowledgeBase.geant4Classes()) {
+                if (!t.regionMatches(true, 0, prefix, 0, Math.min(prefix.length(), 3))) {
+                    continue;
+                }
+                KnowledgeBase.Member ctor = KnowledgeBase.constructor(t);
+                String doc = ctor == null ? null : t + ctor.params + "\n" + ctor.doc.replace(" ¶ ", "\n");
+                addFixed(out, prefix, t, EditorIcons.Kind.CLASS, "Geant4", 37, doc);
+            }
         }
         for (String c : lang.constants) {
             addFixed(out, prefix, c, EditorIcons.Kind.CONSTANT, "constant", 34, null);

@@ -47,13 +47,13 @@ public class Sphere extends JFrame {
      */
 
     /** Sphere itself (:version). */
-    public static final String VERSION = "v2026.1.9.0";
+    public static final String VERSION = "v2026.2.1.0";
 
     // ---- FastJet, SISCone and fjcontrib, ported to Java ----------------------------
     /** The FastJet release the Java port follows. */
     public static final String FASTJET_VERSION = "3.5.2";
     /** Sphere's Java port of FastJet. */
-    public static final String FASTJET_JAVA_PORT_VERSION = "1.0.0.0";
+    public static final String FASTJET_JAVA_PORT_VERSION = "1.1.2.0";
     /** SISCone as FastJet ships it. */
     public static final String SISCONE_VERSION = "3.1.3";
     /** The fjcontrib release the Java port follows. */
@@ -92,17 +92,23 @@ public class Sphere extends JFrame {
     /** HEPMC3_VERSION_CODE of that release: 1000000*major + 1000*minor + patch. */
     public static final int HEPMC3_VERSION_CODE = 3003001;
     /** Sphere's Java port of HepMC3. */
-    public static final String HEPMC3_JAVA_PORT_VERSION = "1.0.0";
+    public static final String HEPMC3_JAVA_PORT_VERSION = "1.2.0";
+
+    // ---- CLHEP, ported to Java -----------------------------------------------------
+    /** The CLHEP release translated, as CLHEP::Version::String() says it. */
+    public static final String CLHEP_VERSION = "2.4.7.2";
+    /** Sphere's Java port of CLHEP: bit for bit the C++ (MinGW-w64; the engines also against g++ on Linux). */
+    public static final String CLHEP_JAVA_PORT_VERSION = "1.2.1";
 
     // ---- Minuit2, ported to Java ---------------------------------------------------
     /** The ROOT sources whose math/minuit2 is translated (the root-master of ROOT_SOURCES_VERSION). */
     public static final String MINUIT2_SOURCES_VERSION = "6.41/01";
     /** Sphere's Java port of Minuit2: bit for bit the C++ on Windows (MinGW) and Linux (g++). */
-    public static final String MINUIT2_JAVA_PORT_VERSION = "1.0.0";
+    public static final String MINUIT2_JAVA_PORT_VERSION = "2.1.0";
 
     // ---- LHAPDF ------------------------------------------------------------------------
     /** Sphere's Java reader of LHAPDF sets. */
-    public static final String LHAPDF_JAVA_PORT_VERSION = "1.0.0.0";
+    public static final String LHAPDF_JAVA_PORT_VERSION = "2.3.1.0";
 
     // ---- ROOT files, read and written by Sphere without ROOT ----------------------
     /** The ROOT sources (root-master) Sphere's ROOT reader and writer follow. */

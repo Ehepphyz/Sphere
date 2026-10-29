@@ -773,6 +773,8 @@ public final class TGeoWriter {
                     return pcon(s, box, tag.equals("polyhedra"));
                 case "genericPolycone":
                     return genericPolycone(s, box);
+                case "genericPolyhedra":
+                    return genericPolyhedra(s, box);
                 case "xtru":
                     return xtru(s, box);
                 case "paraboloid": {
@@ -996,6 +998,27 @@ public final class TGeoWriter {
                 pmax[i] = planes.get(i)[2] / 10;
             }
             return pconShape(s.name(), box, false, 0, s.v("startphi"), s.v("deltaphi"), pmin, pmax, pz);
+        }
+
+        /**
+         * A G4Polyhedra given by its (r, z) corners: a TGeoPgon when the contour allows planes, its radii
+         * brought from the corners to the sides as TGeoPgon takes them; its tessellated surface otherwise.
+         */
+        RObject genericPolyhedra(Solid s, BBox box) {
+            final List<double[]> planes = SolidConversions.polyconePlanes(s);
+            if (planes == null) {
+                warn("polyhedra " + s.name() + " has a contour no planes follow: written as its tessellated surface");
+                return fromMesh(s, box);
+            }
+            final int sides = (int) Math.round(s.v("numsides"));
+            final double toSide = Math.cos(s.v("deltaphi") / sides / 2);
+            final double[] pz = new double[planes.size()], pmin = new double[planes.size()], pmax = new double[planes.size()];
+            for (int i = 0; i < planes.size(); i++) {
+                pz[i] = planes.get(i)[0] / 10;
+                pmin[i] = planes.get(i)[1] * toSide / 10;
+                pmax[i] = planes.get(i)[2] * toSide / 10;
+            }
+            return pconShape(s.name(), box, true, sides, s.v("startphi"), s.v("deltaphi"), pmin, pmax, pz);
         }
 
         /** G4ExtrudedSolid as TGeoXtru, its polygon clockwise as TGeoXtru::DefinePolygon expects it. */

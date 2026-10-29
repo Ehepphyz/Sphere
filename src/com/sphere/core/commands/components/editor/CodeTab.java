@@ -139,6 +139,8 @@ public class CodeTab extends JPanel {
 
     private final Timer previewDebounceTimer;
     private final Timer autoSaveTimer;
+    /** False where saving waits for the user's word (G4code asks before writing its files). */
+    private boolean autoSave = true;
     private final EditorWidgets.FlatButton runButton;
     private final EditorWidgets.FlatButton previewButton;
 
@@ -445,7 +447,7 @@ public class CodeTab extends JPanel {
         if (currentMode != EditorMode.PLAIN_TEXT) {
             previewDebounceTimer.restart();
         }
-        if (EditorState.flag(EditorState.AUTO_SAVE, false) && buffer.file != null) {
+        if (autoSave && EditorState.flag(EditorState.AUTO_SAVE, false) && buffer.file != null) {
             autoSaveTimer.restart();
         }
     }
@@ -830,21 +832,43 @@ public class CodeTab extends JPanel {
             String type = r == null ? null : SmartCompletion.typeOf(r, insight.result(), 0);
             KnowledgeBase.Member m = type == null ? null : KnowledgeBase.member(type, name);
             if (m == null && KnowledgeBase.knows(name)) {
-                KnowledgeBase.Member ctor = KnowledgeBase.member("ROOT", name);
+                KnowledgeBase.Member ctor = KnowledgeBase.constructor(name);
                 return "<span style='font-family:\"{mono}\";color:{fg}'>class <b>" + CodeTextPane.escape(name)
-                       + "</b></span>" + (ctor != null ? "<br>" + CodeTextPane.escape(ctor.doc) : "")
+                       + "</b>" + (ctor != null && ctor.params.length() > 2 ? CodeTextPane.escape(ctor.params) : "")
+                       + "</span>" + (ctor != null ? "<br>" + docHtml(ctor.doc) : "")
                        + " <span style='color:{muted}'>· " + KnowledgeBase.members(name).size() + " members known</span>";
             }
             if (m != null) {
                 return "<span style='font-family:\"{mono}\";color:{fg}'>" + CodeTextPane.escape(m.owner) + "::<b>"
                        + CodeTextPane.escape(m.name) + "</b>" + CodeTextPane.escape(m.params)
                        + (m.returns.isEmpty() ? "" : " → " + CodeTextPane.escape(m.returns)) + "</span>"
-                       + (m.doc.isEmpty() ? "" : "<br>" + CodeTextPane.escape(m.doc));
+                       + (m.doc.isEmpty() ? "" : "<br>" + docHtml(m.doc));
             }
         } catch (BadLocationException ignored) {
             // no description
         }
         return null;
+    }
+
+    /** A description; Geant4's parameter notes (after " ¶ ") go one per line, muted. */
+    private static String docHtml(String doc) {
+        int p = doc.indexOf(" ¶ ");
+        if (p < 0) {
+            return CodeTextPane.escape(doc);
+        }
+        StringBuilder sb = new StringBuilder(CodeTextPane.escape(doc.substring(0, p)));
+        for (String note : doc.substring(p + 3).split("; ")) {
+            int colon = note.indexOf(": ");
+            sb.append("<br><span style='color:{muted}'>");
+            if (colon > 0) {
+                sb.append("<b>").append(CodeTextPane.escape(note.substring(0, colon))).append("</b>")
+                  .append(CodeTextPane.escape(note.substring(colon)));
+            } else {
+                sb.append(CodeTextPane.escape(note));
+            }
+            sb.append("</span>");
+        }
+        return sb.toString();
     }
 
     // ---- Preview -----------------------------------------------------------
@@ -1506,6 +1530,17 @@ public class CodeTab extends JPanel {
 
     // Getters & Setters
     public boolean isModified() { return buffer.modified; }
+
+    /** Saves after each pause in typing when the preference says so; off, only an explicit save writes the file. */
+    public void setAutoSave(boolean on) {
+        autoSave = on;
+        if (!on) {
+            autoSaveTimer.stop();
+        }
+    }
+
+    /** The text as the file last had it (loaded or saved): what the unsaved changes are made against. */
+    public String getSavedText() { return buffer.savedText; }
     public File getFile() { return buffer.file; }
 
     /** Names the buffer's file (Save As, or a file loaded into an empty tab); every view follows. */

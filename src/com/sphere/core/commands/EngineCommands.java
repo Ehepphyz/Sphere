@@ -58,6 +58,7 @@ final class EngineCommands {
         else if (e == InProcessEngine.FJCONTRIB) fjcontrib();
         else if (e == InProcessEngine.HEPMC3) HepMCCommands.diagRows();
         else if (e == InProcessEngine.MINUIT2) Minuit2Commands.diagRows();
+        else if (e == InProcessEngine.CLHEP) ClhepCommands.diagRows();
         final InProcessEngine.Native cpp = e.findNative();
         row("C++", cpp == null ? e.nativeHint()
             : cpp.prefix() + (cpp.version() == null ? "" : ", version " + cpp.version()) + "; " + cpp.detail());

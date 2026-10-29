@@ -339,6 +339,29 @@ public final class Gdml {
                 c = ts;
                 notes.add("generic polycone " + s.name() + " written as its tessellated surface (no polycone follows it)");
             }
+        } else if (s.tag().equals("genericPolyhedra") && s.error() == null) {
+            final List<double[]> planes = SolidConversions.polyconePlanes(s);
+            if (planes != null) {
+                // z planes take the distance to the sides, the corners scaled by cos(step / 2)
+                final double toSide = Math.cos(s.v("deltaphi") / Math.round(s.v("numsides")) / 2);
+                c = Solids.create("polyhedra", s.name());
+                c.set("startphi", Units.exact(s.v("startphi")));
+                c.set("deltaphi", Units.exact(s.v("deltaphi")));
+                c.set("numsides", String.valueOf(Math.round(s.v("numsides"))));
+                final Solid.Table t = c.table("zplane");
+                t.clear();
+                for (double[] pl : planes) {
+                    t.add(Units.exact(pl[1] * toSide), Units.exact(pl[2] * toSide), Units.exact(pl[0]));
+                }
+                notes.add("polyhedra " + s.name() + " given by its corners written as the polyhedra of the same planes");
+            } else {
+                final SolidConversions.Surface t = SolidConversions.surface(s, 2);
+                final Tessellated ts = new Tessellated(s.name());
+                ts.setSurface(t.vertices(), t.facets());
+                exactTable(ts.table("vertex"), t.vertices());
+                c = ts;
+                notes.add("polyhedra " + s.name() + " written as its tessellated surface (no planes follow its corners)");
+            }
         } else {
             c = s.copy(s.name());
             numbers(s, c);

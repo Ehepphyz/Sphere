@@ -83,8 +83,9 @@ public final class ConsoleContextMenu {
     private final JMenuItem rootRebuild   = ConsoleMenuFactory.item("Rebuild ROOT Bridge");
     private final JMenuItem rootEnv       = ConsoleMenuFactory.item("Print ROOT Environment");
 
-    // The references ROOT, FastJet, fjcontrib and LHAPDF ask for, shown on
-    // demand rather than printed as banners into the output.
+    // The references ROOT, FastJet, fjcontrib, HepMC3, LHAPDF, Minuit2, CLHEP
+    // and Geant4 ask for, shown on demand rather than printed as banners into
+    // the output.
     private final JMenu citationsMenu     = ConsoleMenuFactory.submenu("Citations");
     private final JMenuItem citeRoot      = ConsoleMenuFactory.item("Citation ROOT");
     private final JMenuItem citeFastJet   = ConsoleMenuFactory.item("Citation FastJet");
@@ -92,6 +93,8 @@ public final class ConsoleContextMenu {
     private final JMenuItem citeHepMC3    = ConsoleMenuFactory.item("Citation HepMC3");
     private final JMenuItem citeLhapdf    = ConsoleMenuFactory.item("Citation LHAPDF");
     private final JMenuItem citeMinuit2   = ConsoleMenuFactory.item("Citation Minuit2");
+    private final JMenuItem citeClhep     = ConsoleMenuFactory.item("Citation CLHEP");
+    private final JMenuItem citeGeant4    = ConsoleMenuFactory.item("Citation Geant4");
 
     // :py settings, offered only when settings.conf declares a Python.
     private final JMenuItem pythonManager = ConsoleMenuFactory.item("Python Manager");
@@ -160,6 +163,8 @@ public final class ConsoleContextMenu {
         citationsMenu.add(citeHepMC3);
         citationsMenu.add(citeLhapdf);
         citationsMenu.add(citeMinuit2);
+        citationsMenu.add(citeClhep);
+        citationsMenu.add(citeGeant4);
     }
 
     private void assemble() {
@@ -278,6 +283,10 @@ public final class ConsoleContextMenu {
             CitationDialog.show(popup.getInvoker(), "Citation Minuit2", com.sphere.core.minuit2.Minuit2Citations.text()));
         citeLhapdf.addActionListener(e ->
             CitationDialog.show(popup.getInvoker(), "Citation LHAPDF", LhapdfCitation.text()));
+        citeClhep.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation CLHEP", com.sphere.core.clhep.ClhepCitations.text()));
+        citeGeant4.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation Geant4", com.sphere.core.geant4.Geant4Citations.text()));
         // The release comes from root-config, which is a process: not on the EDT.
         citeRoot.addActionListener(e -> new SwingWorker<String, Void>() {
             @Override

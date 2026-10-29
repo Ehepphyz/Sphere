@@ -53,6 +53,10 @@ public final class NativeMath {
     private static String hostFailure = "";
 
     private static MethodHandle exp, log, log10, sin, cos, asin, atan, pow;
+    /** The other double functions (CLHEP's): tan, acos, sinh, cosh, tanh, atan2 and hypot (std::abs of a complex). */
+    private static MethodHandle tan, acos, sinh, cosh, tanh, atan2, hypot;
+    /** The float functions a C++ std::log, std::exp... of a float calls (CLHEP's RandExpZiggurat, Geometry). */
+    private static MethodHandle logf, expf, sinf, cosf, atan2f;
     private static MethodHandle sinl, cosl, asinl, powl;
     private static boolean longDoubleIsDouble;
     private static boolean hostReady;
@@ -160,9 +164,82 @@ public final class NativeMath {
         }
     }
 
+    public static double tan(double x) {
+        return target == Target.HOST ? call(tan, x) : StrictMath.tan(x);
+    }
+
+    public static double acos(double x) {
+        return target == Target.HOST ? call(acos, x) : StrictMath.acos(x);
+    }
+
+    public static double sinh(double x) {
+        return target == Target.HOST ? call(sinh, x) : StrictMath.sinh(x);
+    }
+
+    public static double cosh(double x) {
+        return target == Target.HOST ? call(cosh, x) : StrictMath.cosh(x);
+    }
+
+    public static double tanh(double x) {
+        return target == Target.HOST ? call(tanh, x) : StrictMath.tanh(x);
+    }
+
+    public static double atan2(double y, double x) {
+        if (target != Target.HOST) return StrictMath.atan2(y, x);
+        try {
+            return (double) atan2.invokeExact(y, x);
+        } catch (Throwable t) {
+            throw new IllegalStateException(t);
+        }
+    }
+
+    public static double hypot(double x, double y) {
+        if (target != Target.HOST) return StrictMath.hypot(x, y);
+        try {
+            return (double) hypot.invokeExact(x, y);
+        } catch (Throwable t) {
+            throw new IllegalStateException(t);
+        }
+    }
+
     private static double call(MethodHandle h, double x) {
         try {
             return (double) h.invokeExact(x);
+        } catch (Throwable t) {
+            throw new IllegalStateException(t);
+        }
+    }
+
+    /* ---- float ------------------------------------------------------------------ */
+
+    public static float logf(float x) {
+        return target == Target.HOST ? callf(logf, x) : (float) StrictMath.log(x);
+    }
+
+    public static float expf(float x) {
+        return target == Target.HOST ? callf(expf, x) : (float) StrictMath.exp(x);
+    }
+
+    public static float sinf(float x) {
+        return target == Target.HOST ? callf(sinf, x) : (float) StrictMath.sin(x);
+    }
+
+    public static float cosf(float x) {
+        return target == Target.HOST ? callf(cosf, x) : (float) StrictMath.cos(x);
+    }
+
+    public static float atan2f(float y, float x) {
+        if (target != Target.HOST) return (float) StrictMath.atan2(y, x);
+        try {
+            return (float) atan2f.invokeExact(y, x);
+        } catch (Throwable t) {
+            throw new IllegalStateException(t);
+        }
+    }
+
+    private static float callf(MethodHandle h, float x) {
+        try {
+            return (float) h.invokeExact(x);
         } catch (Throwable t) {
             throw new IllegalStateException(t);
         }
@@ -254,6 +331,22 @@ public final class NativeMath {
         atan = linker.downcallHandle(find(libm, "atan"), d1);
         pow = linker.downcallHandle(find(libm, "pow"),
             FunctionDescriptor.of(ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE));
+        tan = linker.downcallHandle(find(libm, "tan"), d1);
+        acos = linker.downcallHandle(find(libm, "acos"), d1);
+        sinh = linker.downcallHandle(find(libm, "sinh"), d1);
+        cosh = linker.downcallHandle(find(libm, "cosh"), d1);
+        tanh = linker.downcallHandle(find(libm, "tanh"), d1);
+        atan2 = linker.downcallHandle(find(libm, "atan2"),
+            FunctionDescriptor.of(ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE));
+        hypot = linker.downcallHandle(find(libm, "hypot"),
+            FunctionDescriptor.of(ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE));
+        final FunctionDescriptor f1 = FunctionDescriptor.of(ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT);
+        logf = linker.downcallHandle(find(libm, "logf"), f1);
+        expf = linker.downcallHandle(find(libm, "expf"), f1);
+        sinf = linker.downcallHandle(find(libm, "sinf"), f1);
+        cosf = linker.downcallHandle(find(libm, "cosf"), f1);
+        atan2f = linker.downcallHandle(find(libm, "atan2f"),
+            FunctionDescriptor.of(ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT));
         if (!x64) {
             // Apple Silicon and Windows on ARM: long double is double; Linux on aarch64 has a 128-bit
             // long double this class does not reach: its long double functions stay portable

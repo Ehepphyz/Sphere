@@ -411,6 +411,9 @@ final class ModelTree extends JPanel {
         public Component getTreeCellRendererComponent(JTree t, Object value, boolean sel, boolean expanded, boolean leaf,
                                                       int row, boolean hasFocus) {
             final JLabel l = (JLabel) super.getTreeCellRendererComponent(t, value, sel, expanded, leaf, row, hasFocus);
+            // The tree's UI paints the selected row itself, a light fill in the light theme: the text keeps the
+            // tree's colour, where the default renderer turned the selected one white
+            l.setForeground(t.getForeground());
             runs.clear();
             colours.clear();
             bold = false;

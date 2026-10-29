@@ -275,18 +275,24 @@ public final class RootPipelineManifest {
             return null;
         }
         try {
-            List<String> head = Files.readAllLines(source, StandardCharsets.UTF_8);
-            final int limit = Math.min(head.size(), 20);
-            for (int i = 0; i < limit; i++) {
-                // The prefix, not the whole marker: a source written by an
-                // earlier Sphere carries an earlier version number, and decode
-                // reads it, so it must still be recognized here.
-                if (head.get(i).startsWith(PREFIX)) {
-                    return decode(head.get(i));
-                }
-            }
+            return fromText(Files.readString(source, StandardCharsets.UTF_8));
         } catch (IOException | RuntimeException unreadable) {
             return null;
+        }
+    }
+
+    /** The same, from the text of a source rather than its file. */
+    public static RootPipelineManifest fromText(String source) {
+        if (source == null) {
+            return null;
+        }
+        for (String line : source.lines().limit(20).toList()) {
+            // The prefix, not the whole marker: a source written by an
+            // earlier Sphere carries an earlier version number, and decode
+            // reads it, so it must still be recognized here.
+            if (line.startsWith(PREFIX)) {
+                return decode(line);
+            }
         }
         return null;
     }

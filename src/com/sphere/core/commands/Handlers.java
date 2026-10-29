@@ -152,6 +152,7 @@ public class Handlers {
             case "fjcontrib", "contrib", "contribs", "fastjet-contrib" -> "fjco";
             case "fastjet", "jets" -> "fjet";
             case "hepmc3", "hepmc2", "hepevt", "lhef", "events" -> "hepmc";
+            case "evaluator", "genfun", "genericfunctions", "randomobjects" -> "clhep";
             case "fortran" -> "fort";
             case "javascript" -> "js";
             case "c++", "cxx" -> "cpp";

@@ -6,12 +6,14 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * What the editor knows of the libraries a physicist calls every day: ROOT's
- * classes, the C++ standard library, numpy, matplotlib, uproot, awkward. It
- * answers "what can follow h->" once the editor has read that h is a TH1F,
- * without a language server and without a network.
+ * classes, the C++ standard library, numpy, matplotlib, uproot, awkward, and
+ * Geant4's whole public API (read from Geant4Api the first time a G4 class is
+ * asked about). It answers "what can follow h->" once the editor has read
+ * that h is a TH1F, without a language server and without a network.
  */
 public final class KnowledgeBase {
 
@@ -44,8 +46,11 @@ public final class KnowledgeBase {
         }
     }
 
-    private static final Map<String, List<Member>> MEMBERS = new HashMap<>();
-    private static final Map<String, List<String>> PARENTS = new HashMap<>();
+    private static final Map<String, List<Member>> MEMBERS = new ConcurrentHashMap<>();
+    private static final Map<String, List<String>> PARENTS = new ConcurrentHashMap<>();
+    /** Geant4's constructors by class, the first documented one. */
+    private static final Map<String, Member> G4_CONSTRUCTORS = new ConcurrentHashMap<>();
+    private static volatile boolean geant4Loaded;
 
     /** Globals ROOT declares, and the class each one is. */
     public static final Map<String, String> ROOT_GLOBALS = Map.of(
@@ -897,7 +902,80 @@ merge(left, right, on=None) : Database-style join
     }
 
     public static boolean knows(String type) {
-        return type != null && MEMBERS.containsKey(normalize(type));
+        if (type == null) {
+            return false;
+        }
+        String t = normalize(type);
+        geant4(t);
+        return MEMBERS.containsKey(t);
+    }
+
+    /**
+     * Geant4's classes, members and constructors, registered the first time a
+     * G4 name is asked about: 3400 classes from the catalog Sphere carries.
+     */
+    private static void geant4(String type) {
+        if (geant4Loaded || type == null || !type.startsWith("G4")) {
+            return;
+        }
+        loadGeant4();
+    }
+
+    /** Reads the Geant4 catalog now (a window that will need it calls this off the event thread). */
+    public static void loadGeant4() {
+        if (geant4Loaded) {
+            return;
+        }
+        synchronized (G4_CONSTRUCTORS) {
+            if (geant4Loaded) {
+                return;
+            }
+            com.sphere.core.geant4.Geant4Api api = com.sphere.core.geant4.Geant4Api.get();
+            for (com.sphere.core.geant4.Geant4Api.ClassInfo c : api.classes()) {
+                if (MEMBERS.containsKey(c.name())) {
+                    continue;
+                }
+                List<Member> own = new ArrayList<>();
+                for (com.sphere.core.geant4.Geant4Api.Method m : c.methods()) {
+                    own.add(new Member(c.name(), m.name(), "(" + m.params() + ")", m.returns(), m.doc()));
+                }
+                List<String> parents = new ArrayList<>();
+                for (String b : c.bases()) {
+                    int lt = b.indexOf('<');
+                    parents.add(lt < 0 ? b : b.substring(0, lt));
+                }
+                PARENTS.put(c.name(), parents);
+                MEMBERS.put(c.name(), own);
+                Member ctor = null;
+                for (com.sphere.core.geant4.Geant4Api.Method m : c.constructors()) {
+                    if (ctor == null || (ctor.doc.isEmpty() && !m.doc().isEmpty())) {
+                        ctor = new Member(c.name(), c.name(), "(" + m.params() + ")", c.name(),
+                                          m.doc().isEmpty() ? c.doc() : m.doc());
+                    }
+                }
+                G4_CONSTRUCTORS.put(c.name(), ctor != null ? ctor
+                        : new Member(c.name(), c.name(), "", c.name(), c.doc()));
+            }
+            geant4Loaded = true;
+        }
+    }
+
+    /** The constructor of a ROOT or Geant4 class, or null: what hover and completion show for a class name. */
+    public static Member constructor(String cls) {
+        if (cls == null) {
+            return null;
+        }
+        Member root = member("ROOT", cls);
+        if (root != null) {
+            return root;
+        }
+        geant4(cls);
+        return G4_CONSTRUCTORS.get(cls);
+    }
+
+    /** Geant4's class names, once the catalog was read (empty before). */
+    public static java.util.Set<String> geant4Classes() {
+        return Collections.unmodifiableSet(G4_CONSTRUCTORS.keySet());
     }
 
     /** Members of a class with its bases', the class's own first. */
@@ -906,7 +984,9 @@ merge(left, right, on=None) : Database-style join
             return List.of();
         }
         Map<String, Member> out = new LinkedHashMap<>();
-        collect(normalize(type), out, 0);
+        String t = normalize(type);
+        geant4(t);
+        collect(t, out, 0);
         return new ArrayList<>(out.values());
     }
 

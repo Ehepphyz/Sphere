@@ -57,6 +57,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.prefs.Preferences;
@@ -200,6 +201,65 @@ public final class G4EditorFrame extends JFrame {
             vp.fitAll(false);
             vp.requestFocusInWindow();
         });
+    }
+
+    /** The open G4editor window, if any. */
+    static G4EditorFrame window() {
+        return shared != null && shared.isDisplayable() ? shared : null;
+    }
+
+    Geometry design() {
+        return model.geometry;
+    }
+
+    String designTitle() {
+        return model.title();
+    }
+
+    /** The volumes to take elsewhere: the selection, the outermost of it (the others come with it), else the world's. */
+    List<PhysicalVolume> chosen() {
+        final List<PhysicalVolume> sel = new ArrayList<>(model.selection());
+        if (sel.isEmpty()) {
+            for (PhysicalVolume pv : model.geometry.placements()) {
+                if (pv.mother() == model.geometry.world()) {
+                    sel.add(pv);
+                }
+            }
+        }
+        final List<PhysicalVolume> all = List.copyOf(sel);
+        sel.removeIf(pv -> all.stream().anyMatch(q -> q != pv && holds(q.logical(), pv.mother(), new java.util.HashSet<>())));
+        return sel;
+    }
+
+    private boolean holds(LogicalVolume outer, LogicalVolume lv, Set<LogicalVolume> seen) {
+        if (outer == lv) {
+            return true;
+        }
+        if (!seen.add(outer)) {
+            return false;
+        }
+        for (PhysicalVolume d : model.geometry.placements()) {
+            if (d.mother() == outer && holds(d.logical(), lv, seen)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The selection, or the whole detector, written into the C++ open in G4code. */
+    private void insertIntoG4code() {
+        final G4CodeFrame code = G4CodeFrame.window();
+        if (code == null) {
+            status.setText("Open a Geant4 application in G4code (:g4code) first: the volumes are written into its C++");
+            return;
+        }
+        final List<PhysicalVolume> pvs = chosen();
+        if (pvs.isEmpty()) {
+            status.setText("Nothing to insert: the design holds no volume");
+            return;
+        }
+        code.insertDesign(model.geometry, pvs, model.title());
+        status.setText("Written into G4code: " + pvs.size() + " volume(s) with what they hold");
     }
 
     /** Opens a design in the shared window, raising it if it already exists. */
@@ -639,6 +699,9 @@ public final class G4EditorFrame extends JFrame {
             "A .root file TGeoManager::Import reads, written without ROOT"));
         export.addSeparator();
         export.add(item("Geant4 C++ project...", "control E", this::exportCppDialog));
+        export.add(item("Into G4code's C++...", "control shift I", this::insertIntoG4code,
+            "The selection (else the whole detector) written into the code open in G4code, in the volume selected"
+                + " there: solids, materials, colours, rotations and what they hold"));
         export.add(item("Image (PNG)...", null, this::exportImage));
         file.add(export);
         file.add(item("Convert files...", null, this::convertDialog,
@@ -972,6 +1035,10 @@ public final class G4EditorFrame extends JFrame {
                 bottom.setSelectedIndex(0);
                 console.run("info " + pv.name());
             }));
+            final JMenuItem toCode = item("Insert into G4code (C++)", null, this::insertIntoG4code);
+            toCode.setEnabled(G4CodeFrame.window() != null);
+            toCode.setToolTipText("Written into the code open in G4code, in the volume selected there");
+            m.add(toCode);
             m.addSeparator();
             if (model.selection().size() == 2) {
                 m.add(item("Union", null, () -> booleanOf(BooleanSolid.Op.UNION)));
@@ -1003,7 +1070,8 @@ public final class G4EditorFrame extends JFrame {
         }
     }
 
-    private boolean confirmDiscard() {        if (!model.dirty()) {
+    private boolean confirmDiscard() {
+        if (!model.dirty()) {
             return true;
         }
         final int r = JOptionPane.showConfirmDialog(this, "Save the changes to " + model.title() + "?", "G4editor",

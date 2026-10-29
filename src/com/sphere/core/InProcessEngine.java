@@ -41,7 +41,7 @@ import java.util.stream.Stream;
 
 /**
  * The engines that run inside Sphere's own JVM: FastJet, the fjcontrib
- * contribs and HepMC3, translated to Java.
+ * contribs, HepMC3, Minuit2 and CLHEP, translated to Java.
  *
  * <p>They have no executable to find and no process to start, so what finds
  * Python, g++ or ROOT cannot see them. This is how the rest of Sphere does:
@@ -180,6 +180,39 @@ public enum InProcessEngine {
         public String modeExamples() {
             return "'minimize \"([0]-1)^2+([1]+2)^2\" 0 0 --minos', 'contour 0 1', 'validate'";
         }
+    },
+
+    CLHEP("clhep", "CLHEP") {
+        @Override
+        public String version() {
+            return com.sphere.core.clhep.Clhep.VERSION;
+        }
+
+        @Override
+        public String description() {
+            return "CLHEP " + com.sphere.core.clhep.Clhep.VERSION + " (Java port " + com.sphere.core.clhep.Clhep.JAVA_PORT_VERSION
+                + ", bit for bit the C++, in process)";
+        }
+
+        @Override
+        protected String check() throws Exception {
+            return com.sphere.core.clhep.ClhepProbe.check();
+        }
+
+        @Override
+        public Native findNative() {
+            return findClhep();
+        }
+
+        @Override
+        public String nativeHint() {
+            return "no installation found (clhep-config not on the PATH, CLHEP_DIR unset, no Geant4 with its own CLHEP)";
+        }
+
+        @Override
+        public String modeExamples() {
+            return "'eval eplus*1.5*tesla*2*m*c_light', 'vector 3*GeV 4*GeV 0 13*GeV --boost 0 0 0.5', 'random gauss 0 1 --hist'";
+        }
     };
 
     /** What a probe found, and how long it took. */
@@ -256,6 +289,7 @@ public enum InProcessEngine {
             case "contrib", "contribs", "fastjet-contrib" -> FJCONTRIB;
             case "hepmc3", "hepmc2", "events" -> HEPMC3;
             case "minuit", "minimizer", "migrad" -> MINUIT2;
+            case "evaluator", "genfun", "genericfunctions", "randomobjects" -> CLHEP;
             default -> null;
         };
     }
@@ -373,6 +407,45 @@ public enum InProcessEngine {
             }
             final String lib = library(prefix, "HepMC3");
             return new Native(prefix, version, "headers in " + header.getParent() + (lib == null ? "" : ", library " + lib));
+        }
+        return null;
+    }
+
+    private static final Pattern CLHEP_VERSION_STRING = Pattern.compile("String\\(\\)\\s*\\{\\s*return\\s*\"([^\"]+)\"");
+
+    /**
+     * The C++ CLHEP, if this machine has it: from clhep-config on the PATH (or
+     * CLHEP_CONFIG in settings.conf), the CLHEP_DIR, CLHEP_BASE_DIR, CLHEP_ROOT
+     * variables, or the CLHEP a Geant4 installation carries inside it (under
+     * include/Geant4/CLHEP, GEANT4_DIR). Read from ClhepVersion.h: nothing is run.
+     */
+    private static Native findClhep() {
+        final Set<Path> prefixes = new LinkedHashSet<>();
+        final String config = new SettingsManager().resolveTool("CLHEP_CONFIG", "clhep-config");
+        if (config != null) {
+            final Path bin = Path.of(config).toAbsolutePath().getParent();
+            if (bin != null && bin.getParent() != null) prefixes.add(bin.getParent());
+        }
+        for (String var : new String[]{"CLHEP_DIR", "CLHEP_BASE_DIR", "CLHEP_ROOT", "CLHEP_ROOT_DIR", "GEANT4_DIR"}) {
+            final String v = System.getenv(var);
+            if (v != null && !v.isBlank()) prefixes.add(Path.of(v.trim()));
+        }
+        for (Path prefix : prefixes) {
+            for (Path header : new Path[]{prefix.resolve("include").resolve("CLHEP").resolve("ClhepVersion.h"),
+                                          prefix.resolve("include").resolve("Geant4").resolve("CLHEP").resolve("ClhepVersion.h")}) {
+                if (!Files.isRegularFile(header)) continue;
+                String version = null;
+                try {
+                    final Matcher m = CLHEP_VERSION_STRING.matcher(Files.readString(header));
+                    if (m.find()) version = m.group(1);
+                } catch (IOException | RuntimeException unreadable) {
+                    // the version stays unknown
+                }
+                final boolean inGeant4 = header.toString().contains("Geant4");
+                final String lib = inGeant4 ? library(prefix, "G4clhep") : library(prefix, "CLHEP");
+                return new Native(prefix, version, (inGeant4 ? "Geant4's own CLHEP, headers in " : "headers in ")
+                    + header.getParent() + (lib == null ? "" : ", library " + lib));
+            }
         }
         return null;
     }

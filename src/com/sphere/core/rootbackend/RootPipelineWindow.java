@@ -1595,7 +1595,7 @@ public final class RootPipelineWindow extends JFrame {
         });
 
         newButton.addActionListener(e -> blank());
-        openButton.addActionListener(e -> openSelected());
+        openButton.addActionListener(e -> openChosen());
         saveButton.addActionListener(e -> save(true));
         editButton.addActionListener(e -> edit());
         buildButton.addActionListener(e -> build());
@@ -1665,6 +1665,16 @@ public final class RootPipelineWindow extends JFrame {
     }
 
     /** Fills the form from the pipeline the list has selected. */
+    /** The Open button: the pipeline chosen in the list, or why there is none. */
+    private void openChosen() {
+        if (pipelines.getSelectedValue() == null) {
+            say(model.isEmpty() ? "No pipeline yet: fill in the form and press Save."
+                                : "Choose a pipeline in the list on the left.", false);
+            return;
+        }
+        openSelected();
+    }
+
     private void openSelected() {
         Entry entry = pipelines.getSelectedValue();
         if (entry == null) {
@@ -1707,9 +1717,12 @@ public final class RootPipelineWindow extends JFrame {
             return;
         }
         RootPipelineManifest manifest = collect();
-        if (current == null) {
-            showSource(RootPipelineTemplates.source(manifest, chosenRecipe()));
-        }
+        // An open pipeline shows what Save would write: the form's header and
+        // declaration around the body on disk. Showing the file as it stands
+        // made every field look as if it did nothing until Save was pressed.
+        showSource(current == null
+            ? RootPipelineTemplates.source(manifest, chosenRecipe())
+            : RootPipelineTemplates.reheader(read(current.source), manifest));
         commandLine.setText("added flags:  " + String.join(" ", manifest.flags()));
         fillScanInputs(manifest);
         validateForm();
@@ -1788,7 +1801,11 @@ public final class RootPipelineWindow extends JFrame {
     /** Writes the source, keeping whatever the user wrote below the mark. */
     private boolean save(boolean loud) {
         RootPipelineManifest manifest = collect();
-        if (manifest.validate(null) != null) {
+        // Time it, the Inspect buttons and Export save first: refusing in
+        // silence left them doing nothing at all, so the reason is said.
+        final String problem = manifest.validate(null);
+        if (problem != null) {
+            say(problem, true);
             return false;
         }
         Path layer = manifest.global
@@ -1805,9 +1822,13 @@ public final class RootPipelineWindow extends JFrame {
             // What is on disk is kept before it is replaced, so a change that
             // turns out to be wrong is one button away from being undone.
             RootPipelineHistory.keep(target);
-            final String existing = Files.isRegularFile(target) ? read(target) : null;
+            // A renamed pipeline takes its body along from the file it was
+            // opened from; a new one starts from the recipe the form shows.
+            final Path from = Files.isRegularFile(target) ? target
+                : current != null && Files.isRegularFile(current.source) ? current.source : null;
+            final String existing = from != null ? read(from) : null;
             final String written = (existing == null)
-                ? RootPipelineTemplates.source(manifest)
+                ? RootPipelineTemplates.source(manifest, chosenRecipe())
                 : RootPipelineTemplates.reheader(existing, manifest);
             Files.writeString(target, written, StandardCharsets.UTF_8);
 
@@ -1864,10 +1885,16 @@ public final class RootPipelineWindow extends JFrame {
         tabs.setSelectedIndex(1);
 
         new SwingWorker<RootUserCompiler.Build, Void>() {
+            private String rootFrom;
+
             @Override
             protected RootUserCompiler.Build doInBackground() {
                 RootUserCompiler compiler = new RootUserCompiler(new SettingsManager(), engine);
-                return compiler.build(entry.source, manifest.flags());
+                final RootUserCompiler.Build built = compiler.build(entry.source, manifest.flags());
+                if (built != null && !built.succeeded() && compiler.rootFlags().isEmpty()) {
+                    rootFrom = compiler.flagSource();
+                }
+                return built;
             }
 
             @Override
@@ -1881,6 +1908,11 @@ public final class RootPipelineWindow extends JFrame {
                     return;
                 }
                 report(built, entry);
+                if (rootFrom != null) {
+                    // "TMath.h: No such file" says what is missing, not why
+                    say("The compiler was given no ROOT headers (" + rootFrom
+                        + "). Start the ROOT engine, or set ROOT_DIR in settings.conf.", true);
+                }
             }
         }.execute();
     }

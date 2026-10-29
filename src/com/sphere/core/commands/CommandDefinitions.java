@@ -52,8 +52,11 @@ public class CommandDefinitions {
 
         // --- Geant4: G4editor (works without Geant4) and geant4-bridge (needs Geant4, never ROOT) ---
         register(":g4editor", "Open G4editor, the Geant4 geometry editor: draw with the mouse, type exact values. Usage: :g4editor [design.gdml|geometry.root]", G4Commands::editor);
+        register(":g4code", "Program Geant4 in C++ in three columns: project and Geant4 API, the code, the detector drawn live in 3D as it is typed. Usage: :g4code [folder|file]", G4Commands::code);
+        register(":g4code new", "Write a new Geant4 application (CMake, main, DetectorConstruction, actions, macros) and open it in :g4code. Usage: :g4code new <folder> [calorimeter|tracker|telescope|shield|phantom|tpc|design.gdml]", G4Commands::codeNew);
         register(":g4 convert", "Convert a geometry between GDML and ROOT (TGeoManager), without ROOT. Usage: :g4 convert <in> <out.root|out.gdml> [portable]", G4Commands::convert);
         register(":g4", "Geant4 in Sphere: G4editor and the geant4-bridge engine", G4Commands::overview);
+        register(":g4 bib", "Write the BibTeX of the Geant4 papers to cite (Citations > Citation Geant4 shows them). Usage: :g4 bib <file.bib>", G4Commands::bib);
         register(":g4 locate", "Geant4 installations found: settings.conf GEANT4_DIR, PATH, conda, virtual environments", G4Commands::locate);
         register(":g4 material", "Radiation and interaction lengths of a material. Usage: :g4 material <name> [thickness]", G4Commands::material);
         register(":g4 check", "Check a GDML design for overlaps. Usage: :g4 check <design.gdml> [points]", G4Commands::check);
@@ -283,6 +286,8 @@ public class CommandDefinitions {
         FjContribCommands.register();
         // --- HepMC3, the event record, in Java: read, look, search, write, hand to every engine ---
         HepMCCommands.register();
+        // --- CLHEP, in Java bit for bit: units and quantities, vectors, geometry, matrices, random numbers, GenericFunctions ---
+        ClhepCommands.register();
         // --- Minuit2, ROOT's minimizer, in Java bit for bit: minimize, Hesse, Minos, contours, the viewer's fits ---
         Minuit2Commands.register();
         // --- TMinuit, ROOT's first minimizer, in Java bit for bit: MINUIT's command language, its plots, beside Minuit2 ---

@@ -156,6 +156,11 @@ public final class ThemeDefaults {
         forcePut(d, "TableHeader[Enabled].borderPainter", null);
         forcePut(d, "TableHeader:\"TableHeader.renderer\"[Enabled].backgroundPainter", bgPainter);
         forcePut(d, "TableHeader:\"TableHeader.renderer\"[Pressed].backgroundPainter", btnHoverPainter);
+        // A selected row: Nimbus derives its text from nimbusLightBackground, which this theme makes the
+        // surface color, so a selected row read dark on the accent. White on the accent, as in lists.
+        // (The background stays Nimbus's own: its renderer drops a background that is a UIResource.)
+        forcePut(d, "Table.selectionForeground", resWhite);
+        forcePut(d, "Table[Enabled+Selected].textForeground", resWhite);
 
         // Viewport / ScrollPane configurations
         forcePut(d, "Viewport.background", resSurface);
@@ -334,6 +339,10 @@ public final class ThemeDefaults {
         for (String comp : textComps) {
             forcePut(d, comp + ".background", resTrack);
             forcePut(d, comp + ".foreground", resText);
+            // SPTextFieldUI is a Basic UI: it reads these, which Nimbus does not define. Without them the
+            // selection was filled with the text's own color and the selected text vanished, white on white.
+            forcePut(d, comp + ".selectionBackground", new ColorUIResource(accent));
+            forcePut(d, comp + ".selectionForeground", resWhite);
 
             for (String s : textStates) {
                 forcePut(d, comp + s + ".borderPainter", inputBorderPainter);

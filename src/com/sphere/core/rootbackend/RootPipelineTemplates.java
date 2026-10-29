@@ -520,8 +520,23 @@ public final class RootPipelineTemplates {
         }
         final int from = existing.indexOf(BODY_MARK) + BODY_MARK.length();
         final int to = existing.indexOf(TAIL_MARK, from);
-        final String kept = to < 0 ? existing.substring(from)
-                                   : existing.substring(from, to);
+        String kept = to < 0 ? existing.substring(from)
+                             : existing.substring(from, to);
+        // The entry point's declaration opens the user's half, but the form owns
+        // it: an input added in the form would otherwise reach the tail, which
+        // calls the entry point, and not the declaration, and the source would
+        // stop compiling. It is replaced only while it still reads as the form
+        // wrote it, so a declaration the user rewrote by hand is left alone.
+        final RootPipelineManifest before = RootPipelineManifest.fromText(existing);
+        if (before != null && before.kind != RootPipelineManifest.Kind.LIBRARY
+                && manifest.kind != RootPipelineManifest.Kind.LIBRARY) {
+            final String was = before.signature() + " {";
+            final int at = kept.indexOf(was);
+            if (at >= 0) {
+                kept = kept.substring(0, at) + manifest.signature() + " {"
+                     + kept.substring(at + was.length());
+            }
+        }
         return header(manifest) + trimTrailing(kept) + tail(manifest);
     }
 

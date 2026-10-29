@@ -135,7 +135,34 @@ public final class CIStream {
 
     /** >> double: what num_get accumulates, then strtod; no inf or nan, as in libstdc++. */
     public double nextDouble() {
-        if (!skipWs()) return 0;
+        final String t = floatingToken();
+        if (t == null) return 0;
+        final double v = Double.parseDouble(t);
+        if (Double.isInfinite(v)) {
+            fail = true;
+            return v > 0 ? Double.MAX_VALUE : -Double.MAX_VALUE;
+        }
+        return v;
+    }
+
+    /**
+     * >> float: what num_get accumulates, then strtof, the decimal rounded once to float (not through
+     * a double); FLT_MAX and failed on overflow, as in libstdc++.
+     */
+    public float nextFloat() {
+        final String t = floatingToken();
+        if (t == null) return 0;
+        final float v = Float.parseFloat(t);
+        if (Float.isInfinite(v)) {
+            fail = true;
+            return v > 0 ? Float.MAX_VALUE : -Float.MAX_VALUE;
+        }
+        return v;
+    }
+
+    /** The characters num_get accumulates for a floating-point number; null, and failed, when they make none. */
+    private String floatingToken() {
+        if (!skipWs()) return null;
         final int start = pos;
         final int n = s.length();
         if (s.charAt(pos) == '+' || s.charAt(pos) == '-') pos++;
@@ -160,26 +187,15 @@ public final class CIStream {
             pos = e;
             if (e == es) {
                 fail = true;
-                return 0;
+                return null;
             }
         }
         if (pos >= n) eof = true;
         if (digits == 0) {
             fail = true;
-            return 0;
+            return null;
         }
-        final double v = Double.parseDouble(s.substring(start, pos));
-        if (Double.isInfinite(v)) {
-            fail = true;
-            return v > 0 ? Double.MAX_VALUE : -Double.MAX_VALUE;
-        }
-        return v;
-    }
-
-    /** >> float. */
-    public float nextFloat() {
-        final double v = nextDouble();
-        return (float) v;
+        return s.substring(start, pos);
     }
 
     /** >> std::string: the next blank-separated word. */
@@ -195,6 +211,54 @@ public final class CIStream {
     public int nextChar() {
         if (!skipWs()) return -1;
         return s.charAt(pos++);
+    }
+
+    /** is.clear(std::ios::badbit | is.rdstate()): the stream made to fail from here on. */
+    public void setFail() {
+        fail = true;
+    }
+
+    /** is.clear(): the failure and end flags reset. */
+    public void clear() {
+        fail = false;
+        eof = false;
+    }
+
+    /** is.peek(): the next character, not taken; -1 at the end. */
+    public int peek() {
+        return fail || pos >= s.length() ? -1 : s.charAt(pos);
+    }
+
+    /** is &gt;&gt; std::ws: the blanks skipped (the end is not a failure). */
+    public void ws() {
+        if (fail) return;
+        while (pos < s.length() && CStr.isSpace(s.charAt(pos))) pos++;
+        if (pos >= s.length()) eof = true;
+    }
+
+    /** is.get(c): the next character, blank or not; -1 and failed at the end. */
+    public int get() {
+        if (fail) return -1;
+        if (pos >= s.length()) {
+            eof = true;
+            fail = true;
+            return -1;
+        }
+        return s.charAt(pos++);
+    }
+
+    /**
+     * is.putback(c): the character read last is read again. A string stream cannot take back another
+     * character than the one it gave: the stream then fails, as libstdc++'s does (badbit).
+     */
+    public void putback(char c) {
+        eof = false;
+        if (fail) return;
+        if (pos > 0 && s.charAt(pos - 1) == c) {
+            pos--;
+        } else {
+            fail = true;
+        }
     }
 
     /** std::getline(is, line): the rest of the current line; null when nothing is left. */

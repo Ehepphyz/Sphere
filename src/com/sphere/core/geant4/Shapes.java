@@ -998,6 +998,119 @@ public final class Shapes {
     }
 
     // ==================================================================
+    // G4Polyhedra by its (r, z) corners (GDML's genericPolyhedra)
+    // ==================================================================
+
+    /**
+     * G4Polyhedra(name, phiStart, phiTotal, numSide, numRZ, r[], z[]): the
+     * contour is given at the corners of the polygon, where the z-plane form
+     * gives the distance to its sides; G4Polyhedra divides the latter by
+     * cos(step / 2) to make corners of them. Here the contour is kept at the
+     * sides, as Polyhedra keeps it, so both share their distance and mesh.
+     */
+    public static final class GenericPolyhedra extends PhiSolid {
+        double[] rz;
+        int sides;
+        double step, rmaxAll, zmin, zmax;
+
+        public GenericPolyhedra(String name) {
+            super(name);
+            param("startphi", "Start phi", A, "0*deg");
+            param("deltaphi", "Delta phi", A, "360*deg");
+            param("numsides", "Number of sides", C, "6");
+            final Table t = table("rzpoint", new String[] {"r", "z"}, new Kind[] {L, L});
+            t.add("20*mm", "-50*mm");
+            t.add("50*mm", "-50*mm");
+            t.add("40*mm", "50*mm");
+            t.add("20*mm", "50*mm");
+        }
+
+        public String tag() {
+            return "genericPolyhedra";
+        }
+
+        public String g4Class() {
+            return "G4Polyhedra";
+        }
+
+        protected void validate() throws GeometryException {
+            phi(v("startphi"), v("deltaphi"));
+            if (dphi >= Units.TWOPI) {
+                sphi = v("startphi");
+            }
+            sides = (int) Math.round(v("numsides"));
+            require(sides >= 1, "G4Polyhedra " + name + ": needs at least one side");
+            require(dphi < Units.TWOPI || sides >= 3, "G4Polyhedra " + name + ": a full polyhedra needs three sides or more");
+            step = dphi / sides;
+            final double toSide = Math.cos(step / 2);
+            final Table t = table("rzpoint");
+            require(t.size() >= 3, "G4Polyhedra " + name + ": needs at least three (r, z) corners");
+            final double[] p = new double[t.size() * 2];
+            rmaxAll = 0;
+            zmin = Double.MAX_VALUE;
+            zmax = -Double.MAX_VALUE;
+            for (int i = 0; i < t.size(); i++) {
+                final double r = t.value(i, 0), z = t.value(i, 1);
+                require(r >= 0, "G4Polyhedra " + name + ": r must not be negative");
+                p[i * 2] = r * toSide;
+                p[i * 2 + 1] = z;
+                rmaxAll = Math.max(rmaxAll, r * toSide);
+                zmin = Math.min(zmin, z);
+                zmax = Math.max(zmax, z);
+            }
+            rz = clean(p);
+            require(Polygon2D.isSimple(rz), "G4Polyhedra " + name + ": the (r, z) contour crosses itself");
+            require(rz.length >= 6 && Math.abs(Polygon2D.signedArea(rz)) > 0, "G4Polyhedra " + name + ": empty cross-section");
+        }
+
+        public double sdf(double x, double y, double z) {
+            double a = Math.atan2(y, x) - sphi;
+            a %= Units.TWOPI;
+            if (a < 0) {
+                a += Units.TWOPI;
+            }
+            int k = (int) Math.floor(a / step);
+            if (k >= sides) {
+                k = (a - dphi < Units.TWOPI - a) ? sides - 1 : 0;
+            }
+            final double pc = sphi + (k + 0.5) * step;
+            final double rp = x * Math.cos(pc) + y * Math.sin(pc);
+            return Math.max(rzDistance(rz, rp, z), phiDistance(x, y));
+        }
+
+        public double safety() {
+            return 0.7;
+        }
+
+        public BBox extent() {
+            return clipPhi(rmaxAll / Math.cos(step / 2), zmin, zmax);
+        }
+
+        protected Mesh buildMesh(int q) {
+            final Mesh.Builder mb = new Mesh.Builder();
+            Revolve.build(mb, rz, null, sphi, dphi, sides, sides);
+            return mb.build();
+        }
+
+        protected double computeVolume() {
+            return sides * 2 * Math.tan(step / 2) * rzMoment(rz);
+        }
+
+        public String cpp(CppNames n) {
+            final Table t = table("rzpoint");
+            final StringBuilder r = new StringBuilder(), z = new StringBuilder();
+            for (int i = 0; i < t.size(); i++) {
+                final String sep = i > 0 ? ", " : "";
+                r.append(sep).append(c(t, i, 0));
+                z.append(sep).append(c(t, i, 1));
+            }
+            return "[&] { const G4double r[] = {" + r + "}; const G4double z[] = {" + z
+                + "}; return new G4Polyhedra(" + n.string(name) + ", " + c("startphi") + ", " + c("deltaphi")
+                + ", static_cast<G4int>(" + c("numsides") + "), " + t.size() + ", r, z); }()";
+        }
+    }
+
+    // ==================================================================
     // G4EllipticalTube
     // ==================================================================
 

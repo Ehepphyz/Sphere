@@ -1,5 +1,6 @@
 package com.sphere.core.commands;
 
+import com.sphere.components.g4editor.G4CodeFrame;
 import com.sphere.components.g4editor.G4EditorFrame;
 import com.sphere.core.geant4.Budget;
 import com.sphere.core.geant4.CppExport;
@@ -83,11 +84,72 @@ public final class G4Commands {
             return;
         }
         openEditor(p);
-        AppLogger.info("G4editor " + (p == null ? "opened on a new design" : "opened " + p.getFileName()));
+        AppLogger.info("G4editor " + (p == null ? "opened" : "opened " + p.getFileName()));
+    }
+
+    /** :g4code: a Geant4 application in C++, its detector drawn as the code is typed (needs no Geant4 for that). */
+    public static void code(String input, CommandExecutionContext ctx) {
+        final List<String> w = words(input, ":g4code");
+        final Path p = w.isEmpty() ? null : local(w.get(0));
+        if (p != null && !Files.exists(p)) {
+            AppLogger.error("No file or folder " + p + ". :g4code opens a Geant4 application folder (a DetectorConstruction"
+                + " inside), one of its files, or a GDML file; :g4code new <folder> writes a new application.");
+            return;
+        }
+        SwingUtilities.invokeLater(() -> G4CodeFrame.show(p, settings()));
+        AppLogger.info("G4code " + (p == null ? "opened" : "opened " + p.getFileName()));
+    }
+
+    /** :g4code new: an application written by CppExport from a template or a GDML design, opened in :g4code. */
+    public static void codeNew(String input, CommandExecutionContext ctx) {
+        final List<String> w = words(input, ":g4code new");
+        if (w.isEmpty()) {
+            Handlers.usage(":g4code new <folder> [" + String.join("|", com.sphere.core.geant4.Templates.kinds())
+                + "|design.gdml]");
+            return;
+        }
+        final Path folder = local(w.get(0));
+        final String from = w.size() > 1 ? w.get(1) : "calorimeter";
+        Geometry g;
+        if (from.toLowerCase(Locale.ROOT).endsWith(".gdml") || from.toLowerCase(Locale.ROOT).endsWith(".root")) {
+            g = read(from);
+            if (g == null) {
+                return;
+            }
+        } else {
+            g = Geometry.blank();
+            try {
+                com.sphere.core.geant4.Templates.build(g, from, Map.of(), "mm");
+            } catch (Exception e) {
+                AppLogger.error(e.getMessage());
+                return;
+            }
+            g.rebuild();
+        }
+        try {
+            if (Files.isDirectory(folder)) {
+                try (var s = Files.list(folder)) {
+                    if (s.findAny().isPresent()) {
+                        AppLogger.error(folder + " is not empty: give a new folder");
+                        return;
+                    }
+                }
+            }
+            g.setTitle(folder.getFileName().toString());
+            // G4code's application: the detector is its C++, with no GDML file beside it
+            final List<Path> files = new CppExport(g, CppExport.Options.defaults(g).cppOnly()).write(folder);
+            AppLogger.success("Geant4 application written: " + files.size() + " files in " + folder);
+        } catch (Exception e) {
+            AppLogger.error("Cannot write the application: " + e.getMessage());
+            return;
+        }
+        SwingUtilities.invokeLater(() -> G4CodeFrame.show(folder, settings()));
     }
 
     public static void overview(String input, CommandExecutionContext ctx) {
         AppLogger.result("Geant4 in Sphere: G4editor (works without Geant4) and geant4-bridge (needs Geant4, not ROOT)");
+        AppLogger.raw("  :g4code [folder|file]                Geant4 in C++, three columns: the code drawn live in 3D");
+        AppLogger.raw("  :g4code new <folder> [template]      a new Geant4 application from a template or a GDML design");
         AppLogger.raw("  :g4editor [design.gdml|geo.root]     the geometry editor: draw, dimension, analyze, run");
         AppLogger.raw("  :g4 convert <in> <out> [portable]    GDML <-> ROOT geometry (TGeoManager), without ROOT");
         AppLogger.raw("  :g4 locate                           Geant4 installations found (settings, PATH, conda, venv)");
@@ -103,6 +165,24 @@ public final class G4Commands {
         AppLogger.raw("  :g4 macro <file.mac>                 check a macro against Geant4's commands");
         AppLogger.raw("  :g4 build <folder> [clean]           compile a Geant4 application (CMake, as the examples)");
         AppLogger.raw("  :g4 sim <folder> [macro args...]     compile if needed, then run it in batch | :g4 sim stop");
+        AppLogger.raw("  :g4 bib <file.bib>                   the Geant4 papers to cite (Citations > Citation Geant4)");
+        AppLogger.raw("  Geant4's units, constants, vectors and random engines are CLHEP's: ':clhep help'.");
+    }
+
+    /** The BibTeX of the papers Geant4 asks its users to cite. */
+    public static void bib(String input, CommandExecutionContext ctx) {
+        final String file = Handlers.args(input, ":g4 bib");
+        if (file.isBlank()) {
+            Handlers.usage(":g4 bib <file.bib>");
+            return;
+        }
+        final Path out = Handlers.resolve(file.trim()).toPath();
+        try {
+            Files.writeString(out, com.sphere.core.geant4.Geant4Citations.bibtex(), java.nio.charset.StandardCharsets.UTF_8);
+            AppLogger.result(com.sphere.core.geant4.Geant4Citations.bibliography().size() + " references written to " + out + ".");
+        } catch (java.io.IOException e) {
+            AppLogger.error("Cannot write " + out + ": " + e.getMessage());
+        }
     }
 
     public static void locate(String input, CommandExecutionContext ctx) {

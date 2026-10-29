@@ -32,6 +32,7 @@ public final class Solids {
         add("polycone", "G4Polycone", "Polycone", "Specific", Shapes.Polycone::new);
         add("genericPolycone", "G4GenericPolycone", "Revolved profile", "Specific", Shapes.GenericPolycone::new);
         add("polyhedra", "G4Polyhedra", "Polyhedra", "Specific", Shapes.Polyhedra::new);
+        add("genericPolyhedra", "G4Polyhedra", "Polyhedra by its corners", "Specific", Shapes.GenericPolyhedra::new);
         add("xtru", "G4ExtrudedSolid", "Extrusion", "Specific", Extruded::new);
         add("eltube", "G4EllipticalTube", "Elliptical tube", "Specific", Shapes.EllipticalTube::new);
         add("ellipsoid", "G4Ellipsoid", "Ellipsoid", "Specific", Shapes.Ellipsoid::new);
