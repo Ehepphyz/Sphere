@@ -21,7 +21,7 @@ import java.util.Locale;
 
 /**
  * :rootlab -- the ROOT Lab from the console: ROOT's test programs run in
- * Java, and CERN data files checked, compared and summarised, local or remote.
+ * Java, and CERN data files checked, compared and summarized, local or remote.
  */
 public final class RootLabCommands {
 

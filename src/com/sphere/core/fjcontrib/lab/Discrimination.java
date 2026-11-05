@@ -19,7 +19,7 @@ public final class Discrimination {
      * @param auc          area under the ROC curve on the signal-like side (0.5: no power, 1: perfect)
      * @param signalBelow  whether the signal is on the low side of the cut
      * @param rejection50  1/background efficiency at 50% signal efficiency
-     * @param bestCut      the cut maximising signal efficiency minus background efficiency
+     * @param bestCut      the cut maximizing signal efficiency minus background efficiency
      * @param effS         signal efficiencies along the ROC curve
      * @param effB         background efficiencies along it
      */
@@ -51,7 +51,7 @@ public final class Discrimination {
             return new Result(observable, Double.NaN, true, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
                 new double[0], new double[0], ns, nb);
         }
-        // cut "value <= c" swept upwards: efficiencies of the low side, ties kept together
+        // cut "value <= c" swept upward: efficiencies of the low side, ties kept together
         final List<double[]> roc = new ArrayList<>();
         roc.add(new double[]{0, 0, Double.NEGATIVE_INFINITY});
         double cumS = 0;

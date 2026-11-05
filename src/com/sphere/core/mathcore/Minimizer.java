@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * ROOT::Math::Minimizer (math/mathcore): the interface of every minimizer of
  * ROOT, Minuit (TMinuitMinimizer), Minuit2 (Minuit2Minimizer), Fumili,
- * Linear..., with ROOT's default behaviour where a minimizer does not
+ * Linear..., with ROOT's default behavior where a minimizer does not
  * implement a method (an error message and false).
  *
  * <p>The objective function is an {@link IMultiGenFunction} (an

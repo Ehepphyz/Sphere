@@ -534,7 +534,7 @@ public final class RootFitter {
         return inv;
     }
 
-    /** The upper regularised incomplete gamma Q(a, x): TMath::Prob(2x, 2a). */
+    /** The upper regularized incomplete gamma Q(a, x): TMath::Prob(2x, 2a). */
     public static double gammaQ(double a, double x) {
         if (!(a > 0) || !(x >= 0)) return Double.NaN;
         if (x == 0) return 1;

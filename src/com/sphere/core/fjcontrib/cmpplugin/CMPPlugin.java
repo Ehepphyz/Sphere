@@ -16,20 +16,20 @@ import com.sphere.core.fjcontrib.ifnplugin.FlavInfo;
 import java.util.List;
 
 /**
- * The flavoured anti-kt algorithm of M. Czakon, A. Mitov and R. Poncelet,
- * fastjet::CMPPlugin (CMPPlugin 1.0.0; "Infrared-safe flavoured anti-kT
+ * The flavored anti-kt algorithm of M. Czakon, A. Mitov and R. Poncelet,
+ * fastjet::CMPPlugin (CMPPlugin 1.0.0; "Infrared-safe flavored anti-kT
  * jets", JHEP 04 (2023) 138, arXiv:2205.11879), with the corrections of
  * arXiv:2306.07314 that make it infrared and collinear safe.
  *
- * <p>Anti-kt distances, except between a flavour and an anti-flavour, whose
+ * <p>Anti-kt distances, except between a flavor and an anti-flavor, whose
  * distance is multiplied by
  * <pre>
  *   S_ij = 1 - Theta(1 - kappa) cos(pi kappa / 2),
  *   kappa = (kt_i^2 + kt_j^2) / (2 a kt_max^2)
  * </pre>
  * (kappa rescaled by sqrt(M) with the default correction), so that a soft
- * flavour pair recombines with itself before either can flavour a hard jet.
- * The nearest neighbours are anti-kt's; the opposite-flavour pairs are
+ * flavor pair recombines with itself before either can flavor a hard jet.
+ * The nearest neighbors are anti-kt's; the opposite-flavor pairs are
  * rescanned by hand at each step, as in the C++.
  */
 public class CMPPlugin implements JetDefinition.Plugin {
@@ -90,7 +90,7 @@ public class CMPPlugin implements JetDefinition.Plugin {
     public CorrectionType correctionType() { return correctionType; }
     public ClusteringType clusteringType() { return clusteringType; }
 
-    /** Particles without flavour information take it from the PDG code of their user index (Sphere's addition). */
+    /** Particles without flavor information take it from the PDG code of their user index (Sphere's addition). */
     public CMPPlugin setFlavourFromUserIndex(boolean value) {
         flavourFromUserIndex = value;
         return this;
@@ -165,7 +165,7 @@ public class CMPPlugin implements JetDefinition.Plugin {
             p2.E(), p2.px(), p2.py(), p2.pz(), p2.m2(), p2.modp2());
     }
 
-    /** The distance between an opposite-flavour pair, given the reference scale ktmax. */
+    /** The distance between an opposite-flavor pair, given the reference scale ktmax. */
     public double distanceOppositeFlavour(PseudoJet j1, PseudoJet j2, double ktmax) {
         final double deltaR2 = preciseSquaredDistance(j1, j2);
         double dFij;
@@ -242,7 +242,7 @@ public class CMPPlugin implements JetDefinition.Plugin {
     }
 
     /* ------------------------------------------------------------------ */
-    /* The brief jet: anti-kt, with opposite flavours out of reach         */
+    /* The brief jet: anti-kt, with opposite flavors out of reach         */
     /* ------------------------------------------------------------------ */
 
     private final class BriefJet implements NNBriefJet<BriefJet> {
@@ -281,7 +281,7 @@ public class CMPPlugin implements JetDefinition.Plugin {
 
         @Override
         public double distance(BriefJet o) {
-            // opposite flavours are recomputed by hand at each step
+            // opposite flavors are recomputed by hand at each step
             if (flavoured && o.flavoured && flavour.plus(o.flavour).isFlavourless()) return Double.MAX_VALUE;
             if (!spherical) {
                 final double deltaR2 = geometricalDistance(o);
@@ -349,7 +349,7 @@ public class CMPPlugin implements JetDefinition.Plugin {
             int i = ab[0];
             int j = ab[1];
 
-            // the opposite-flavour pairs, whose distances the NNH does not know
+            // the opposite-flavor pairs, whose distances the NNH does not know
             final int n = cs.nJets();
             for (int iA = 0; iA < n; iA++) {
                 final PseudoJet jA = cs.pluginNonConstJet(iA);

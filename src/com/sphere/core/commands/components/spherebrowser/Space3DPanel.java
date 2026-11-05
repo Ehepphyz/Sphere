@@ -63,7 +63,7 @@ import java.util.function.Function;
  * right button or Shift to slide it, the wheel to come closer; Ctrl, Shift and
  * Alt with the wheel stretch Z, X and Y, as do the sliders. Let go while
  * turning and it keeps spinning, slowing down. A double click brings the point
- * under the mouse to the centre. While still, the picture is drawn again at
+ * under the mouse to the center. While still, the picture is drawn again at
  * three times the resolution and filtered, so edges are smooth.
  *
  * Keys: arrows turn, + - zoom, X Y Z stretch (with Shift shrink), R reset,
@@ -410,7 +410,7 @@ public final class Space3DPanel extends JPanel {
         syncSliders();
     }
 
-    /** Slides the view so the point picked is at its centre. */
+    /** Slides the view so the point picked is at its center. */
     private void focusOn(Renderer3D.Pick p) {
         final double[] n = r.normalizedOf(p.x(), p.y(), p.z(), p.mesh().normalized);
         final double[] m = Renderer3D.matrix(r.q);
@@ -758,7 +758,7 @@ public final class Space3DPanel extends JPanel {
     }
 
     /**
-     * A labelled slider. A slider that rebuilds the scene waits until it is
+     * A labeled slider. A slider that rebuilds the scene waits until it is
      * let go; one that only moves the camera follows the hand.
      */
     private void slider(JPanel p, String label, int min, int max, int value, java.util.function.IntConsumer set,

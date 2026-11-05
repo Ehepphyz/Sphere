@@ -97,6 +97,7 @@ public class ProjectCreatorWindow extends JFrame {
 
     public ProjectCreatorWindow(ProjectCreationCallback callback) {
         super("Initialize Scientific Project Workspace");
+        com.sphere.utils.IconManager.applyAppIcon(this);
         this.generationCallback = callback;
 
         setSize(1250, 740);
@@ -514,7 +515,7 @@ public class ProjectCreatorWindow extends JFrame {
                     dispose();
 
                 } catch (Exception processException) {
-                    // A cancelled worker carries no cause, so the message has to be
+                    // A canceled worker carries no cause, so the message has to be
                     // taken from whichever of the two is there.
                     Throwable reason = processException.getCause() != null
                         ? processException.getCause() : processException;

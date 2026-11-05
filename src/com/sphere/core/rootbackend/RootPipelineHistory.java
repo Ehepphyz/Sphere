@@ -22,7 +22,7 @@ import java.util.zip.ZipOutputStream;
  * The versions a pipeline has been through, and the way to send one away.
  *
  * Physics code is written by changing it until it is right, and the change that
- * breaks everything is only recognized afterwards. Each write keeps the version
+ * breaks everything is only recognized afterward. Each write keeps the version
  * it replaced, so going back is a decision rather than an archaeology. The same
  * folder is what makes a pipeline sendable: a pipeline is its source, and its
  * source is enough for someone else to rebuild it, so exporting is putting that

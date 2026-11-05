@@ -18,7 +18,7 @@ import java.util.Map;
  * Cones of fixed radius around given seeds, fastjet::contrib::FlavorConePlugin
  * (FlavorCone 1.0.0; P. Ilten, N.L. Rodd, J. Thaler and M. Williams,
  * arXiv:1702.02947): every particle within rcut of its nearest seed
- * joins that seed's jet, overlapping cones being split by nearest neighbour.
+ * joins that seed's jet, overlapping cones being split by nearest neighbor.
  *
  * <p>With {@link Precision#DOUBLE} the assignment is the C++ one bit for bit.
  * In double-double the distances to the seeds are compared to 106 bits, and

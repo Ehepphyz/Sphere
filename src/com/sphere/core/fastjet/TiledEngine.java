@@ -7,9 +7,9 @@ import java.util.Arrays;
  * N2Tiled and N2MinHeapTiled.
  *
  * The rapidity-azimuth plane is cut into tiles at least R wide, so a jet's
- * neighbour is searched only in the nine tiles around its own. Tiles and jets
+ * neighbor is searched only in the nine tiles around its own. Tiles and jets
  * are indices into arrays rather than pointers; the order in which they are
- * visited is FastJet's, so the same neighbour wins every tie.
+ * visited is FastJet's, so the same neighbor wins every tie.
  */
 final class TiledEngine extends BriefJetEngine {
 
@@ -18,9 +18,9 @@ final class TiledEngine extends BriefJetEngine {
     // tiles
     private int[] tileHead;
     private boolean[] tileTagged;
-    /** For each tile: self, then the left neighbours, then the right ones. */
+    /** For each tile: self, then the left neighbors, then the right ones. */
     private int[][] tileNeighbours;
-    /** Where the right-hand neighbours start in tileNeighbours[t]. */
+    /** Where the right-hand neighbors start in tileNeighbours[t]. */
     private int[] tileRhStart;
     private double tilesEtaMin, tilesEtaMax, tileSizeEta, tileSizePhi;
     private int nTilesPhi, tilesIetaMin, tilesIetaMax;
@@ -166,7 +166,7 @@ final class TiledEngine extends BriefJetEngine {
         return nNear;
     }
 
-    /** The initial neighbours: within each tile, then with the right-hand tiles. */
+    /** The initial neighbors: within each tile, then with the right-hand tiles. */
     private void initialNeighbours() {
         for (int t = 0; t < tileHead.length; t++) {
             for (int a = tileHead[t]; a >= 0; a = next[a]) {
@@ -189,7 +189,7 @@ final class TiledEngine extends BriefJetEngine {
         }
     }
 
-    /** Recomputes jetI's neighbour over the tiles around the tile it sits in. */
+    /** Recomputes jetI's neighbor over the tiles around the tile it sits in. */
     private void resetNNInNeighbourhood(int jetI, int tile) {
         nnH[jetI] = r2H;
         nnL[jetI] = r2L;

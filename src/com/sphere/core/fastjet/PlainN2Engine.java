@@ -9,7 +9,7 @@ package com.sphere.core.fastjet;
  * relative precision below theta ~ 1e-8, or through the cross product in its
  * EEAccurate variant. Under {@link Precision#DD} it is computed here as the
  * squared chord |n_a - n_b|^2, which is the same quantity with no
- * cancellation at all, on unit vectors normalised to 106 bits.
+ * cancellation at all, on unit vectors normalized to 106 bits.
  */
 final class PlainN2Engine extends BriefJetEngine {
 

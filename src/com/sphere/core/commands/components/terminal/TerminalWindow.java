@@ -7,6 +7,7 @@ public class TerminalWindow extends JFrame {
 
     public TerminalWindow(String shellCommand) {
         super("Terminal Window");
+        com.sphere.utils.IconManager.applyAppIcon(this);
 
         setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         setSize(900, 600);

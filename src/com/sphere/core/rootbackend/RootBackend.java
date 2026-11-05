@@ -876,7 +876,7 @@ public final class RootBackend implements AutoCloseable, Backend {
         public boolean isShmRef()  { return transport == MSG_TYPE_SHM_REF; }
         public boolean isRingRef() { return transport == MSG_TYPE_RING_REF; }
 
-        /** True when the payload travelled outside the message, either way. */
+        /** True when the payload traveled outside the message, either way. */
         public boolean carriesBlock() { return isShmRef() || isRingRef(); }
 
         public boolean isError()  { return cmd == EVT_ERROR; }
@@ -2162,7 +2162,7 @@ public final class RootBackend implements AutoCloseable, Backend {
      * Opens a file in the engine and returns the handle it answers with.
      *
      * The reply reads "FILE_OPENED  FILE_ID: 3  name", so the number after the
-     * label is what the tree commands need afterwards. Returns 0 on failure.
+     * label is what the tree commands need afterward. Returns 0 on failure.
      */
     public int openFileAwait(String path, long timeoutMillis) {
         final String reply = sendAwait(CMD_OPEN_FILE, 0,
@@ -2262,7 +2262,7 @@ public final class RootBackend implements AutoCloseable, Backend {
     }
 
     /**
-     * Several events carry no text: EVT_PONG and the file acknowledgements answer
+     * Several events carry no text: EVT_PONG and the file acknowledgments answer
      * with an empty payload. A success only needs its name; a failure needs enough
      * to be chased.
      */

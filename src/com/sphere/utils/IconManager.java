@@ -331,39 +331,99 @@ public class IconManager {
      * Application Icon
      * ------------------------------------------------------------------------- */
 
-    private static final String APP_ICON = "cta_logo.png";
+    private static final String APP_ICON = "sphere_logo.png";
 
     /** Sizes Windows, GNOME and KDE pick from for the title bar, task bar and alt-tab. */
     private static final int[] APP_ICON_SIZES = {16, 20, 24, 32, 40, 48, 64, 128, 256};
 
+    /** Up to this size the logo is condensed for a title bar rather than shrunk. */
+    private static final int TITLE_BAR_ICON_MAX = 48;
+
+    /**
+     * The largest icon handed to WSLg. It puts the largest of the list in the
+     * title bar and Windows shrinks it there: 24 is a title bar's icon at 150 %,
+     * and shrinks to the 16 and 20 of 100 and 125 % without losing the logo.
+     */
+    private static final int WSL_ICON_MAX = 24;
+
     private static java.util.List<Image> appIconImages;
+    private static boolean appIconMissingReported;
 
     /**
      * The application icon in every size a window manager may ask for. Handing over
      * a single 256 pixel image leaves the system to shrink it to 16, which it does
      * in one crude step; these are reduced by halving, so the small ones stay sharp.
+     *
+     * The sizes a title bar shows are condensed instead: shrunk plainly, the logo
+     * is only a dark disk there. Under WSL the list stops at a title bar's size,
+     * because WSLg puts the largest image of the list in the title bar and leaves
+     * Windows to shrink it, which brings the dark disk back.
      */
     public static synchronized java.util.List<Image> getAppIconImages() {
         if (appIconImages != null) {
             return appIconImages;
         }
-        java.util.List<Image> images = new java.util.ArrayList<>();
-        // Loaded straight from the asset: the cached path stretches icons for HiDPI
-        // screens, and reducing an already stretched image only softens it.
-        Icon icon = loadIcon(BASE_PATH + APP_ICON, APP_ICON);
-        if (icon instanceof ImageIcon source && source.getIconWidth() > 0) {
-            BufferedImage master = toBufferedImage(source.getImage());
-            for (int size : APP_ICON_SIZES) {
-                if (size <= master.getWidth() || size == APP_ICON_SIZES[0]) {
-                    images.add(resample(master, size));
-                }
+        BufferedImage master = readAppIcon();
+        if (master == null) {
+            // Not kept: an empty list kept here left every window of the session
+            // without the logo, while the next window may well find the file.
+            if (!appIconMissingReported) {
+                appIconMissingReported = true;
+                AppLogger.error("Application icon " + APP_ICON + " not found: windows keep the Java default.");
             }
-            if (images.isEmpty()) {
-                images.add(master);
+            return java.util.List.of();
+        }
+        boolean wsl = OSValidator.isWsl();
+        java.util.List<Image> images = new java.util.ArrayList<>();
+        for (int size : APP_ICON_SIZES) {
+            if (wsl && size > WSL_ICON_MAX) {
+                break;
+            }
+            if (size <= master.getWidth() || size == APP_ICON_SIZES[0]) {
+                images.add(size <= TITLE_BAR_ICON_MAX ? condense(master, size) : resample(master, size));
             }
         }
-        appIconImages = images;
+        if (images.isEmpty()) {
+            images.add(master);
+        }
+        appIconImages = java.util.List.copyOf(images);
         return appIconImages;
+    }
+
+    /**
+     * sphere_logo.png itself, never a stand-in: loadIcon answers default.png for a
+     * file it cannot find, and a window carrying that has lost the logo all the
+     * same. Read whole with ImageIO, from the jar first, then from the source and
+     * build folders for a run outside the jar. Not through the icon cache either:
+     * it stretches icons for HiDPI screens, and reducing a stretched image only
+     * softens it.
+     */
+    private static BufferedImage readAppIcon() {
+        try (java.io.InputStream packed = IconManager.class.getResourceAsStream(RESOURCE_PATH + APP_ICON)) {
+            if (packed != null) {
+                BufferedImage image = javax.imageio.ImageIO.read(packed);
+                if (image != null) {
+                    return toBufferedImage(image);
+                }
+            }
+        } catch (java.io.IOException | RuntimeException unreadable) {
+            // the folders below
+        }
+        for (String folder : new String[] {BASE_PATH, "bin/com/sphere/icons/"}) {
+            File file = new File(folder + APP_ICON);
+            if (!file.isFile()) {
+                continue;
+            }
+            try {
+                BufferedImage image = javax.imageio.ImageIO.read(file);
+                if (image != null) {
+                    return toBufferedImage(image);
+                }
+            } catch (java.io.IOException | RuntimeException unreadable) {
+                // the next folder
+            }
+        }
+        return null;
     }
 
     /**
@@ -380,7 +440,9 @@ public class IconManager {
             return;
         }
         for (Window w = window; w != null; w = w.getOwner()) {
-            if (w.getIconImages().size() != images.size()) {
+            // The images themselves, not their count: a window holding any other
+            // list of nine images would otherwise be left with it.
+            if (!images.equals(w.getIconImages())) {
                 w.setIconImages(images);
             }
         }
@@ -393,24 +455,22 @@ public class IconManager {
      */
     public static void installApplicationIcon() {
         java.util.List<Image> images = getAppIconImages();
-        if (images.isEmpty()) {
-            return;
-        }
-        Image largest = images.get(images.size() - 1);
 
         // macOS and some Linux shells take the dock icon from here, not from the
         // window: setIconImage alone leaves the Dock showing the Java default.
         try {
-            if (Taskbar.isTaskbarSupported()) {
+            if (!images.isEmpty() && Taskbar.isTaskbarSupported()) {
                 Taskbar taskbar = Taskbar.getTaskbar();
                 if (taskbar.isSupported(Taskbar.Feature.ICON_IMAGE)) {
-                    taskbar.setIconImage(largest);
+                    taskbar.setIconImage(images.get(images.size() - 1));
                 }
             }
         } catch (UnsupportedOperationException | SecurityException ignored) {
             // no dock on this platform
         }
 
+        // The listener goes in even when the logo could not be read just now:
+        // returning early here left every window bare for the whole session.
         for (Window window : Window.getWindows()) {
             applyAppIcon(window);
         }
@@ -449,6 +509,61 @@ public class IconManager {
         g2.drawImage(image, 0, 0, null);
         g2.dispose();
         return copy;
+    }
+
+    /**
+     * The logo at a title bar's size. There its tracks, rings and segments are
+     * narrower than a pixel, and an average over the patch of logo each pixel
+     * covers lets the dark disk swallow them. Each pixel is put halfway between
+     * that average and the most vivid color of its patch, so every stroke keeps
+     * the pixels it crosses and the logo stays readable on a light or dark bar.
+     */
+    private static BufferedImage condense(BufferedImage source, int size) {
+        int width = source.getWidth();
+        int height = source.getHeight();
+        int[] pixels = source.getRGB(0, 0, width, height, null, 0, width);
+        double stepX = (double) width / size;
+        double stepY = (double) height / size;
+        BufferedImage target = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+        for (int ty = 0; ty < size; ty++) {
+            int y0 = (int) (ty * stepY);
+            int y1 = Math.min(height, (int) Math.ceil((ty + 1) * stepY));
+            for (int tx = 0; tx < size; tx++) {
+                int x0 = (int) (tx * stepX);
+                int x1 = Math.min(width, (int) Math.ceil((tx + 1) * stepX));
+                double alpha = 0, red = 0, green = 0, blue = 0, best = -1;
+                int vivid = 0, count = 0;
+                for (int y = y0; y < y1; y++) {
+                    for (int x = x0; x < x1; x++) {
+                        int c = pixels[y * width + x];
+                        int a = c >>> 24, r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+                        alpha += a;
+                        red += r * a;
+                        green += g * a;
+                        blue += b * a;
+                        count++;
+                        // Color counts as well as light: the orange segments are
+                        // no lighter than the blue rings, only more saturated.
+                        int max = Math.max(r, Math.max(g, b));
+                        int min = Math.min(r, Math.min(g, b));
+                        double score = (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.5 * (max - min)) * a;
+                        if (score > best) {
+                            best = score;
+                            vivid = c;
+                        }
+                    }
+                }
+                if (alpha < count) {
+                    continue; // less than one step of opacity on average: left clear
+                }
+                long a = Math.round(alpha / count);
+                long r = Math.round((red / alpha + ((vivid >> 16) & 0xFF)) / 2);
+                long g = Math.round((green / alpha + ((vivid >> 8) & 0xFF)) / 2);
+                long b = Math.round((blue / alpha + (vivid & 0xFF)) / 2);
+                target.setRGB(tx, ty, (int) ((a << 24) | (r << 16) | (g << 8) | b));
+            }
+        }
+        return target;
     }
 
     /** Halves the image until the target is close, then lands on it exactly. */

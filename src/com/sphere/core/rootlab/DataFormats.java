@@ -12,7 +12,7 @@ import java.util.Locale;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Recognises the files high-energy physics passes around, by what they hold
+ * Recognizes the files high-energy physics passes around, by what they hold
  * rather than by their name: ROOT files (and whether they carry an RNTuple),
  * HepMC event records (version 3 and 2), Les Houches event files, YODA
  * histograms (Rivet), SLHA spectra, LHAPDF grids and set descriptions,

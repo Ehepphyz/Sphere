@@ -13,8 +13,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * What the view colours volumes by: their own colours, or a property of theirs. A geometry read from a
- * file comes with the colours its author gave it (ROOT's are often all alike); coloured by material,
+ * What the view colors volumes by: their own colors, or a property of theirs. A geometry read from a
+ * file comes with the colors its author gave it (ROOT's are often all alike); colored by material,
  * density or radiation length it shows what it is made of at a glance, by depth how it nests, and by
  * sensitivity what it measures. Each scheme carries its legend.
  */
@@ -45,7 +45,7 @@ final class ColorScheme {
         }
     }
 
-    /** A line of a categorical legend: a colour, what it stands for, how many drawn copies have it. */
+    /** A line of a categorical legend: a color, what it stands for, how many drawn copies have it. */
     record Entry(int rgb, String label, int copies) {
     }
 
@@ -53,12 +53,12 @@ final class ColorScheme {
     private static final int[] QUALITATIVE = {0x4E79A7, 0xF28E2B, 0xE15759, 0x76B7B2, 0x59A14F, 0xEDC948, 0xB07AA1,
         0xFF9DA7, 0x9C755F, 0x86BCB6, 0xD37295, 0x8CD17D};
     private static final int OTHERS = 0xA9B0BA, UNKNOWN = 0x6E7681;
-    // Viridis: perceptually even, readable in grey, more (denser, shorter X0, deeper) to the yellow end
+    // Viridis: perceptually even, readable in gray, more (denser, shorter X0, deeper) to the yellow end
     private static final int[] VIRIDIS = {0x440154, 0x46327E, 0x365C8D, 0x277F8E, 0x1FA187, 0x4AC16D, 0xA0DA39, 0xFDE725};
     private static final int SENSITIVE_RGB = 0xFF7F0E, PASSIVE_RGB = 0xB8C0CC;
 
     final Mode mode;
-    /** The colour of each volume (RGB), for the modes that colour volumes, not copies. */
+    /** The color of each volume (RGB), for the modes that color volumes, not copies. */
     private final Map<LogicalVolume, Integer> rgb = new IdentityHashMap<>();
     final List<Entry> legend = new ArrayList<>();
     /** For a scale: its ends, as text, and whether more is to the right. */
@@ -74,7 +74,7 @@ final class ColorScheme {
         this.maxDepth = maxDepth;
     }
 
-    /** The scheme for a document, or null for its own colours. Runs over every drawn copy once. */
+    /** The scheme for a document, or null for its own colors. Runs over every drawn copy once. */
     static ColorScheme of(Mode mode, Geometry g) {
         if (mode == null || mode == Mode.DOCUMENT) {
             return null;
@@ -103,15 +103,15 @@ final class ColorScheme {
         final List<Map.Entry<String, Integer>> order = new ArrayList<>(byMaterial.entrySet());
         order.sort((a, b) -> b.getValue() != a.getValue().intValue() ? b.getValue() - a.getValue() : a.getKey().compareTo(b.getKey()));
         final ColorScheme s = new ColorScheme(Mode.MATERIAL, null, null, false, 0);
-        final Map<String, Integer> colourOf = new HashMap<>();
+        final Map<String, Integer> colorOf = new HashMap<>();
         int others = 0, otherCopies = 0;
         for (int i = 0; i < order.size(); i++) {
             final String m = order.get(i).getKey();
             if (i < QUALITATIVE.length) {
-                colourOf.put(m, QUALITATIVE[i]);
+                colorOf.put(m, QUALITATIVE[i]);
                 s.legend.add(new Entry(QUALITATIVE[i], m.replace("G4_", ""), order.get(i).getValue()));
             } else {
-                colourOf.put(m, OTHERS);
+                colorOf.put(m, OTHERS);
                 others++;
                 otherCopies += order.get(i).getValue();
             }
@@ -120,7 +120,7 @@ final class ColorScheme {
             s.legend.add(new Entry(OTHERS, others + " other materials", otherCopies));
         }
         for (LogicalVolume lv : copies.keySet()) {
-            s.rgb.put(lv, colourOf.get(name(lv)));
+            s.rgb.put(lv, colorOf.get(name(lv)));
         }
         return s;
     }
@@ -188,7 +188,7 @@ final class ColorScheme {
         return s;
     }
 
-    /** The colour of a copy: the scheme's, with the volume's own transparency (air stays see-through). */
+    /** The color of a copy: the scheme's, with the volume's own transparency (air stays see-through). */
     int color(LogicalVolume lv, int depth, int own) {
         final int c;
         if (mode == Mode.DEPTH) {
@@ -200,7 +200,7 @@ final class ColorScheme {
         return (own & 0xFF000000) | c;
     }
 
-    /** The scale's colour at t in [0, 1], for the legend's bar. */
+    /** The scale's color at t in [0, 1], for the legend's bar. */
     static int viridis(double t) {
         final double x = Math.max(0, Math.min(1, t)) * (VIRIDIS.length - 1);
         final int i = Math.min(VIRIDIS.length - 2, (int) x);

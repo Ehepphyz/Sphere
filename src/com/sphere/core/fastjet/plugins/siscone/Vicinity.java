@@ -7,7 +7,7 @@ import java.util.List;
 
 /**
  * siscone::Cvicinity: for a parent particle, the points where circles of
- * radius R through it and through each particle within 2R are centred, in
+ * radius R through it and through each particle within 2R are centered, in
  * order of angle around the parent (each particle giving two, one on each
  * side).
  */

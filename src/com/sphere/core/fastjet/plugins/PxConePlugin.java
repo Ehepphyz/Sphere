@@ -76,7 +76,7 @@ public final class PxConePlugin implements JetDefinition.Plugin {
      * meets, PXCONE keeps those empty proto-jets (an energy of 0 is not below
      * 0) and may then find more jets than particles and stop. They carry no
      * particle, so dropping them changes no physical jet; the default keeps
-     * FastJet's behaviour.
+     * FastJet's behavior.
      */
     public PxConePlugin setRobust(boolean robust) {
         this.robust = robust;
@@ -371,7 +371,7 @@ public final class PxConePlugin implements JetDefinition.Plugin {
             }
         }
 
-        /** PXNORV(3, A, A): normalises in place, unless of zero length. */
+        /** PXNORV(3, A, A): normalizes in place, unless of zero length. */
         private static void pxnorv(double[] a) {
             double c = 0;
             for (int i = 0; i < 3; i++) c = c + a[i] * a[i];

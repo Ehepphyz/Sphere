@@ -6,7 +6,7 @@ import java.util.Map;
 
 /**
  * A triangle mesh: what a solid looks like on screen, the way Geant4's
- * visualisation sees a solid through its G4Polyhedron.
+ * visualization sees a solid through its G4Polyhedron.
  *
  * Positions and normals are float, since they only feed the rasterizer and the
  * picking; analysis never measures a mesh, it asks the solid itself.
@@ -135,9 +135,9 @@ public final class Mesh {
             cluster[i] = id;
         }
         final int nc = ids.size();
-        final Vec3[] centre = new Vec3[nc];
+        final Vec3[] center = new Vec3[nc];
         for (int c = 0; c < nc; c++) {
-            centre[c] = new Vec3(sum[c * 3] / count[c], sum[c * 3 + 1] / count[c], sum[c * 3 + 2] / count[c]);
+            center[c] = new Vec3(sum[c * 3] / count[c], sum[c * 3 + 1] / count[c], sum[c * 3 + 2] / count[c]);
         }
         final Builder mb = new Builder();
         final java.util.Set<Long> seen = new java.util.HashSet<>();
@@ -154,7 +154,7 @@ public final class Mesh {
                 c = s;
             }
             if (seen.add(((long) a * nc + bb) * nc + c)) {
-                mb.flatTriangle(centre[a], centre[bb], centre[c]);
+                mb.flatTriangle(center[a], center[bb], center[c]);
             }
         }
         final Mesh m = mb.build();

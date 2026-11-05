@@ -5,8 +5,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * ROOT's colour indices, as TColor creates them at start-up: the basic ones
- * (0 to 50), the "pretty palette" 51 to 99, the greys, and the colour wheel
+ * ROOT's color indices, as TColor creates them at start-up: the basic ones
+ * (0 to 50), the "pretty palette" 51 to 99, the grays, and the color wheel
  * (kRed-10 ... kRed+4, kOrange-9 ... kOrange+10, and so on). A function of
  * ROOT's menu that takes a Color_t takes one of these numbers.
  */
@@ -176,7 +176,7 @@ public final class RootColors {
         return n1;
     }
 
-    /** The colour of an index; black for one ROOT does not define. */
+    /** The color of an index; black for one ROOT does not define. */
     public static Color color(int index) {
         final Color c = TABLE.get(index);
         return c == null ? Color.BLACK : c;
@@ -186,7 +186,7 @@ public final class RootColors {
         return TABLE.containsKey(index);
     }
 
-    /** The index whose colour is nearest, which is what TColor::GetColor answers. */
+    /** The index whose color is nearest, which is what TColor::GetColor answers. */
     public static int index(Color c) {
         if (c == null) return 0;
         int best = 1;
@@ -212,12 +212,12 @@ public final class RootColors {
         return n == null ? Integer.toString(index) : n;
     }
 
-    /** The indices shown in a colour chooser, in ROOT's order: the basic ones, then the wheel. */
+    /** The indices shown in a color chooser, in ROOT's order: the basic ones, then the wheel. */
     public static Map<Integer, Color> all() {
         return java.util.Collections.unmodifiableMap(TABLE);
     }
 
-    /** A colour index written as ROOT accepts it: a number, a name of the wheel (kRed+2), or #rrggbb. */
+    /** A color index written as ROOT accepts it: a number, a name of the wheel (kRed+2), or #rrggbb. */
     public static Color parse(String text) {
         if (text == null) return null;
         final String t = text.strip();

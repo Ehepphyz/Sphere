@@ -157,7 +157,7 @@ int serveShm(const std::string &path, std::size_t mib) {
         ch.send(id, p.dump(), 1000);
         ch.beat();
       };
-      ctx.cancelled = [&ch] { return ch.cancelRequested(); };
+      ctx.canceled = [&ch] { return ch.cancelRequested(); };
       reply = g4b::Registry::instance().dispatch(req, ctx);
     } catch (const std::exception &e) {
       reply = g4b::Json::object();

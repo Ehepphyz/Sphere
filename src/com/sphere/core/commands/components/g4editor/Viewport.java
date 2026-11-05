@@ -87,7 +87,7 @@ final class Viewport extends JComponent {
     /** A heavy scene in motion is drawn at this fraction of the size: a quarter of the pixels to fill. */
     private static final double MOVING_SCALE = 0.5;
 
-    // What colours the volumes, and what is isolated
+    // What colors the volumes, and what is isolated
     private ColorScheme.Mode colorMode = ColorScheme.Mode.DOCUMENT;
     private ColorScheme scheme;
     private Object schemeFor;
@@ -146,7 +146,7 @@ final class Viewport extends JComponent {
     /** Volumes smaller than this on screen, across their whole box, are not drawn: a speck, at full cost. */
     private static final double MIN_PX = 2;
     private static final long SLOW_FRAME = 40_000_000L;
-    /** Tracks to overlay: polylines in world coordinates, with a colour each. */
+    /** Tracks to overlay: polylines in world coordinates, with a color each. */
     final List<float[]> tracks = new ArrayList<>();
     final List<Integer> trackColors = new ArrayList<>();
     /** World points to flag, e.g. where overlaps were found. */
@@ -460,7 +460,7 @@ final class Viewport extends JComponent {
         }
     }
 
-    // A boolean can take seconds to tessellate (a volume less dozens of the overlapping neighbours that
+    // A boolean can take seconds to tessellate (a volume less dozens of the overlapping neighbors that
     // win over it, as ROOT geometries become): it is built off the paint thread, drawn meanwhile as the
     // solid its chain of first operands starts from
     private static final ExecutorService MESHER = Executors.newFixedThreadPool(
@@ -498,7 +498,7 @@ final class Viewport extends JComponent {
     }
 
     // Made once per instance list, in flat arrays a frame runs through without visiting 200 000 objects: the
-    // world sphere of every drawn copy (centre, radius; -1 for a copy never drawn: the world, a broken solid),
+    // world sphere of every drawn copy (center, radius; -1 for a copy never drawn: the world, a broken solid),
     // its logical volume, its placement, and its mother copy's index
     private List<Geometry.Instance> spheresFor;
     private double[] spheres;
@@ -550,7 +550,7 @@ final class Viewport extends JComponent {
     }
 
     private SceneKey sceneKey(double minPx, double scale) {
-        // Colours and visibility can be set without a rebuild (a material's colour applied): they are read here
+        // Colors and visibility can be set without a rebuild (a material's color applied): they are read here
         int looks = 1;
         for (LogicalVolume lv : model.geometry.volumes()) {
             looks = looks * 31 + lv.color();
@@ -568,7 +568,7 @@ final class Viewport extends JComponent {
     }
 
     // ------------------------------------------------------------------
-    // Colours and isolation
+    // Colors and isolation
     // ------------------------------------------------------------------
 
     ColorScheme.Mode colorMode() {
@@ -625,7 +625,7 @@ final class Viewport extends JComponent {
         viewOptionsListener.run();
     }
 
-    /** Told when the colour mode, the isolation or the X-ray option change, so menus can follow keys. */
+    /** Told when the color mode, the isolation or the X-ray option change, so menus can follow keys. */
     void setViewOptionsListener(Runnable r) {
         viewOptionsListener = r == null ? () -> { } : r;
     }
@@ -1017,7 +1017,7 @@ final class Viewport extends JComponent {
         final WorkPlane plane = sc.plane();
         final double step = sc.gridStep();
         final int major = 5;
-        // Centre the grid on the point of the plane under the view centre
+        // Center the grid on the point of the plane under the view center
         final Vec3[] ray = camera.ray(camera.width / 2.0, camera.height / 2.0);
         double[] c = plane.hit(ray[0], ray[1]);
         if (c == null) {
@@ -1160,7 +1160,7 @@ final class Viewport extends JComponent {
         g.drawString(info, getWidth() - fm.stringWidth(info) - 10, getHeight() - 8);
     }
 
-    /** The colour scheme's key, top left: a swatch per material (or detector), or the bar of a scale. */
+    /** The color scheme's key, top left: a swatch per material (or detector), or the bar of a scale. */
     private void legend(Graphics2D g) {
         final ColorScheme cs = scheme;
         if (cs == null) {
@@ -1247,7 +1247,7 @@ final class Viewport extends JComponent {
         if (len < 1e-6) {
             return; // along the line of sight
         }
-        // a move of a hair or of metres shows as an arrow one can read
+        // a move of a hair or of meters shows as an arrow one can read
         final double k = Math.max(26, Math.min(90, len)) / len;
         dx *= k;
         dy *= k;
@@ -2005,7 +2005,7 @@ final class Viewport extends JComponent {
                     }
                 }
                 case KeyEvent.VK_K -> {
-                    // The next colouring: document, material, density, X0, depth, sensitive
+                    // The next coloring: document, material, density, X0, depth, sensitive
                     final ColorScheme.Mode[] all = ColorScheme.Mode.values();
                     setColorMode(all[(colorMode.ordinal() + 1) % all.length]);
                     statusSink.accept("color by " + colorMode.label + "   (K for the next)");

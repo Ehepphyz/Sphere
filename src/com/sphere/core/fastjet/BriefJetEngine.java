@@ -4,7 +4,7 @@ import java.util.ArrayList;
 
 /**
  * What every sequential-recombination strategy shares: the "brief jets" of
- * FastJet (rapidity, azimuth, the algorithm's kt^2p, the nearest neighbour and
+ * FastJet (rapidity, azimuth, the algorithm's kt^2p, the nearest neighbor and
  * its distance) kept as parallel arrays, and the distances between them.
  *
  * Every quantity is a pair (high, low). Under {@link Precision#DOUBLE} the
@@ -158,7 +158,7 @@ abstract class BriefJetEngine {
         dL = e - (dH - s);
     }
 
-    /** True when the last distance is below the slot's nearest-neighbour distance. */
+    /** True when the last distance is below the slot's nearest-neighbor distance. */
     final boolean distLessThanNN(int s) {
         return dH < nnH[s] || (dH == nnH[s] && dL < nnL[s]);
     }

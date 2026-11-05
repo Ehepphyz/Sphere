@@ -205,7 +205,7 @@ public class TerminalPanel extends JPanel {
             return;
         }
         searchTerm = input.getText();
-        searchBackwards();
+        searchBackward();
     }
 
     /** The notice line appears for the moment it has something to say, then goes. */
@@ -221,7 +221,7 @@ public class TerminalPanel extends JPanel {
         show("");
     }
 
-    private void searchBackwards() {
+    private void searchBackward() {
         for (int i = history.size() - 1; i >= 0; i--) {
             if (history.get(i).contains(searchTerm)) {
                 input.setText(history.get(i));

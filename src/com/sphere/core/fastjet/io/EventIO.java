@@ -73,7 +73,7 @@ public final class EventIO {
     /**
      * "px py pz E [pdg]" lines, events ending at "#END"; in a file without
      * any "#END", an empty line ends the event instead, as in fjcontrib's
-     * flavour samples (pythia8_Zq_vshort.dat).
+     * flavor samples (pythia8_Zq_vshort.dat).
      */
     private static List<Event> readFastJet(Path file, int max) throws IOException {
         boolean endMarkers = false;

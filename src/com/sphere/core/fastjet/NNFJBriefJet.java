@@ -1,9 +1,9 @@
 package com.sphere.core.fastjet;
 
 /**
- * The brief jet of {@link NNFJN2Plain}: FastJet's "FJ" factorisation of the
+ * The brief jet of {@link NNFJN2Plain}: FastJet's "FJ" factorization of the
  * distance, d_ij = min(m_i, m_j) g_ij and d_iB = m_i g_iB, where only the
- * geometrical part g decides who is whose nearest neighbour.
+ * geometrical part g decides who is whose nearest neighbor.
  *
  * @param <B> the implementing class itself
  */

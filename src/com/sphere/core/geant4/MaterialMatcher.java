@@ -8,11 +8,11 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Recognises, among a document's own materials, those that are a NIST
+ * Recognizes, among a document's own materials, those that are a NIST
  * material under another name: same elements in the same proportions by mass,
  * same density. A ROOT geometry defines every material it uses ("Lead",
  * "SILICON", "Air"), a Geant4 application would rather name G4_Pb, G4_Si and
- * G4_AIR, whose ionisation potentials and density effect parameters Geant4
+ * G4_AIR, whose ionization potentials and density effect parameters Geant4
  * knows precisely; this is what finds them.
  */
 public final class MaterialMatcher {

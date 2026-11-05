@@ -47,21 +47,21 @@ public class Sphere extends JFrame {
      */
 
     /** Sphere itself (:version). */
-    public static final String VERSION = "v2026.2.1.0";
+    public static final String VERSION = "v2026.2.2.0";
 
     // ---- FastJet, SISCone and fjcontrib, ported to Java ----------------------------
     /** The FastJet release the Java port follows. */
     public static final String FASTJET_VERSION = "3.5.2";
     /** Sphere's Java port of FastJet. */
-    public static final String FASTJET_JAVA_PORT_VERSION = "1.1.2.0";
+    public static final String FASTJET_JAVA_PORT_VERSION = "1.2.2.0";
     /** SISCone as FastJet ships it. */
     public static final String SISCONE_VERSION = "3.1.3";
     /** The fjcontrib release the Java port follows. */
-    public static final String FJCONTRIB_VERSION = "1.104";
+    public static final String FJCONTRIB_VERSION = "1.204";
     /* Each contrib of that release. */
     public static final String FJCONTRIB_VARIABLE_R_VERSION = "1.2.1";
     public static final String FJCONTRIB_VALENCIA_PLUGIN_VERSION = "2.0.2";
-    public static final String FJCONTRIB_CENTAURO_VERSION = "1.0.0";
+    public static final String FJCONTRIB_CENTAURO_VERSION = "1.0.4";
     public static final String FJCONTRIB_DIS_GENKT_VERSION = "1.1.0";
     public static final String FJCONTRIB_KT_CLUS_CXX_VERSION = "1.0.1";
     public static final String FJCONTRIB_SC_JET_VERSION = "1.1.0";
@@ -549,7 +549,7 @@ public class Sphere extends JFrame {
             freeArea = byInsets;
         }
         setSize((int) (freeArea.width * windowShare), (int) (freeArea.height * windowShare));
-        centreInFreeArea();
+        centerInFreeArea();
         setLayout(new BorderLayout());
     }
 
@@ -583,11 +583,11 @@ public class Sphere extends JFrame {
         fitAttempts++;
         setSize(Math.min(getWidth() + growWide, freeArea.width),
                 Math.min(getHeight() + growHigh, freeArea.height));
-        centreInFreeArea();
+        centerInFreeArea();
     }
 
-    /** Centred in the free area: centring on the screen slides it under a top bar. */
-    private void centreInFreeArea() {
+    /** Centered in the free area: centering on the screen slides it under a top bar. */
+    private void centerInFreeArea() {
         if (freeArea == null) {
             setLocationRelativeTo(null);
             return;
@@ -827,7 +827,7 @@ public class Sphere extends JFrame {
         // The two side panels are asked for the same width before anything is laid
         // out. A split pane honors the preferred width of its children on the very
         // first pass, so the dividers land there straight away instead of being put
-        // somewhere else and moved afterwards, in full view.
+        // somewhere else and moved afterward, in full view.
         leftPane.setPreferredSize(new Dimension(sidePanelWidth, 200));
         rightPane.setPreferredSize(new Dimension(sidePanelWidth, 200));
 

@@ -143,7 +143,7 @@ public final class BooleanSolid extends Solid {
 
     protected Mesh buildMesh(int q) {
         if (op == Op.SUBTRACTION && first instanceof BooleanSolid f && f.op == Op.SUBTRACTION) {
-            // a chain of subtractions (a volume less the neighbours that win over it, as overlapping
+            // a chain of subtractions (a volume less the neighbors that win over it, as overlapping
             // ROOT placements become) drawn at once: the body less every cutter
             final java.util.List<Mesh> cutters = new java.util.ArrayList<>();
             Solid s = this;

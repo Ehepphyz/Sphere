@@ -34,7 +34,7 @@ public class JetCleanser {
         jvf_cleansing,
         /** gamma0 taken constant. */
         linear_cleansing,
-        /** gammas as truncated gaussians, likelihood maximised. */
+        /** gammas as truncated gaussians, likelihood maximized. */
         gaussian_cleansing
     }
 

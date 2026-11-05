@@ -106,7 +106,7 @@ public final class GdbAdapter implements DebugAdapter {
     }
 
     /**
-     * Builds the debug binary next to the source. Optimisation is turned off so the
+     * Builds the debug binary next to the source. Optimization is turned off so the
      * line the debugger stops on is the line that was written.
      */
     private File compile(File source) throws IOException, InterruptedException {

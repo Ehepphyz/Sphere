@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * siscone_spherical::CSphvicinity: the centres, on the unit sphere, of the
+ * siscone_spherical::CSphvicinity: the centers, on the unit sphere, of the
  * cones of angular radius R through the parent and each particle within 2R
  * of it, in order of angle about the parent.
  */

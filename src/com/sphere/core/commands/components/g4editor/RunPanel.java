@@ -14,6 +14,7 @@ import com.sphere.core.geantbackend.G4Json;
 import com.sphere.core.geantbackend.Geant4Bridge;
 import com.sphere.core.geantbackend.Geant4BridgeCompiler;
 import com.sphere.core.geantbackend.Geant4Locator;
+import com.sphere.core.geantbackend.RunAdvisor;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -75,6 +76,8 @@ final class RunPanel extends JPanel {
     private final JTextField[] dir = {new JTextField("0", 4), new JTextField("0", 4), new JTextField("1", 4)};
     private final JTextField spread = new JTextField("0", 5);
     private final JTextField spot = new JTextField("0", 5);
+    /** A uniform magnetic field over the world, in tesla: the engine sets it before the run. */
+    private final JTextField[] field = {new JTextField("0", 4), new JTextField("0", 4), new JTextField("0", 4)};
     private final JSpinner trackEvents = new JSpinner(new SpinnerNumberModel(10, 0, 1000, 5));
     private final JProgressBar progress = new JProgressBar(0, 1000);
     private final DefaultTableModel results = new DefaultTableModel(new Object[] {"Volume", "Material", "Mean energy",
@@ -102,6 +105,10 @@ final class RunPanel extends JPanel {
         row = line(form, c, row, "Particle", particle, "Energy", energy, "Events", events);
         row = line(form, c, row, "Position x y z", group(pos), "Direction", group(dir), "Physics list", physics);
         row = line(form, c, row, "Cone half-angle", spread, "Spot radius", spot, "Events drawn", trackEvents);
+        row = line(form, c, row, "Field Bx By Bz (T)", group(field));
+        for (JTextField f : field) {
+            f.setToolTipText("A uniform magnetic field over the whole world, in tesla (0 0 4: 4 T along z): tracks curve");
+        }
         c.gridx = 0;
         c.gridy = row;
         c.gridwidth = 6;
@@ -164,14 +171,14 @@ final class RunPanel extends JPanel {
         return p;
     }
 
-    private static int line(JPanel p, GridBagConstraints c, int row, Object... labelled) {
+    private static int line(JPanel p, GridBagConstraints c, int row, Object... labeled) {
         c.gridy = row;
         c.gridwidth = 1;
-        for (int i = 0; i < labelled.length; i += 2) {
+        for (int i = 0; i < labeled.length; i += 2) {
             c.gridx = i;
-            p.add(new JLabel((String) labelled[i]), c);
+            p.add(new JLabel((String) labeled[i]), c);
             c.gridx = i + 1;
-            p.add((java.awt.Component) labelled[i + 1], c);
+            p.add((java.awt.Component) labeled[i + 1], c);
         }
         return row + 1;
     }
@@ -190,6 +197,12 @@ final class RunPanel extends JPanel {
         if (d.length == 3) {
             for (int i = 0; i < 3; i++) {
                 dir[i].setText(d[i]);
+            }
+        }
+        final String[] b = s.getOrDefault("run.field", "0 0 0").split("\\s+");
+        if (b.length == 3) {
+            for (int i = 0; i < 3; i++) {
+                field[i].setText(b[i]);
             }
         }
     }
@@ -315,6 +328,16 @@ final class RunPanel extends JPanel {
             args.put("physics", String.valueOf(physics.getSelectedItem()).trim());
             args.put("trackEvents", ((Number) trackEvents.getValue()).intValue());
             args.put("maxPoints", 300_000);
+            final double[] b = new double[3];
+            for (int i = 0; i < 3; i++) {
+                final String t = field[i].getText().trim();
+                try {
+                    b[i] = t.isEmpty() ? 0 : Double.parseDouble(t);
+                } catch (NumberFormatException ex) {
+                    throw new IllegalArgumentException("the field is in tesla, a number for each component: " + t);
+                }
+            }
+            args.put("field_T", List.of(b[0], b[1], b[2]));
             // The gun is part of the design: the exported C++ uses it too
             final Map<String, String> s = model.geometry.settings();
             s.put("gun.particle", (String) args.get("particle"));
@@ -323,6 +346,7 @@ final class RunPanel extends JPanel {
             s.put("gun.direction", Units.num(d[0]) + " " + Units.num(d[1]) + " " + Units.num(d[2]));
             s.put("physicsList", (String) args.get("physics"));
             s.put("run.events", String.valueOf(args.get("events")));
+            s.put("run.field", Units.num(b[0]) + " " + Units.num(b[1]) + " " + Units.num(b[2]));
         } catch (GeometryException | RuntimeException ex) {
             out("# run: " + ex.getMessage());
             return;
@@ -408,6 +432,15 @@ final class RunPanel extends JPanel {
             out("# Geant4: " + w);
         }
         out(String.format(Locale.ROOT, "run done: %d events, %d trajectories drawn", n, vp.tracks.size()));
+        // what the run says of the design: where its time went, the shower's profile, the energy kept and its spread
+        for (String l : RunAdvisor.report(r)) {
+            out(l);
+        }
+        for (Advisor.Advice a : RunAdvisor.review(r, model.geometry)) {
+            out("# " + a.level().name().toLowerCase(Locale.ROOT) + ": " + a.title() + ". " + a.detail()
+                + (a.fixes().isEmpty() ? "" : "  Console: " + String.join("  |  ", a.fixes().stream()
+                .map(Advisor.Fix::command).toList())));
+        }
     }
 
     // ------------------------------------------------------------------

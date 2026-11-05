@@ -350,7 +350,7 @@ public class WorkspaceFileExplorerPanel extends JPanel {
      *
      * It runs on a thread of its own rather than on scheduledExecutor. That
      * executor has a single thread, and this loop never returns, so anything
-     * submitted to it afterwards waits forever: the two delayed refreshes that
+     * submitted to it afterward waits forever: the two delayed refreshes that
      * clear pendingRefresh were queued behind it and never ran, which left the
      * flag set and the tree silently not refreshing for the rest of the
      * session. A daemon thread also lets the process exit without waiting for
@@ -863,6 +863,7 @@ public class WorkspaceFileExplorerPanel extends JPanel {
         // Retrieve the top-level Window ancestor instead of casting to Frame to prevent ClassCastExceptions
         Window parentWindow = SwingUtilities.getWindowAncestor(this);
         JDialog dialog = new JDialog(parentWindow, "Rename Component", Dialog.ModalityType.APPLICATION_MODAL);
+        IconManager.applyAppIcon(dialog);
         dialog.setLayout(new BorderLayout(10, 10));
         
         JPanel mainPanel = new JPanel(new BorderLayout(5, 5));
@@ -1090,6 +1091,7 @@ public class WorkspaceFileExplorerPanel extends JPanel {
         // Retrieve the top-level Window ancestor to prevent ClassCastExceptions
         Window parentWindow = SwingUtilities.getWindowAncestor(this);
         JDialog dialog = new JDialog(parentWindow, title, Dialog.ModalityType.APPLICATION_MODAL);
+        IconManager.applyAppIcon(dialog);
         dialog.setLayout(new BorderLayout(10, 10));
         
         JPanel mainPanel = new JPanel(new BorderLayout(5, 5));

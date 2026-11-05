@@ -341,7 +341,7 @@ public final class RescalingClasses {
         public double binContent(int bin) { return content[Math.max(0, Math.min(nbins + 1, bin))]; }
         public void setBinContent(int bin, double v) { content[bin] = v; }
 
-        /** TH1::Interpolate: linear between the neighbouring bin centres. */
+        /** TH1::Interpolate: linear between the neighboring bin centers. */
         public double interpolate(double x) {
             final int xbin = findBin(x);
             if (x <= binCenter(1)) return binContent(1);
@@ -379,7 +379,7 @@ public final class RescalingClasses {
         public double binContent(int bx, int by) { return content[bx][by]; }
         public void setBinContent(int bx, int by, double v) { content[bx][by] = v; }
 
-        /** TH2::Interpolate, by quadrant of the bin, bilinear between bin centres. */
+        /** TH2::Interpolate, by quadrant of the bin, bilinear between bin centers. */
         public double interpolate(double xv, double yv) {
             final int bx = x.findBin(xv);
             final int by = y.findBin(yv);

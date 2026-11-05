@@ -407,8 +407,8 @@ public final class TGeoWriter {
 
         /**
          * A replica as TGeoVolume::Divide makes one: a pattern finder on the
-         * mother, and one TGeoNodeOffset per slice at the offset of its centre.
-         * Geant4 centres replicas on the mother (G4ReplicaNavigation), so a
+         * mother, and one TGeoNodeOffset per slice at the offset of its center.
+         * Geant4 centers replicas on the mother (G4ReplicaNavigation), so a
          * replica along x, y or z starts at minus half its length.
          */
         void division(PhysicalVolume pv, RObject mother, RObject child, RList list) {

@@ -50,7 +50,7 @@ public final class OSValidator {
 
     /**
      * Where WSL mounts the Windows drives. /mnt is only the default: /etc/wsl.conf
-     * can move it, so assuming /mnt is wrong on a customised install.
+     * can move it, so assuming /mnt is wrong on a customized install.
      */
     public static String wslMountRoot() {
         return wslMountRoot(java.nio.file.Paths.get("/etc/wsl.conf"));

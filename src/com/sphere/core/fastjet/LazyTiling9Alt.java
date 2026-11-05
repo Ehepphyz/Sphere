@@ -3,13 +3,13 @@ package com.sphere.core.fastjet;
 import java.util.Arrays;
 
 /**
- * The N2MHTLazy9Alt strategy: LazyTiling9 with the distance to a neighbouring
- * tile measured to its nearest edge or corner rather than from its centre,
+ * The N2MHTLazy9Alt strategy: LazyTiling9 with the distance to a neighboring
+ * tile measured to its nearest edge or corner rather than from its center,
  * and a different order of the updates.
  */
 final class LazyTiling9Alt extends BriefJetEngine {
 
-    // How the distance to a neighbour is measured, as in FastJet's Tile.
+    // How the distance to a neighbor is measured, as in FastJet's Tile.
     private static final int CENTRE = 0, LEFT = 1, RIGHT = 2, BOTTOM = 3, TOP = 4,
         LEFT_TOP = 5, LEFT_BOTTOM = 6, RIGHT_TOP = 7, RIGHT_BOTTOM = 8;
 

@@ -51,14 +51,14 @@ public final class Events {
     }
 
     /**
-     * The read_event of the flavour contribs (IFNPlugin, CMPPlugin, GHSAlgo,
+     * The read_event of the flavor contribs (IFNPlugin, CMPPlugin, GHSAlgo,
      * SDFPlugin): "px py pz E pdg" lines, '#' lines skipped, an event ending
      * where the next line is empty or the file ends (the C++'s cin.peek()).
      *
      * @param info the user information of a particle from its PDG code, or
      *             null to leave it none and keep the code in the user index
      */
-    public static List<PseudoJet> readFlavourEvent(BufferedReader in, java.util.function.IntFunction<Object> info)
+    public static List<PseudoJet> readFlavorEvent(BufferedReader in, java.util.function.IntFunction<Object> info)
             throws IOException {
         final List<PseudoJet> event = new ArrayList<>();
         String line;

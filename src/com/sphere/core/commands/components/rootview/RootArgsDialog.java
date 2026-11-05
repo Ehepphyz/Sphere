@@ -33,8 +33,8 @@ import java.util.function.Consumer;
 
 /**
  * The dialog of TContextMenu: a function's parameters, each with its type
- * and its default, before the function is called. A colour is picked among
- * ROOT's colour indices (or any colour), a font among ROOT's fonts, an option
+ * and its default, before the function is called. A color is picked among
+ * ROOT's color indices (or any color), a font among ROOT's fonts, an option
  * among those the function knows, an object among those open; OK calls the
  * function and closes, Apply calls it and stays, Online Help opens the
  * function's page in ROOT's reference.
@@ -54,7 +54,7 @@ final class RootArgsDialog {
 
     /**
      * Asks for the arguments of a function. Returns them, or null when
-     * cancelled; apply is called for each Apply.
+     * canceled; apply is called for each Apply.
      */
     static Object[] ask(Component parent, RootTarget target, RootMethod m, Object[] initial,
                         Map<String, String[]> suggestions, List<Choice> objects, Consumer<Object[]> apply) {
@@ -66,6 +66,7 @@ final class RootArgsDialog {
                         Map<String, String[]> suggestions, List<Choice> objects, Consumer<Object[]> apply) {
         final Window owner = parent == null ? null : SwingUtilities.getWindowAncestor(parent);
         final JDialog d = new JDialog(owner, title + " — " + m.name, java.awt.Dialog.ModalityType.APPLICATION_MODAL);
+        com.sphere.utils.IconManager.applyAppIcon(d);
         final JPanel form = new JPanel(new GridBagLayout());
         form.setBorder(BorderFactory.createEmptyBorder(10, 12, 6, 12));
         final List<Editor> editors = new ArrayList<>();
@@ -263,7 +264,7 @@ final class RootArgsDialog {
         return String.valueOf(o);
     }
 
-    /** A swatch and the colour's ROOT name; a click opens ROOT's colours. */
+    /** A swatch and the color's ROOT name; a click opens ROOT's colors. */
     private static Editor colorEditor(Color start) {
         final Color[] chosen = {start};
         final JButton b = new JButton();

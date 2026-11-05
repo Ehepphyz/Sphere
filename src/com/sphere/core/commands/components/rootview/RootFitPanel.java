@@ -57,6 +57,7 @@ final class RootFitPanel {
         final boolean twoD = data instanceof Graph2D || data instanceof Hist h && h.dim == 2;
         final JDialog d = new JDialog(SwingUtilities.getWindowAncestor(start.canvas), "Fit Panel",
             java.awt.Dialog.ModalityType.MODELESS);
+        com.sphere.utils.IconManager.applyAppIcon(d);
 
         final JComboBox<String> dataSet = new JComboBox<>();
         final List<RootTarget> sets = dataSets(start);

@@ -515,7 +515,7 @@ final class ProjectTree extends JPanel {
 
     /**
      * The tree's UI paints the selected row itself (a light fill in the light theme, a dark one in the dark):
-     * the name keeps the tree's own text colour, where the default renderer turned it white.
+     * the name keeps the tree's own text color, where the default renderer turned it white.
      */
     private static final class Renderer extends DefaultTreeCellRenderer {
         private static final long serialVersionUID = 1L;

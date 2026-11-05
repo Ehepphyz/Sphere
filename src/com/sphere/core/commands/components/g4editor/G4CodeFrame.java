@@ -3,9 +3,11 @@ package com.sphere.components.g4editor;
 import com.sphere.components.editor.CodeTab;
 import com.sphere.components.editor.EditorDiagnostic;
 import com.sphere.components.editor.KnowledgeBase;
+import com.sphere.core.geant4.CodeAdvisor;
 import com.sphere.core.geant4.CppExport;
 import com.sphere.core.geant4.CppGeometry;
 import com.sphere.core.geant4.CppInsert;
+import com.sphere.core.geant4.Dimensions;
 import com.sphere.core.geant4.Gdml;
 import com.sphere.core.geant4.Geometry;
 import com.sphere.core.geant4.GeometryFiles;
@@ -100,7 +102,7 @@ import java.util.regex.Pattern;
  * a volume moved or turned with the mouse has its G4PVPlacement's position
  * and rotation rewritten in the code. A volume drawn in 3D, or brought from
  * G4editor, is written into the code with all that was given to it (solid
- * and its expressions, material, colour, visibility, wireframe, rotation,
+ * and its expressions, material, color, visibility, wireframe, rotation,
  * mirror, copy number, what it holds); a characteristic changed in the
  * properties is written where the code gives it. When a
  * Geant4 is installed, the application compiles and runs from here, the
@@ -150,7 +152,25 @@ public final class G4CodeFrame extends JFrame {
     private final Map<Solid, Map<String, String>> drawnParams = new IdentityHashMap<>();
     /** The texts the last reading read: the offsets it gave are theirs. */
     private Map<Path, String> readTexts = Map.of();
+    /** The sources as the last reading took them: the assistant and the values read them again. */
+    private List<CppGeometry.Source> readSources = List.of();
     private final JComboBox<String> materialBox = new JComboBox<>();
+    /** G4editor's console on the detector the code builds: the properties, the assistant's fixes and Ask use it. */
+    private Script script;
+    private final CodeAssistant assistant = new CodeAssistant(new AssistantHost());
+    private final List<Problem> assistantProblems = new ArrayList<>();
+    /** What each line of each file computes and builds, as the last reading saw it: shown past the line's end. */
+    private Map<Path, Map<Integer, String>> inlays = Map.of();
+    private final javax.swing.JCheckBox values = new javax.swing.JCheckBox("Values", true);
+    private final javax.swing.JTextField ask = new javax.swing.JTextField();
+    private final List<String> asked = new ArrayList<>();
+    private int askedAt;
+    /**
+     * Set while a console line runs (Ask, a fix of the assistant): its commands (a box, then its copies) are one
+     * change of the code, written once at its end. Written one by one, the second would be placed by the text
+     * the last reading read, which the first has already changed.
+     */
+    private boolean batching, batched;
 
     /** How a volume is made and drawn, as the properties change it. */
     private record Look(String material, int color, boolean visible, boolean wireframe, String sensitive) {
@@ -165,7 +185,14 @@ public final class G4CodeFrame extends JFrame {
     private boolean drawingOffered;
     private int caretLine = -1;
 
-    record Problem(Path file, int line, Geometry.Severity severity, String message, String source) {
+    /** A finding of the problems list; the assistant's carry their fix. */
+    record Problem(Path file, int line, Geometry.Severity severity, String message, String source,
+                   CodeAdvisor.Finding finding) {
+
+        Problem(Path file, int line, Geometry.Severity severity, String message, String source) {
+            this(file, line, severity, message, source, null);
+        }
+
         @Override
         public String toString() {
             return (file == null ? "" : file.getFileName() + (line > 0 ? ":" + line : "") + "  ") + message;
@@ -253,8 +280,9 @@ public final class G4CodeFrame extends JFrame {
         console.setEditable(false);
         console.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         rightTabs.addTab("Inspector", new JScrollPane(inspector));
+        rightTabs.addTab("Assistant", assistant);
         // the characteristics of the selection: each change is written into the code
-        final Script script = new Script(model.geometry, new Script.Host() {
+        script = new Script(model.geometry, new Script.Host() {
             public void print(String text) {
                 say(text);
             }
@@ -278,10 +306,36 @@ public final class G4CodeFrame extends JFrame {
             public void select(List<PhysicalVolume> pvs) {
                 model.selectAll(pvs);
             }
+
+            /** The window's part of the console: the view, the overlap check, the code's undo. */
+            public boolean command(String name, List<String> args) {
+                switch (name) {
+                    case "check" -> overlaps(args.isEmpty() ? 2000 : Integer.parseInt(args.get(0)));
+                    case "fit" -> vp.fitAll(true);
+                    case "view" -> vp.setView(args.isEmpty() ? "iso" : args.get(0), true);
+                    case "undo", "redo" -> {
+                        final CodeTab t = current();
+                        if (t != null) {
+                            if (name.equals("undo")) {
+                                t.undo();
+                            } else {
+                                t.redo();
+                            }
+                        }
+                    }
+                    default -> {
+                        return false;
+                    }
+                }
+                return true;
+            }
         });
         rightTabs.addTab("Properties", new PropertySheet(model, script));
         rightTabs.addTab("Console", new JScrollPane(console));
-        final JSplitPane right = new JSplitPane(JSplitPane.VERTICAL_SPLIT, vp, rightTabs);
+        final JPanel view = new JPanel(new BorderLayout());
+        view.add(vp, BorderLayout.CENTER);
+        view.add(askBar(), BorderLayout.SOUTH);
+        final JSplitPane right = new JSplitPane(JSplitPane.VERTICAL_SPLIT, view, rightTabs);
         right.setResizeWeight(0.66);
 
         final JSplitPane centerRight = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, middle, right);
@@ -290,7 +344,7 @@ public final class G4CodeFrame extends JFrame {
         main.setDividerLocation(330);
         // Without a minimum of their own, Swing takes a component's current size as its minimum (the 3D view has
         // no layout): the dividers would not move. Every column may shrink, and fold away with the divider's arrows.
-        for (JComponent c : new JComponent[] {left, middle, right, centerRight, vp, rightTabs, editors, problemsPanel}) {
+        for (JComponent c : new JComponent[] {left, middle, right, centerRight, vp, view, rightTabs, editors, problemsPanel}) {
             c.setMinimumSize(new java.awt.Dimension(60, 40));
         }
         for (JSplitPane sp : new JSplitPane[] {main, centerRight, middle, right}) {
@@ -325,7 +379,11 @@ public final class G4CodeFrame extends JFrame {
 
             public void documentChanged(Geometry.Change c) {
                 if (!adopting && c == Geometry.Change.ALL) {
-                    writeBack();
+                    if (batching) {
+                        batched = true;
+                    } else {
+                        writeBack();
+                    }
                 }
             }
         });
@@ -536,7 +594,83 @@ public final class G4CodeFrame extends JFrame {
         });
         t.add(live);
         t.add(text("Redraw", "Draw the detector the code builds now (F6)", this::reparse));
+        values.setToolTipText("Checked: past the end of each line, what it computes (10 runs of z: -67.5 ... 67.5 mm,"
+            + " with its unit told by reading the code twice) and what it builds (sizes, materials, masses, positions)");
+        values.setFocusable(false);
+        values.setOpaque(false);
+        values.addActionListener(e -> tabs.forEach(this::applyFindings));
+        t.add(values);
         return t;
+    }
+
+    /**
+     * Ask: an English sentence, or a G4editor console command, turned into C++. The console reads
+     * it (Intent for a sentence) into volumes of the detector, and G4code writes them into the code where their
+     * mother is made, as it writes a volume drawn in 3D; what was understood is said first.
+     */
+    private JComponent askBar() {
+        final JPanel p = new JPanel(new BorderLayout(6, 0));
+        p.setBorder(BorderFactory.createEmptyBorder(3, 6, 3, 6));
+        final JLabel l = new JLabel("Ask");
+        l.setFont(l.getFont().deriveFont(Font.BOLD));
+        final String tip = "<html>Say what to add: the C++ is written into the volume selected (else the world)."
+            + "<br>\"10 layers of 5 mm lead\", \"a 300 um silicon layer at z = 20 cm\", \"a water cylinder of radius"
+            + " 5 cm\"<br>or a G4editor command: box, tube, copy, polar, replica, sensitive, world fit, check, undo...</html>";
+        l.setToolTipText(tip);
+        ask.setToolTipText(tip);
+        ask.putClientProperty("JTextField.placeholderText", "Describe what to add, the C++ is written: \"10 layers of"
+            + " 5 mm lead\", \"a 300 um silicon layer at z = 20 cm\"...");
+        ask.addActionListener(e -> ask());
+        ask.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_UP, 0), "g4code-ask-up");
+        ask.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_DOWN, 0), "g4code-ask-down");
+        ask.getActionMap().put("g4code-ask-up", new AbstractAction() {
+            private static final long serialVersionUID = 1L;
+
+            public void actionPerformed(ActionEvent e) {
+                if (askedAt > 0) {
+                    ask.setText(asked.get(--askedAt));
+                }
+            }
+        });
+        ask.getActionMap().put("g4code-ask-down", new AbstractAction() {
+            private static final long serialVersionUID = 1L;
+
+            public void actionPerformed(ActionEvent e) {
+                askedAt = Math.min(asked.size(), askedAt + 1);
+                ask.setText(askedAt < asked.size() ? asked.get(askedAt) : "");
+            }
+        });
+        p.add(l, BorderLayout.WEST);
+        p.add(ask, BorderLayout.CENTER);
+        p.add(text("Write C++", "Read the sentence and write its volumes into the code (Enter)", this::ask), BorderLayout.EAST);
+        return p;
+    }
+
+    private void ask() {
+        final String s = ask.getText().strip();
+        if (s.isEmpty()) {
+            return;
+        }
+        asked.remove(s);
+        asked.add(s);
+        askedAt = asked.size();
+        ask.setText("");
+        say("> " + s);
+        runScript(s);
+    }
+
+    /** A console line run on the detector, the changes of all its commands written into the code at once. */
+    private void runScript(String line) {
+        batching = true;
+        batched = false;
+        try {
+            script.run(line);
+        } finally {
+            batching = false;
+        }
+        if (batched) {
+            writeBack();
+        }
     }
 
     private JToggleButton tool(javax.swing.Icon icon, String tip, java.util.function.Supplier<Tools.Tool> make) {
@@ -556,7 +690,7 @@ public final class G4CodeFrame extends JFrame {
 
     /**
      * A tool button whose state shows: the theme paints a pressed toggle much as a plain one, so the chosen
-     * tool is framed and underlined in the accent colour.
+     * tool is framed and underlined in the accent color.
      */
     private static final class ToolToggle extends JToggleButton {
         private static final long serialVersionUID = 1L;
@@ -1096,7 +1230,7 @@ public final class G4CodeFrame extends JFrame {
                         }
                         final CppGeometry.Result res = new CppGeometry.Result(r.geometry(), notes, new IdentityHashMap<>(),
                             new IdentityHashMap<>(), new IdentityHashMap<>(), activePath.getFileName().toString(), 0, 0,
-                            activePath, CppGeometry.Links.none());
+                            activePath, CppGeometry.Links.none(), CppGeometry.Insights.none());
                         SwingUtilities.invokeLater(() -> shown(gen, res));
                     } catch (Exception e) {
                         SwingUtilities.invokeLater(() -> reading.setText("GDML: " + e.getMessage()));
@@ -1116,6 +1250,7 @@ public final class G4CodeFrame extends JFrame {
                         texts.put(src.path().toAbsolutePath().normalize(), src.text());
                     }
                     readTexts = texts;
+                    readSources = sources;
                 }
                 shown(gen, r);
             });
@@ -1174,6 +1309,376 @@ public final class G4CodeFrame extends JFrame {
         if (g.world() != null && g.instances().size() <= 20_000) {
             overlaps(300);
         }
+        insight(gen, r, project == null ? List.of() : readSources, project);
+    }
+
+    // ==================================================================
+    // The assistant and the values: what an expert, and a debugger, would say of the code read
+    // ==================================================================
+
+    /**
+     * Off the event thread, after the reading: the assistant's review of the code and of the detector it builds
+     * (judged against the beam the application shoots), and what each line computes, its unit told by reading
+     * the code again in the probe's units (CppGeometry.dimensions), shown past the line's end.
+     */
+    private void insight(long gen, CppGeometry.Result r, List<CppGeometry.Source> sources, Path base) {
+        worker.submit(() -> {
+            // the reader's thread is the drawing's: code typed since is read first, this waits for its own reading
+            if (gen != generation.get()) {
+                return;
+            }
+            final Map<Path, String> texts = new LinkedHashMap<>();
+            for (CppGeometry.Source s : sources) {
+                texts.put(s.path().toAbsolutePath().normalize(), s.text());
+            }
+            List<CodeAdvisor.Finding> code = List.of();
+            List<com.sphere.core.geant4.Advisor.Advice> design = List.of();
+            Map<Path, Map<Integer, String>> lines = Map.of();
+            String note = "";
+            try {
+                code = CodeAdvisor.review(r, texts);
+                if (r.geometry().world() != null && gen == generation.get()) {
+                    final Map<String, String> gun = CodeAdvisor.gun(texts, base);
+                    r.geometry().settings().putAll(gun);
+                    design = new ArrayList<>();
+                    for (com.sphere.core.geant4.Advisor.Advice a : com.sphere.core.geant4.Advisor.review(r.geometry())) {
+                        // the code's own findings say it of the code, with its fix; the reading's notes, the model's faults
+                        if (!a.title().contains("share copy numbers") && !a.title().startsWith("Physics list")
+                            && !a.title().equals("Invalid model")) {
+                            design.add(a);
+                        }
+                    }
+                    String energy = gun.getOrDefault("gun.energy", "10*GeV");
+                    try {
+                        energy = Units.best(com.sphere.core.geant4.Expr.eval(energy, r.geometry().scope()),
+                            Units.Category.ENERGY);
+                    } catch (com.sphere.core.geant4.GeometryException | RuntimeException ignored) {
+                        // as the application writes it
+                    }
+                    note = gun.isEmpty() ? "" : "The detector is judged for the beam the application shoots: a "
+                        + energy + " " + gun.getOrDefault("gun.particle", "e-") + " (its generator and run macro).";
+                }
+                // a reading that took long is not read a second time for the units
+                final Map<CppGeometry.Computed, Dimensions.Dim> dims = r.micros() < 300_000 && !sources.isEmpty()
+                    && gen == generation.get() ? CppGeometry.dimensions(r, sources, base) : Map.of();
+                lines = inlays(r, dims);
+            } catch (RuntimeException e) {
+                note = "The assistant stopped on an internal fault: " + e;
+            }
+            final List<CodeAdvisor.Finding> c = code;
+            final List<com.sphere.core.geant4.Advisor.Advice> d = design;
+            final Map<Path, Map<Integer, String>> l = lines;
+            final String n = note;
+            SwingUtilities.invokeLater(() -> {
+                if (gen == generation.get()) {
+                    shownInsight(c, d, l, n);
+                }
+            });
+        });
+    }
+
+    private void shownInsight(List<CodeAdvisor.Finding> code, List<com.sphere.core.geant4.Advisor.Advice> design,
+                              Map<Path, Map<Integer, String>> lines, String note) {
+        assistant.show(code, design, note);
+        final int i = rightTabs.indexOfComponent(assistant);
+        final int n = assistant.serious();
+        rightTabs.setTitleAt(i, n > 0 ? "Assistant (" + n + ")" : "Assistant");
+        assistantProblems.clear();
+        for (CodeAdvisor.Finding f : code) {
+            assistantProblems.add(new Problem(f.file(), f.line(), f.severity(), f.title() + (f.fix() == null ? ""
+                : "  [" + f.fix().label() + "]"), "assistant", f));
+        }
+        inlays = lines;
+        publishFindings();
+    }
+
+    /** The assistant's window: where its cards go, what their buttons do. */
+    private final class AssistantHost implements CodeAssistant.Host {
+        public void reveal(Path file, int line) {
+            G4CodeFrame.this.reveal(file, line);
+        }
+
+        public boolean apply(String label, List<CodeAdvisor.Edit> edits) {
+            return applyEdits(label, edits);
+        }
+
+        public void command(String command) {
+            say("> " + command);
+            runScript(command);
+        }
+
+        public void show(String name) {
+            final PhysicalVolume pv = model.geometry.placement(name);
+            final LogicalVolume lv = model.geometry.volume(name);
+            final List<PhysicalVolume> pvs = pv != null ? List.of(pv) : lv != null ? model.geometry.placementsOf(lv) : List.of();
+            if (!pvs.isEmpty()) {
+                model.selectAll(pvs);
+                vp.fitSelection(true);
+            } else if (lv != null && last != null && last.origin(lv) != null) {
+                reveal(last.origin(lv).file(), last.origin(lv).line());
+            }
+        }
+    }
+
+    /**
+     * Rewrites of the code, each made only where the text the reading read is still there (the code may have
+     * been typed in since): the last first, so that the earlier offsets hold. True when one was written.
+     */
+    private boolean applyEdits(String label, List<CodeAdvisor.Edit> edits) {
+        final Map<Path, List<CodeAdvisor.Edit>> byFile = new LinkedHashMap<>();
+        for (CodeAdvisor.Edit e : edits) {
+            byFile.computeIfAbsent(e.file(), k -> new ArrayList<>()).add(e);
+        }
+        int done = 0, stale = 0;
+        for (Map.Entry<Path, List<CodeAdvisor.Edit>> f : byFile.entrySet()) {
+            final Document d = open(f.getKey()).getEditorArea().getDocument();
+            final List<CodeAdvisor.Edit> list = new ArrayList<>(f.getValue());
+            list.sort((a, b) -> b.start() - a.start());
+            int floor = Integer.MAX_VALUE;
+            for (CodeAdvisor.Edit e : list) {
+                try {
+                    if (e.end() <= floor && e.end() <= d.getLength()
+                        && d.getText(e.start(), e.end() - e.start()).equals(e.expected())) {
+                        d.remove(e.start(), e.end() - e.start());
+                        d.insertString(e.start(), e.text(), null);
+                        floor = e.start();
+                        done++;
+                    } else {
+                        stale++;
+                    }
+                } catch (BadLocationException ex) {
+                    stale++;
+                }
+            }
+        }
+        if (done == 0) {
+            status.setText("The code changed since it was read: F6 reads it again, then fix");
+            return false;
+        }
+        status.setText("written into the code: " + label + (stale > 0 ? " (" + stale + " not: the code changed there"
+            + " since it was read)" : ""));
+        say("Assistant: " + label);
+        reparse.restart();
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Values: what each line computes and builds
+    // ------------------------------------------------------------------
+
+    private static final Pattern TRIVIAL = Pattern.compile("\\s*[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?\\s*"
+        + "((?:[*/]\\s*[A-Za-z_]\\w*\\s*){0,2})");
+    private static final Pattern WORD = Pattern.compile("[A-Za-z_]\\w*");
+
+    /** A number alone, or times CLHEP units (10.*mm, 1.032*g/cm3): it says what it is, no value is shown for it. */
+    static boolean trivial(String text) {
+        final Matcher m = TRIVIAL.matcher(text);
+        if (!m.matches()) {
+            return false;
+        }
+        for (Matcher w = WORD.matcher(m.group(1)); w.find(); ) {
+            if (!Units.isReserved(w.group())) {
+                return false;   // 1.2 * calorSizeXY: a variable, the value is worth showing
+            }
+        }
+        return true;
+    }
+
+    private static final Pattern ANGLE_WORDS = Pattern.compile("\\b(deg|degree|rad|radian|mrad|pi|twopi|halfpi|M_PI)\\b");
+
+    /**
+     * The text past the end of each line: the values its declarations and assignments computed (each in its
+     * unit when the probe told it; an angle in degrees), then what it builds: a solid's size, a volume's
+     * material and mass, a placement's position, or how many it made in a loop.
+     */
+    static Map<Path, Map<Integer, String>> inlays(CppGeometry.Result r, Map<CppGeometry.Computed, Dimensions.Dim> dims) {
+        final Map<Path, Map<Integer, List<String>>> by = new LinkedHashMap<>();
+        for (CppGeometry.Computed c : r.insights().computed()) {
+            if (c.text() != null && trivial(c.text())) {
+                continue;   // 10.*mm says what it is
+            }
+            final String v = computed(c, dims.get(c));
+            if (v != null) {
+                inlay(by, c.file(), c.line(), c.name() + " = " + v);
+            }
+        }
+        // what the lines build, those made in a loop counted
+        final Map<String, List<Object>> made = new LinkedHashMap<>();
+        final Map<String, CppGeometry.Origin> at = new HashMap<>();
+        for (Map.Entry<Object, CppGeometry.Origin> e : r.origins().entrySet()) {
+            final CppGeometry.Origin o = e.getValue();
+            if (o.file() == null) {
+                continue;
+            }
+            final String kind = e.getKey() instanceof Solid ? "s" : e.getKey() instanceof LogicalVolume ? "l"
+                : e.getKey() instanceof PhysicalVolume ? "p" : null;
+            if (kind != null) {
+                final String key = o.file() + "\u0000" + o.lastLine() + "\u0000" + kind;
+                made.computeIfAbsent(key, k -> new ArrayList<>()).add(e.getKey());
+                at.put(key, o);
+            }
+        }
+        final long budget = System.nanoTime() + 150_000_000L;   // masses of booleans are sampled: not past this
+        for (Map.Entry<String, List<Object>> e : made.entrySet()) {
+            final CppGeometry.Origin o = at.get(e.getKey());
+            final String t = built(r.geometry(), e.getValue(), budget);
+            if (t != null) {
+                inlay(by, o.file(), o.lastLine(), t);
+            }
+        }
+        final Map<Path, Map<Integer, String>> out = new LinkedHashMap<>();
+        for (Map.Entry<Path, Map<Integer, List<String>>> f : by.entrySet()) {
+            final Map<Integer, String> lines = new LinkedHashMap<>();
+            f.getValue().forEach((line, texts) -> {
+                final String s = String.join("  ·  ", texts);
+                lines.put(line, s.length() > 110 ? s.substring(0, 107) + "..." : s);
+            });
+            out.put(f.getKey().toAbsolutePath().normalize(), lines);
+        }
+        return out;
+    }
+
+    private static void inlay(Map<Path, Map<Integer, List<String>>> by, Path file, int line, String text) {
+        by.computeIfAbsent(file, k -> new java.util.TreeMap<>()).computeIfAbsent(line, k -> new ArrayList<>()).add(text);
+    }
+
+    /** A value as the probe dimensioned it: null when its unit is not known (a number in internal units misleads). */
+    static String computed(CppGeometry.Computed c, Dimensions.Dim d) {
+        if (c.values().isEmpty()) {
+            return null;
+        }
+        Units.Category cat = d == null ? null : d.category();
+        if (cat == null && !(c.integer() && d == null)) {
+            return null;
+        }
+        final boolean angle = cat == Units.Category.NONE && !c.integer() && c.text() != null
+            && ANGLE_WORDS.matcher(c.text()).find();
+        if (angle) {
+            cat = Units.Category.ANGLE;
+        }
+        final double[] first = c.values().get(0);
+        if (first.length == 3) {
+            final String v = vector(first, cat);
+            return c.runs() > 1 ? c.runs() + " runs, first " + v : v;
+        }
+        if (c.runs() == 1) {
+            return value(first[0], cat, c.integer());
+        }
+        double lo = Double.MAX_VALUE, hi = -Double.MAX_VALUE;
+        for (double[] v : c.values()) {
+            lo = Math.min(lo, v[0]);
+            hi = Math.max(hi, v[0]);
+        }
+        return c.runs() + " runs" + (lo == hi ? ", always " + value(lo, cat, c.integer())
+            : ": " + value(lo, cat, c.integer()) + " ... " + value(hi, cat, c.integer()));
+    }
+
+    private static String value(double v, Units.Category cat, boolean integer) {
+        if (integer && (cat == null || cat == Units.Category.NONE)) {
+            return String.valueOf((long) v);
+        }
+        return cat == null || cat == Units.Category.NONE ? short4(v) : best4(v, cat);
+    }
+
+    private static final Pattern BEST = Pattern.compile("([-+]?[0-9.]+(?:[eE][-+]?[0-9]+)?)\\s*(.*)");
+
+    /** Units.best's choice of unit, with four significant digits: a value beside the code is read at a glance. */
+    static String best4(double v, Units.Category cat) {
+        final String s = Units.best(v, cat);
+        final Matcher m = BEST.matcher(s.strip());
+        return m.matches() ? short4(Double.parseDouble(m.group(1))) + (m.group(2).isEmpty() ? "" : " " + m.group(2)) : s;
+    }
+
+    /** (x, y, z) in one unit, the one of its largest coordinate. */
+    private static String vector(double[] v, Units.Category cat) {
+        if (cat != Units.Category.LENGTH) {
+            return "(" + short4(v[0]) + ", " + short4(v[1]) + ", " + short4(v[2]) + ")";
+        }
+        final double max = Math.max(Math.abs(v[0]), Math.max(Math.abs(v[1]), Math.abs(v[2])));
+        final String[] names = {"m", "cm", "mm", "um"};
+        final double[] sizes = {1000, 10, 1, 1e-3};
+        int u = 2;
+        for (int i = 0; i < names.length; i++) {
+            if (max >= sizes[i]) {
+                u = i;
+                break;
+            }
+        }
+        return "(" + short4(v[0] / sizes[u]) + ", " + short4(v[1] / sizes[u]) + ", " + short4(v[2] / sizes[u]) + ") "
+            + names[u];
+    }
+
+    /** Four significant digits, without trailing zeros. */
+    static String short4(double v) {
+        if (v == 0) {
+            return "0";
+        }
+        String s = String.format(Locale.ROOT, Math.abs(v) >= 1e-3 && Math.abs(v) < 1e7 ? "%.4g" : "%.3e", v);
+        if (s.contains("e")) {
+            return s.replaceAll("\\.?0+e", "e");
+        }
+        if (s.contains(".")) {
+            s = s.replaceAll("0+$", "").replaceAll("\\.$", "");
+        }
+        return s;
+    }
+
+    /** What one line made: a solid's size, a volume's material and mass, a placement's position; n of them in a loop. */
+    private static String built(Geometry g, List<Object> made, long budget) {
+        final Object first = made.get(0);
+        final int n = made.size();
+        if (first instanceof Solid s) {
+            if (s.error() != null) {
+                return null;
+            }
+            final Vec3 size = s.extent().size();
+            return (n > 1 ? n + " x " : "") + s.g4Class() + " " + vector(new double[] {size.x(), size.y(), size.z()},
+                Units.Category.LENGTH).replaceAll("^\\((.*)\\)", "$1").replace(", ", " x ");
+        }
+        if (first instanceof LogicalVolume lv) {
+            final Material m = g.materials().material(lv.material());
+            String mass = "";
+            // a vacuum's mass says nothing; a boolean's volume is sampled, and waits past the budget
+            if (n == 1 && m != null && m.densityGcm3() > 1e-6 && lv.solid() != null && lv.solid().error() == null
+                && System.nanoTime() < budget) {
+                double v = lv.solid().cubicVolume();
+                for (PhysicalVolume d : lv.daughters()) {
+                    if (d.logical().solid() != null && d.logical().solid().error() == null) {
+                        v -= Math.max(1, d.copies()) * d.logical().solid().cubicVolume();
+                    }
+                }
+                mass = ", " + best4(Math.max(0, v) * m.density(), Units.Category.MASS);
+            }
+            return (n > 1 ? n + " volumes of " : "") + lv.material() + (m == null ? " (unknown)" : mass);
+        }
+        if (first instanceof PhysicalVolume pv) {
+            if (n == 1 && pv.isReplica()) {
+                return pv.copies() + " replicas along " + pv.replica().axis().name().substring(1).replace("Axis", "");
+            }
+            if (n == 1) {
+                final Vec3 p = pv.position();
+                return (p.length() < 1e-9 ? "at the center" : "at " + vector(new double[] {p.x(), p.y(), p.z()},
+                    Units.Category.LENGTH)) + (pv.rotation().length() > 1e-12 ? ", turned" : "")
+                    + (pv.copyNumber() != 0 ? ", copy " + pv.copyNumber() : "");
+            }
+            // a loop: the coordinates that change, from where to where
+            final StringBuilder b = new StringBuilder(n + " placements");
+            final String[] axes = {"x", "y", "z"};
+            for (int k = 0; k < 3; k++) {
+                double lo = Double.MAX_VALUE, hi = -Double.MAX_VALUE;
+                for (Object o : made) {
+                    final double c = ((PhysicalVolume) o).position().get(k);
+                    lo = Math.min(lo, c);
+                    hi = Math.max(hi, c);
+                }
+                if (hi - lo > 1e-9) {
+                    b.append(", ").append(axes[k]).append(' ').append(best4(lo, Units.Category.LENGTH)).append(" ... ")
+                        .append(best4(hi, Units.Category.LENGTH));
+                }
+            }
+            return b.toString();
+        }
+        return null;
     }
 
     private static String key(PhysicalVolume pv) {
@@ -1223,6 +1728,7 @@ public final class G4CodeFrame extends JFrame {
         all.addAll(overlapProblems);
         all.addAll(macroProblems);
         all.addAll(buildProblems);
+        all.addAll(assistantProblems);
         all.sort((a, b) -> a.severity().ordinal() - b.severity().ordinal());
         problems.clear();
         for (Problem p : all) {
@@ -1233,9 +1739,11 @@ public final class G4CodeFrame extends JFrame {
             if (p.file() == null || p.line() <= 0 || p.source().equals("compiler")) {
                 continue;
             }
+            final CodeAdvisor.Finding f = p.finding();
             liveFindings.computeIfAbsent(p.file().toAbsolutePath().normalize(), k -> new ArrayList<>())
-                .add(new EditorDiagnostic(p.line(), 0, 0, severity(p.severity()), p.source(), p.message(),
-                    "G4code " + p.source()));
+                .add(new EditorDiagnostic(p.line(), f == null ? 0 : f.column(), f == null ? 0 : f.length(),
+                    severity(p.severity()), p.source(), f == null ? p.message() : f.title() + ". " + f.detail()
+                    + (f.fix() == null ? "" : " Fix: " + f.fix().label() + " (Problems, right button)."), "G4code " + p.source()));
         }
         for (CodeTab t : tabs) {
             applyFindings(t);
@@ -1250,6 +1758,10 @@ public final class G4CodeFrame extends JFrame {
         final List<EditorDiagnostic> d = new ArrayList<>(liveFindings.getOrDefault(p, List.of()));
         d.addAll(buildFindings.getOrDefault(p, List.of()));
         t.setDiagnostics(d);
+        // the values of the text read: once it is typed in, they wait for the next reading
+        final String read = readTexts.get(p);
+        t.getEditorArea().setInlays(values.isSelected() && read != null && read.equals(t.getEditorArea().getText())
+            ? inlays.getOrDefault(p, Map.of()) : Map.of());
     }
 
     private static EditorDiagnostic.Severity severity(Geometry.Severity s) {
@@ -1327,11 +1839,11 @@ public final class G4CodeFrame extends JFrame {
                 () -> model.edit((plv.visible() ? "Hide " : "Show ") + plv.name(), () -> plv.setVisible(!plv.visible()))));
             m.add(menuItem(plv.wireframe() ? "Draw it solid" : "Draw it as wireframe", null,
                 () -> model.edit("Wireframe " + plv.name(), () -> plv.setWireframe(!plv.wireframe()))));
-            m.add(menuItem("Colour...", null, () -> {
+            m.add(menuItem("Color...", null, () -> {
                 final Color now = new Color(plv.color(), true);
-                final Color c = javax.swing.JColorChooser.showDialog(this, "Colour of " + plv.name(), now);
+                final Color c = javax.swing.JColorChooser.showDialog(this, "Color of " + plv.name(), now);
                 if (c != null) {
-                    model.edit("Colour " + plv.name(), () -> plv.setColor((now.getAlpha() << 24) | (c.getRGB() & 0xFFFFFF)));
+                    model.edit("Color " + plv.name(), () -> plv.setColor((now.getAlpha() << 24) | (c.getRGB() & 0xFFFFFF)));
                 }
             }));
             final javax.swing.JMenu mat = new javax.swing.JMenu("Material");
@@ -1401,6 +1913,12 @@ public final class G4CodeFrame extends JFrame {
         final JMenuItem go = menuItem("Go to the line", null, () -> reveal(p.file(), Math.max(1, p.line())));
         go.setEnabled(p.file() != null);
         m.add(go);
+        if (p.finding() != null && p.finding().fix() != null) {
+            final CodeAdvisor.Fix fix = p.finding().fix();
+            final JMenuItem f = menuItem("Fix: " + fix.label(), null, () -> applyEdits(fix.label(), fix.edits()));
+            f.setFont(f.getFont().deriveFont(Font.BOLD));
+            m.add(f);
+        }
         m.add(menuItem("Copy the message", null, () -> java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
             .setContents(new java.awt.datatransfer.StringSelection(p.toString()), null)));
         m.show(problemList, e.getX(), e.getY());
@@ -1589,7 +2107,7 @@ public final class G4CodeFrame extends JFrame {
     /**
      * Volumes drawn in 3D since the reading, written into the code where their mother is made, and the
      * characteristics changed in the properties: a solid's parameters in the arguments of its constructor,
-     * the material in the G4LogicalVolume's argument, the colour, visibility and wireframe in its
+     * the material in the G4LogicalVolume's argument, the color, visibility and wireframe in its
      * SetVisAttributes (or a SetVisAttributes written after the volume is made).
      */
     private int writeDrawn(Map<Path, List<Rewrite>> edits, Map<Path, Map<Integer, StringBuilder>> inserts,
@@ -2346,7 +2864,7 @@ public final class G4CodeFrame extends JFrame {
 
     /**
      * Volumes of a G4editor design written into the code, all they hold with them, in the volume selected
-     * here (else the world): the volumes, their solids and materials, colours, rotations, copies.
+     * here (else the world): the volumes, their solids and materials, colors, rotations, copies.
      */
     void insertDesign(Geometry design, List<PhysicalVolume> pvs, String from) {
         if (last == null || project == null || model.geometry.world() == null) {
@@ -2643,7 +3161,7 @@ public final class G4CodeFrame extends JFrame {
         return b.toString();
     }
 
-    /** "G4ThreeVector(0, 2 * cm, -7 * cm)": centimetres when every coordinate is a whole number of them. */
+    /** "G4ThreeVector(0, 2 * cm, -7 * cm)": centimeters when every coordinate is a whole number of them. */
     static String threeVector(Vec3 p) {
         final double[] v = {p.x(), p.y(), p.z()};
         boolean cm = false, allCm = true;
@@ -3325,7 +3843,7 @@ public final class G4CodeFrame extends JFrame {
             auto* logicShell = new G4LogicalVolume(shell, nist->FindOrBuildMaterial("G4_Fe"), "Shell");
             new G4PVPlacement(nullptr, G4ThreeVector(), logicShell, "Shell", logicWorld, false, 0, true);
             """},
-        {"Colour and visibility", """
+        {"Color and visibility", """
             auto* vis = new G4VisAttributes(G4Colour(0.2, 0.6, 1.0, 0.5));
             vis->SetForceSolid(true);
             logicBox->SetVisAttributes(vis);
@@ -3334,6 +3852,15 @@ public final class G4CodeFrame extends JFrame {
             G4GDMLParser parser;
             parser.Read("detector.gdml", false);
             return parser.GetWorldVolume();
+            """},
+        {"A network trained in Sphere (PyTorch or Keras), run with no ML library", """
+            // #include "sphere_nn.hpp" at the top (in the bridge's lib folder, SPHERE_BRIDGE_LIB).
+            // A network of ':ml train' -- PyTorch or Keras -- loaded once, run here on a jet or a shower:
+            static const sphere::nn::Network net("tagger");   // $SPHERE_BRIDGE/models/tagger.snn.spx
+            std::vector<double> x(net.points() * net.features(), 0.), mask(net.points(), 0.);
+            // row i: particle i's log pt, log E, log pt/ptJ, log E/EJ, deta, dphi, dR; then mask[i] = 1
+            const std::vector<double> p = net.probabilities(x, mask);
+            G4cout << net.name() << ": P(signal) = " << p.back() << G4endl;
             """},
     };
 

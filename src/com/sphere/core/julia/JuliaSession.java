@@ -209,7 +209,7 @@ public final class JuliaSession implements VariableSources.Source {
         }
     }
 
-    /** Runs a file in the session, so what it defines stays afterwards. */
+    /** Runs a file in the session, so what it defines stays afterward. */
     public void runFile(File file) {
         runFile(file, java.util.List.of());
     }
@@ -218,7 +218,7 @@ public final class JuliaSession implements VariableSources.Source {
      * Runs a file with arguments of its own, which reach it through ARGS.
      *
      * A session is not a fresh process, so ARGS has to be set for this run and
-     * cleared afterwards rather than being what the interpreter was started with.
+     * cleared afterward rather than being what the interpreter was started with.
      */
     public void runFile(File file, java.util.List<String> arguments) {
         if (file == null) {

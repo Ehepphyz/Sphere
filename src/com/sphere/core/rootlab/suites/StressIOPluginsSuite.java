@@ -137,7 +137,7 @@ public final class StressIOPluginsSuite implements LabSuite {
             long tracks = 0;
             long first = -1;
             for (long i = 0; i < t.entries(); i++) {
-                if (ctx.cancelled()) {
+                if (ctx.canceled()) {
                     throw new LabSkip("canceled");
                 }
                 final RBuffer b = event.entry(i);

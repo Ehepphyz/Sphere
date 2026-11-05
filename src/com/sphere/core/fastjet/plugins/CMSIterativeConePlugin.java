@@ -16,7 +16,7 @@ import java.util.Map;
 /**
  * fastjet::CMSIterativeConePlugin, the CMS iterative cone (CMS physics TDR):
  * from the hardest remaining tower above the seed threshold, a cone of
- * radius R in (eta, phi) is moved to its Et-weighted centre until stable
+ * radius R in (eta, phi) is moved to its Et-weighted center until stable
  * (to 0.001, at most 100 times); its towers make a jet and are removed.
  *
  * The stable-cone search is the CMS code's own double arithmetic, tolerances

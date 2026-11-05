@@ -97,7 +97,7 @@ public final class JuliaScript {
                 (value isa Module || value isa Function) && continue
                 shown = try
                     # Asking for a limited view keeps a million element array from
-                    # being rendered in full only to be cut afterwards.
+                    # being rendered in full only to be cut afterward.
                     sprint(show, value; context = :limit => true)
                 catch
                     "<unreadable>"
@@ -187,7 +187,7 @@ public final class JuliaScript {
         # Runs a file, with the arguments that came with it. The payload is the
         # path on its first line and one argument per line after it. ARGS is what
         # a Julia program reads its arguments from, and a session outlives a run,
-        # so it is set for this one and emptied afterwards.
+        # so it is set for this one and emptied afterward.
         function run_file(payload::AbstractString)
             pieces = split(payload, '\\n')
             path = String(pieces[1])

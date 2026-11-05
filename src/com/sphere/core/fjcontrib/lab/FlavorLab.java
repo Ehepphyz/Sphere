@@ -19,18 +19,18 @@ import java.util.List;
 import java.util.SplittableRandom;
 
 /**
- * The flavour of jets by every definition fjcontrib offers, side by side,
+ * The flavor of jets by every definition fjcontrib offers, side by side,
  * and put to the test.
  *
- * <p>Net flavour with anti-kt is the naive answer, and it is not infrared
- * safe: a soft quark and antiquark landing in two different jets flavour
+ * <p>Net flavor with anti-kt is the naive answer, and it is not infrared
+ * safe: a soft quark and antiquark landing in two different jets flavor
  * both. IFN, CMP, GHS and SDF were each built to fix that. {@link #label}
  * gives the leading jets of an event with the label each definition
- * assigns; {@link #ircTest} adds soft flavoured pairs, and splits gluons
+ * assigns; {@link #ircTest} adds soft flavored pairs, and splits gluons
  * into collinear quark pairs, and counts which definitions change their
  * answer: the test of arXiv:2306.07314, on the events at hand.
  */
-public final class FlavourLab {
+public final class FlavorLab {
 
     /** The definitions compared. */
     public enum Algo {
@@ -49,9 +49,9 @@ public final class FlavourLab {
 
     /**
      * @param r     the jet radius (anti-kt, and each algorithm's)
-     * @param ptmin the jets labelled are above it (GHS's fiducial cut too)
+     * @param ptmin the jets labeled are above it (GHS's fiducial cut too)
      * @param njets how many leading jets
-     * @param only  a flavour 1..6 to keep alone (5 for b-tagging), 0 for all
+     * @param only  a flavor 1..6 to keep alone (5 for b-tagging), 0 for all
      */
     public record Options(double r, double ptmin, int njets, int only, double ifnAlpha, double cmpA,
                           double ghsAlpha, double ghsOmega, double sdfBeta, double sdfZcut) {
@@ -69,13 +69,13 @@ public final class FlavourLab {
     }
 
     /** A leading jet and its label under each definition (null where a definition found no matching jet). */
-    public record Labelled(PseudoJet jet, FlavInfo[] labels) {
+    public record Labeled(PseudoJet jet, FlavInfo[] labels) {
         public FlavInfo label(Algo a) {
             return labels[a.ordinal()];
         }
     }
 
-    private FlavourLab() {
+    private FlavorLab() {
     }
 
     /** Whether any particle of the event carries a PDG code (an index other than FastJet's default -1). */
@@ -84,8 +84,8 @@ public final class FlavourLab {
         return false;
     }
 
-    /** Copies of the particles, each with a FlavHistory from its PDG code (only one flavour kept if asked). */
-    public static List<PseudoJet> flavoured(List<PseudoJet> event, int only) {
+    /** Copies of the particles, each with a FlavHistory from its PDG code (only one flavor kept if asked). */
+    public static List<PseudoJet> flavored(List<PseudoJet> event, int only) {
         final List<PseudoJet> out = new ArrayList<>(event.size());
         for (PseudoJet p : event) {
             final PseudoJet c = p.copy();
@@ -97,9 +97,9 @@ public final class FlavourLab {
         return out;
     }
 
-    /** The leading jets of one event, labelled by each definition. */
-    public static List<Labelled> label(List<PseudoJet> event, Options o) {
-        final List<PseudoJet> particles = flavoured(event, o.only());
+    /** The leading jets of one event, labeled by each definition. */
+    public static List<Labeled> label(List<PseudoJet> event, Options o) {
+        final List<PseudoJet> particles = flavored(event, o.only());
         final FlavRecombiner fr = new FlavRecombiner();
         final JetDefinition base = new JetDefinition(JetAlgorithm.ANTIKT, o.r());
         base.setRecombiner(fr);
@@ -117,7 +117,7 @@ public final class FlavourLab {
         final List<PseudoJet> ghs = GHSAlgo.runGHS(baseAll, o.ptmin(), o.ghsAlpha(), o.ghsOmega(), fr);
         final SDFlavourCalc sdf = new SDFlavourCalc(o.sdfBeta(), o.sdfZcut(), o.r());
 
-        final List<Labelled> out = new ArrayList<>();
+        final List<Labeled> out = new ArrayList<>();
         for (PseudoJet j : baseJets) {
             final FlavInfo[] l = new FlavInfo[Algo.values().length];
             l[Algo.NET.ordinal()] = FlavHistory.currentFlavourOf(j);
@@ -125,7 +125,7 @@ public final class FlavourLab {
             l[Algo.CMP.ordinal()] = labelOfNearest(cmp, j, o.r());
             l[Algo.GHS.ordinal()] = labelOfNearest(ghs, j, o.r());
             l[Algo.SDF.ordinal()] = sdf.flavourOf(j);
-            out.add(new Labelled(j, l));
+            out.add(new Labeled(j, l));
         }
         return out;
     }
@@ -148,8 +148,8 @@ public final class FlavourLab {
     /* Across a sample                                                     */
     /* ------------------------------------------------------------------ */
 
-    /** How often each definition flavours a jet, and how often each pair of definitions agree. */
-    public record Comparison(int events, int jets, int[] flavoured, int[][] agree, int[][] both, double millis) {
+    /** How often each definition flavors a jet, and how often each pair of definitions agree. */
+    public record Comparison(int events, int jets, int[] flavored, int[][] agree, int[][] both, double millis) {
         public double agreement(Algo a, Algo b) {
             final int n = both[a.ordinal()][b.ordinal()];
             return n == 0 ? Double.NaN : (double) agree[a.ordinal()][b.ordinal()] / n;
@@ -158,30 +158,30 @@ public final class FlavourLab {
 
     public static Comparison compare(List<List<PseudoJet>> events, Options o, int threads) {
         final long t0 = System.nanoTime();
-        final List<List<Labelled>> all = Parallel.map(events.size(), e -> label(events.get(e), o), threads);
+        final List<List<Labeled>> all = Parallel.map(events.size(), e -> label(events.get(e), o), threads);
         final int n = Algo.values().length;
-        final int[] flavoured = new int[n];
+        final int[] flavored = new int[n];
         final int[][] agree = new int[n][n];
         final int[][] both = new int[n][n];
         int jets = 0;
-        for (List<Labelled> ev : all) {
-            for (Labelled l : ev) {
+        for (List<Labeled> ev : all) {
+            for (Labeled l : ev) {
                 jets++;
                 for (int a = 0; a < n; a++) {
-                    if (l.labels()[a] != null && !l.labels()[a].isFlavourless()) flavoured[a]++;
+                    if (l.labels()[a] != null && !l.labels()[a].isFlavourless()) flavored[a]++;
                     for (int b = 0; b < n; b++) {
                         if (l.labels()[a] == null || l.labels()[b] == null) continue;
                         both[a][b]++;
-                        if (sameFlavour(l.labels()[a], l.labels()[b])) agree[a][b]++;
+                        if (sameFlavor(l.labels()[a], l.labels()[b])) agree[a][b]++;
                     }
                 }
             }
         }
-        return new Comparison(events.size(), jets, flavoured, agree, both, (System.nanoTime() - t0) / 1e6);
+        return new Comparison(events.size(), jets, flavored, agree, both, (System.nanoTime() - t0) / 1e6);
     }
 
-    /** The same net content of the six flavours (flags aside). */
-    static boolean sameFlavour(FlavInfo a, FlavInfo b) {
+    /** The same net content of the six flavors (flags aside). */
+    static boolean sameFlavor(FlavInfo a, FlavInfo b) {
         for (int i = 1; i <= 6; i++) if (a.get(i) != b.get(i)) return false;
         return true;
     }
@@ -234,7 +234,7 @@ public final class FlavourLab {
     /**
      * For each event and trial: a quark and an antiquark of pt epsilon x the
      * leading jet's, each at its own random place (the configuration that
-     * spoils net flavour), and separately the hardest gluon replaced by a
+     * spoils net flavor), and separately the hardest gluon replaced by a
      * quark pair epsilon apart in rapidity. Each trial is repeated at every
      * scale with the same places, so that the scales differ by epsilon alone:
      * infrared and collinear safety is a statement about the limit, and a
@@ -249,7 +249,7 @@ public final class FlavourLab {
         final List<int[][]> per = Parallel.map(events.size(), e -> {
             final int[][] changed = new int[2 * ns + 1][n];
             final List<PseudoJet> ev = events.get(e);
-            final List<Labelled> ref = label(ev, o);
+            final List<Labeled> ref = label(ev, o);
             if (ref.isEmpty()) return changed;
             final double lead = ref.get(0).jet().pt();
             final SplittableRandom r = new SplittableRandom(seed * 1000003L + e);
@@ -291,13 +291,13 @@ public final class FlavourLab {
     }
 
     /** Adds 1 to each definition that labels some leading jet otherwise than the reference did. */
-    private static void countChanges(List<Labelled> ref, List<Labelled> now, int[] changed) {
+    private static void countChanges(List<Labeled> ref, List<Labeled> now, int[] changed) {
         for (Algo a : Algo.values()) {
             boolean differs = ref.size() != now.size();
             for (int k = 0; !differs && k < ref.size(); k++) {
                 final FlavInfo x = ref.get(k).label(a);
                 final FlavInfo y = now.get(k).label(a);
-                differs = (x == null) != (y == null) || (x != null && !sameFlavour(x, y));
+                differs = (x == null) != (y == null) || (x != null && !sameFlavor(x, y));
             }
             if (differs) changed[a.ordinal()]++;
         }
@@ -329,13 +329,13 @@ public final class FlavourLab {
     /* ------------------------------------------------------------------ */
 
     /**
-     * FlavorCone jets around the particles of flavour f above seedPt: each
+     * FlavorCone jets around the particles of flavor f above seedPt: each
      * particle within rcut of a seed goes to the nearest one.
      */
-    public static List<PseudoJet> flavorCone(List<PseudoJet> event, int flavour, double seedPt, double rcut) {
+    public static List<PseudoJet> flavorCone(List<PseudoJet> event, int flavor, double seedPt, double rcut) {
         final List<PseudoJet> seeds = new ArrayList<>();
         for (PseudoJet p : event) {
-            if (p.pt() >= seedPt && FlavInfo.fromUserIndex(p).get(flavour) != 0) seeds.add(p);
+            if (p.pt() >= seedPt && FlavInfo.fromUserIndex(p).get(flavor) != 0) seeds.add(p);
         }
         if (seeds.isEmpty()) return List.of();
         return PseudoJet.sortedByPt(new ClusterSequence(event, new JetDefinition(new FlavorConePlugin(seeds, rcut)))

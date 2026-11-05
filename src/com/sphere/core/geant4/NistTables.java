@@ -7,7 +7,7 @@ package com.sphere.core.geant4;
  *
  * Elements: Z symbol meanAtomicMass(g/mole) meanNucleonNumber
  * Materials: name density(g/cm3) I(eV) state(S|L|G) A|W Z:fraction... [| T=K P=atm F=formula]
- *   A: fractions are atom counts, W: normalised mass fractions
+ *   A: fractions are atom counts, W: normalized mass fractions
  */
 final class NistTables {
 

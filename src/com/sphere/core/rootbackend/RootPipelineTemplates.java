@@ -201,7 +201,7 @@ public final class RootPipelineTemplates {
      * Two questions in one entry point: is it healthy, and what shape is it.
      *
      * A pipeline that answers NaN on one entry in ten thousand poisons every
-     * histogram downstream and is almost impossible to find afterwards, so the
+     * histogram downstream and is almost impossible to find afterward, so the
      * inputs are swept and the bad answers counted. Sweeping one input while
      * the others are held is the other half: a step or a spike in that curve is
      * what a wrong branch of an expression looks like from outside.
@@ -459,7 +459,7 @@ public final class RootPipelineTemplates {
                 out.append(manifest.signature()).append(" {\n");
                 out.append("  // Build and return the histogram. Sphere puts it in gDirectory,\n");
                 out.append("  // so :root hist draw ").append(manifest.name)
-                   .append("_h finds it afterwards.\n");
+                   .append("_h finds it afterward.\n");
                 out.append("  TH1D *out = new TH1D(\"").append(manifest.name)
                    .append("_h\", \"").append(manifest.name).append("\", 100, 0.0, 100.0);\n");
                 out.append("  if (tree == nullptr) {\n");

@@ -24,7 +24,7 @@ import java.util.SplittableRandom;
  * Turns what ROOT drew into meshes for the 3D space.
  *
  * Everything gets a third dimension, even what ROOT drew flat: a TH2 becomes
- * a lit surface with its colour map and contours on the floor, or a LEGO of
+ * a lit surface with its color map and contours on the floor, or a LEGO of
  * bars; a TH3 nested iso-surfaces (marching tetrahedra), voxels or a cloud
  * sampled from its contents; a TGraph2D a Delaunay surface through its
  * points; a pad of 1D histograms a waterfall, one behind the other; a
@@ -65,12 +65,12 @@ public final class SceneBuilder3D {
         public boolean markers = true;
         public int imageGrid = 240;
         public boolean invertImage = true;
-        /** Read a colour map back into values when the picture's colours come from a known palette. */
+        /** Read a color map back into values when the picture's colors come from a known palette. */
         public boolean decodePalette = true;
-        /** A picture's paper and ink re-inked for a dark theme, its data colours kept. */
+        /** A picture's paper and ink re-inked for a dark theme, its data colors kept. */
         public boolean themePaper = com.sphere.components.imaging.ImagingTheme.isDark();
         public double reliefHeight = 0.22;
-        /** How far a geometry's volumes are pulled from its centre, 0 none. */
+        /** How far a geometry's volumes are pulled from its center, 0 none. */
         public double explode;
         public double opacity = 1;
         public long seed = 7;
@@ -137,7 +137,7 @@ public final class SceneBuilder3D {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Values and colours                                                  */
+    /* Values and colors                                                  */
     /* ------------------------------------------------------------------ */
 
     private static double zOf(double v, boolean log, double floor) {
@@ -167,7 +167,7 @@ public final class SceneBuilder3D {
         return new double[]{lo, hi, 0};
     }
 
-    /** Where a height falls on the colour scale: on its own range when one was given (r[3], r[4]). */
+    /** Where a height falls on the color scale: on its own range when one was given (r[3], r[4]). */
     private static double cf(double z, double[] r) {
         return r.length > 4 && r[4] > r[3] ? (z - r[3]) / (r[4] - r[3]) : (z - r[0]) / (r[1] - r[0]);
     }
@@ -231,7 +231,7 @@ public final class SceneBuilder3D {
         return s;
     }
 
-    /** A curve as a band of some depth at y, lit; coloured by the palette or in one colour. */
+    /** A curve as a band of some depth at y, lit; colored by the palette or in one color. */
     private static void ribbon(Mesh3D m, Hist h, double y, double depth, double[] r, Color[] pal, Options o, int fixed) {
         m.smooth = true;
         final int n = h.nx();
@@ -347,7 +347,7 @@ public final class SceneBuilder3D {
         s.log[2] = o.logZ;
         final Color[] pal = Palettes.get(o.palette);
         final double[] r0 = range(h.v, o.logZ);
-        // The colours span the contents from their minimum, as COLZ does; the bars stand on the floor.
+        // The colors span the contents from their minimum, as COLZ does; the bars stand on the floor.
         double cLo = Double.MAX_VALUE;
         for (double v : h.v) if (Double.isFinite(v) && (!o.logZ || v > 0)) cLo = Math.min(cLo, zOf(v, o.logZ, r0[2]));
         if (!(cLo < r0[1])) cLo = r0[0];
@@ -396,7 +396,7 @@ public final class SceneBuilder3D {
         return s;
     }
 
-    /** A smooth surface through the bin centres, coloured by height. */
+    /** A smooth surface through the bin centers, colored by height. */
     private static void surface(Scene3D s, Hist h, double[] r, Color[] pal, Options o) {
         final int nx = h.nx();
         final int ny = h.ny();
@@ -449,7 +449,7 @@ public final class SceneBuilder3D {
         s.notes.add(gx + " x " + gy + " surface" + (step > 1 ? " (" + step + "x" + step + " bins merged)" : ""));
     }
 
-    /** The colour map and the contours laid on the floor of the box, as COLZ and CONT would be. */
+    /** The color map and the contours laid on the floor of the box, as COLZ and CONT would be. */
     private static void floor(Scene3D s, Hist h, double[] r, Color[] pal, Options o) {
         final int nx = h.nx();
         final int ny = h.ny();
@@ -642,7 +642,7 @@ public final class SceneBuilder3D {
     private static final int[][] TETRA = {{0, 5, 1, 6}, {0, 1, 2, 6}, {0, 2, 3, 6}, {0, 3, 7, 6}, {0, 7, 4, 6}, {0, 4, 5, 6}};
 
     /**
-     * Marching tetrahedra through the bin centres: each cell cut into six
+     * Marching tetrahedra through the bin centers: each cell cut into six
      * tetrahedra, each crossing the level in one triangle or two. The normals
      * are the field's gradient, so the surface is smooth however coarse the
      * binning.
@@ -853,7 +853,7 @@ public final class SceneBuilder3D {
     private static void geometry(Scene3D s, Geometry geo, Options o) {
         final Map<Integer, Mesh3D> byAlpha = new HashMap<>();
         final Mesh3D wires = s.mesh("wires");
-        // The centre of the whole, from which the volumes are pulled.
+        // The center of the whole, from which the volumes are pulled.
         double gx = 0;
         double gy = 0;
         double gz = 0;
@@ -937,7 +937,7 @@ public final class SceneBuilder3D {
 
     /**
      * A picture as a landscape: each pixel's height its ink (or its light),
-     * its colour its own. A plot of curves on white paper rises where it was
+     * its color its own. A plot of curves on white paper rises where it was
      * drawn, so a PNG that lost its numbers can still be turned and looked at
      * from the side.
      */
@@ -967,10 +967,10 @@ public final class SceneBuilder3D {
         border.sort(null);
         final double paper = border.isEmpty() ? 1 : border.get(border.size() / 2);
         final double span = Math.max(paper, 1 - paper);
-        // A colour map plot (COLZ, imshow): its colours are values, and the palette says which.
-        final String scaleName = o.decodePalette ? recognisePalette(img) : null;
+        // A color map plot (COLZ, imshow): its colors are values, and the palette says which.
+        final String scaleName = o.decodePalette ? recognizePalette(img) : null;
         final Color[] scale = scaleName == null ? null : Palettes.get(scaleName);
-        // The colours shown; the heights are always read from the picture's own.
+        // The colors shown; the heights are always read from the picture's own.
         final BufferedImage paint = o.themePaper ? com.sphere.components.imaging.ImagingTheme.onThemePaper(img) : img;
         for (int j = 0; j < gy; j++) {
             for (int i = 0; i < gx; i++) {
@@ -1001,10 +1001,10 @@ public final class SceneBuilder3D {
                 final int cb = (int) (b / n);
                 col[j][i] = 0xFF000000 | (int) (pr / n) << 16 | (int) (pg / n) << 8 | (int) (pb / n);
                 final double lum = (0.2126 * cr + 0.7152 * cg + 0.0722 * cb) / 255.0;
-                // Ink: how far a pixel stands from the paper, whatever the paper's colour.
+                // Ink: how far a pixel stands from the paper, whatever the paper's color.
                 final double ink = o.invertImage ? Math.abs(lum - paper) / Math.max(1e-6, span) : lum;
                 if (scale != null) {
-                    // The value the colour stands for; text and axes stay low, engraved.
+                    // The value the color stands for; text and axes stay low, engraved.
                     final double[] near = nearest(scale, cr, cg, cb);
                     height[j][i] = near[1] < 34 ? 0.04 + 0.96 * near[0] / (scale.length - 1) : 0.03 * ink;
                 } else {
@@ -1060,15 +1060,15 @@ public final class SceneBuilder3D {
     }
 
     /**
-     * Which known palette the coloured pixels of a picture come from, or null
+     * Which known palette the colored pixels of a picture come from, or null
      * when they come from none (a line plot, a photograph): the palette whose
-     * nearest colours lie closest, on average, to the picture's saturated ones.
+     * nearest colors lie closest, on average, to the picture's saturated ones.
      */
-    static String recognisePalette(BufferedImage img) {
+    static String recognizePalette(BufferedImage img) {
         final int w = img.getWidth();
         final int h = img.getHeight();
         final int stride = Math.max(1, (int) Math.sqrt(w * (double) h / 40000));
-        final List<int[]> coloured = new ArrayList<>();
+        final List<int[]> colored = new ArrayList<>();
         int seen = 0;
         final float[] hsb = new float[3];
         for (int y = 0; y < h; y += stride) {
@@ -1076,19 +1076,19 @@ public final class SceneBuilder3D {
                 final int c = img.getRGB(x, y);
                 seen++;
                 Color.RGBtoHSB(c >> 16 & 255, c >> 8 & 255, c & 255, hsb);
-                if (hsb[1] > 0.3f && hsb[2] > 0.12f) coloured.add(new int[]{c >> 16 & 255, c >> 8 & 255, c & 255});
+                if (hsb[1] > 0.3f && hsb[2] > 0.12f) colored.add(new int[]{c >> 16 & 255, c >> 8 & 255, c & 255});
             }
         }
-        if (coloured.size() < Math.max(50, seen / 100)) return null;
-        final int every = Math.max(1, coloured.size() / 4000);
+        if (colored.size() < Math.max(50, seen / 100)) return null;
+        final int every = Math.max(1, colored.size() / 4000);
         String best = null;
         double bestScore = Double.MAX_VALUE;
         for (String name : Palettes.names()) {
             final Color[] p = Palettes.get(name);
             double sum = 0;
             int n = 0;
-            for (int k = 0; k < coloured.size(); k += every) {
-                final int[] c = coloured.get(k);
+            for (int k = 0; k < colored.size(); k += every) {
+                final int[] c = colored.get(k);
                 final double d = nearest(p, c[0], c[1], c[2])[1];
                 sum += d * d;
                 n++;
@@ -1102,7 +1102,7 @@ public final class SceneBuilder3D {
         return bestScore < 24 ? best : null;
     }
 
-    /** The index of the palette's colour nearest to r g b, and the distance to it. */
+    /** The index of the palette's color nearest to r g b, and the distance to it. */
     static double[] nearest(Color[] p, int r, int g, int b) {
         int best = 0;
         double bd = Double.MAX_VALUE;

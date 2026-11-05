@@ -112,7 +112,7 @@ public interface ThemePalette {
     Color getJupyPyAnnotation();
 
     // ROOT canvas (RootCanvasView, RootPadPainter, RootPainter3D): what ROOT draws
-    // in white and black. The light palette keeps ROOT's own colours, which are also
+    // in white and black. The light palette keeps ROOT's own colors, which are also
     // those of a picture exported from a canvas.
     Color getCanvasGround();        // around the canvas
     Color getCanvasPaper();         // pads and frames (ROOT's kWhite)
@@ -128,7 +128,7 @@ public interface ThemePalette {
     Color getCanvas3DWallLine();    // their edges
     Color getCanvas3DWallGrid();    // their grid
     Color getCanvas3DMesh();        // the mesh lines over a surface
-    Color getCanvas3DDefaultFill(); // LEGO bars of a histogram without a fill colour
+    Color getCanvas3DDefaultFill(); // LEGO bars of a histogram without a fill color
 
     // Sphere's 3D space (Renderer3D, Space3DPanel)
     Color getSpace3DGroundTop();
@@ -145,7 +145,7 @@ public interface ThemePalette {
     Color getPyMajor();         // a major update
     Color getPyDanger();        // a vulnerability, a conflict, a broken install
     Color getPyInfo();          // information, a dependency, a hint
-    Color getPyBadgeText();     // text on the coloured badges above
+    Color getPyBadgeText();     // text on the colored badges above
     Color getPyChip();          // filter chips and the details card
     Color getPyChipSelected();  // a chip turned on
     Color getPyRowStripe();     // every other row of the package table

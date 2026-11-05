@@ -37,7 +37,7 @@ import static com.sphere.core.hepmc3.Units.MomentumUnit.GEV;
 
 /**
  * The tests of HepMC3's test directory on the event record itself: four
- * vectors, units, printing, weights, boosts and rotations, polarisation
+ * vectors, units, printing, weights, boosts and rotations, polarization
  * attributes, loops, copies, attributes, the HEPEVT wrappers and the search
  * module. Each is main() of the .cc, statement for statement.
  */

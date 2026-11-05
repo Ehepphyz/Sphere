@@ -62,7 +62,7 @@ public final class SpxHepMC {
      * The event's cross-section, read from its text into an object of its
      * own: asking the event for its GenCrossSection would parse it in place
      * and pad it to the number of weights, which changes what the event is
-     * written as afterwards (in C++ too). Null when the event has none.
+     * written as afterward (in C++ too). Null when the event has none.
      */
     public static GenCrossSection crossSectionOf(GenEvent e) {
         final String s = e.attributeAsString("GenCrossSection");

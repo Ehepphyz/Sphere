@@ -8,7 +8,7 @@
 #                                                     mingw-w64-ucrt-x86_64-gsl), and on Linux (g++, cmake,
 #                                                     ninja, libgsl-dev), into the same work folder (under WSL,
 #                                                     a Linux folder builds faster: its linux/refs and
-#                                                     linux/tests copied next to mingw/ afterwards)
+#                                                     linux/tests copied next to mingw/ afterward)
 #   python3 pack_refs.py <work folder> ../refdata/clhep-refs.zip    once both platforms have run
 #
 # The source tree is CLHEP's archive unpacked whole: CMake configures its tests' scripts (*.sh.in) too.

@@ -141,9 +141,9 @@ public final class Citations {
         component("kt", "kt algorithm", KT_CATANI, KT_ELLIS);
         component("cambridge", "Cambridge/Aachen algorithm", CA_DOKSHITZER, CA_WOBISCH);
         component("antikt", "anti-kt algorithm", ANTIKT);
-        component("genkt", "generalised kt algorithm", ANTIKT);
+        component("genkt", "generalized kt algorithm", ANTIKT);
         component("eekt", "e+e- kt (Durham) algorithm", DURHAM);
-        component("eegenkt", "e+e- generalised kt algorithm", DURHAM, ANTIKT);
+        component("eegenkt", "e+e- generalized kt algorithm", DURHAM, ANTIKT);
         component("areas", "jet areas", AREAS);
         component("rho", "background density rho and area subtraction", PILEUP);
         component("filter", "filtering, mass-drop tagging", BDRS);

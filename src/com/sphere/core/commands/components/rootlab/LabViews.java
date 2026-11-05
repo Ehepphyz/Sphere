@@ -12,7 +12,7 @@ import javax.swing.text.html.StyleSheet;
 import java.awt.Color;
 import java.util.Locale;
 
-/** What the two views of the ROOT Lab share: HTML in the theme's colours, and histogram conversions. */
+/** What the two views of the ROOT Lab share: HTML in the theme's colors, and histogram conversions. */
 final class LabViews {
 
     private LabViews() {
@@ -22,7 +22,7 @@ final class LabViews {
         return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
     }
 
-    /** An HTML pane that follows the theme: its colours are written into its style sheet. */
+    /** An HTML pane that follows the theme: its colors are written into its style sheet. */
     static JEditorPane htmlPane() {
         final JEditorPane pane = new JEditorPane();
         pane.setEditable(false);

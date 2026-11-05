@@ -14,7 +14,7 @@ public final class Placer {
     private Placer() {
     }
 
-    /** The deepest instance whose solid holds every corner and the centre of a world box. */
+    /** The deepest instance whose solid holds every corner and the center of a world box. */
     public static Geometry.Instance smartMother(Geometry g, BBox worldBox, LogicalVolume exclude) {
         final List<Geometry.Instance> path = g.locate(worldBox.center());
         for (int i = path.size() - 1; i >= 0; i--) {

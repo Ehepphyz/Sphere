@@ -18,10 +18,10 @@ import java.util.List;
  *
  * <p>The event is clustered with the base definition (anti-kt or C/A, or
  * their e+e- forms), and the clustering replayed with {@link FlavNeutraliser}:
- * the jets are the base algorithm's to the bit, their flavours infrared and
+ * the jets are the base algorithm's to the bit, their flavors infrared and
  * collinear safe. The particles must carry a {@link FlavInfo} or a
  * {@link FlavHistory}; with {@link #setFlavourFromUserIndex(boolean)} those
- * that carry neither take the flavour of the PDG code in their user index
+ * that carry neither take the flavor of the PDG code in their user index
  * instead of being refused (Sphere's addition, for events read from LHE or
  * HepMC files).
  */
@@ -98,7 +98,7 @@ public class IFNPlugin implements JetDefinition.Plugin {
     public JetDefinition baseDefinition() { return new JetDefinition(jetDef); }
     public boolean modulo2() { return modulo2; }
 
-    /** Particles without flavour information take it from the PDG code of their user index. */
+    /** Particles without flavor information take it from the PDG code of their user index. */
     public IFNPlugin setFlavourFromUserIndex(boolean value) {
         flavourFromUserIndex = value;
         return this;
@@ -194,7 +194,7 @@ public class IFNPlugin implements JetDefinition.Plugin {
             pp, recursive);
         final List<PseudoJet> jets = neutraliser.neutralise(local);
 
-        // the neutralised inputs replace ours
+        // the neutralized inputs replace ours
         final int n = cs.nJets();
         for (int i = 0; i < n; i++) cs.pluginNonConstJet(i).setUserInfo(jets.get(i).userInfo());
 

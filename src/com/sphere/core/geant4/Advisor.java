@@ -49,10 +49,12 @@ public final class Advisor {
         containment(g, out);
         thin(g, out);
         sensitive(g, out);
+        copyNumbers(g, out);
         rows(g, out);
         booleans(g, out);
         unused(g, out);
         names(g, out);
+        showers(g, out);
         physics(g, out);
         return out;
     }
@@ -186,6 +188,192 @@ public final class Advisor {
                     lv.name(), List.of()));
             }
         }
+    }
+
+    /**
+     * Placements of a sensitive volume sharing a copy number in one mother: its hits cannot say which copy they
+     * come from (G4VTouchable::GetCopyNumber is the only thing that tells them apart there).
+     */
+    private static void copyNumbers(Geometry g, List<Advice> out) {
+        for (LogicalVolume m : g.volumes()) {
+            final Map<LogicalVolume, Map<Integer, Integer>> by = new LinkedHashMap<>();
+            for (PhysicalVolume pv : m.daughters()) {
+                if (!pv.isReplica() && pv.logical().sensitive() != null) {
+                    by.computeIfAbsent(pv.logical(), k -> new LinkedHashMap<>()).merge(pv.copyNumber(), 1, Integer::sum);
+                }
+            }
+            for (Map.Entry<LogicalVolume, Map<Integer, Integer>> e : by.entrySet()) {
+                final int placed = e.getValue().values().stream().mapToInt(Integer::intValue).sum();
+                if (placed > 1 && e.getValue().size() < placed) {
+                    out.add(new Advice(Level.WARNING, placed + " copies of " + e.getKey().name() + " in " + m.name()
+                        + " share copy numbers", "It is sensitive, and its hits tell its copies apart by their copy"
+                        + " number alone: " + (e.getValue().size() == 1 ? "all of them have " + e.getValue().keySet()
+                        .iterator().next() : "only " + e.getValue().size() + " numbers for " + placed + " copies") + ".",
+                        e.getKey().name(), List.of(new Fix("Number them 0 to " + (placed - 1), "renumber "
+                        + e.getKey().name()))));
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Showers: is the beam's energy held by the detector?
+    // ------------------------------------------------------------------
+
+    /** The beam a design is judged against: the gun's settings, else a 10 GeV electron along +z from the world's edge. */
+    public record Beam(String particle, double energy, Vec3 origin, Vec3 direction, boolean assumed) {
+
+        boolean electromagnetic() {
+            return particle.equals("e-") || particle.equals("e+") || particle.equals("gamma");
+        }
+
+        boolean hadron() {
+            return particle.startsWith("pi") && !particle.equals("pi0") || particle.startsWith("kaon")
+                || particle.equals("proton") || particle.equals("neutron") || particle.equals("anti_proton")
+                || particle.equals("anti_neutron");
+        }
+    }
+
+    public static Beam beam(Geometry g) {
+        final Map<String, String> s = g.settings();
+        final String particle = s.getOrDefault("gun.particle", "e-");
+        double energy = 10_000;
+        boolean known = s.containsKey("gun.particle") && s.containsKey("gun.energy");
+        try {
+            if (s.containsKey("gun.energy")) {
+                energy = Expr.eval(s.get("gun.energy"), g.scope());
+            }
+        } catch (GeometryException | RuntimeException e) {
+            known = false;
+        }
+        Vec3 dir = Vec3.Z;
+        final String[] d = s.getOrDefault("gun.direction", "").trim().split("\\s+");
+        if (d.length == 3) {
+            try {
+                final Vec3 v = new Vec3(Expr.eval(d[0], g.scope()), Expr.eval(d[1], g.scope()), Expr.eval(d[2], g.scope()));
+                dir = v.length() > 0 ? v.unit() : dir;
+            } catch (GeometryException | RuntimeException ignored) {
+                // along z
+            }
+        }
+        final BBox w = g.world().solid().extent();
+        // from the world's edge, upstream: as the Run panel starts it
+        Vec3 origin = w.center().addScaled(dir, -0.99 * (Math.abs(dir.x()) * w.size().x() + Math.abs(dir.y()) * w.size().y()
+            + Math.abs(dir.z()) * w.size().z()) / 2);
+        final String[] p = s.getOrDefault("gun.position", "").trim().split("\\s+");
+        if (p.length == 3) {
+            try {
+                origin = new Vec3(Expr.eval(p[0], g.scope()), Expr.eval(p[1], g.scope()), Expr.eval(p[2], g.scope()));
+            } catch (GeometryException | RuntimeException ignored) {
+                // from the edge
+            }
+        }
+        return new Beam(particle, energy, origin, dir, !known);
+    }
+
+    /** Es, the scale energy of the Moliere radius (PDG), in MeV. */
+    private static final double ES = 21.2052;
+
+    /**
+     * Whether the detector holds the shower of its beam, along it and around it. Electromagnetic showers by
+     * the PDG's parametrization in radiation lengths (shower maximum t_max = ln(E/Ec) + C, 95 % within
+     * t_max + 0.08 Z + 9.6; 90 % of the energy within one Moliere radius, 99 % within 3.5); hadron showers by
+     * Fabjan and Gianotti's in interaction lengths (L95 = t_max + 2.5 lambda_att, t_max = 0.2 ln E + 0.7,
+     * lambda_att = E^0.13, E in GeV). A sampling calorimeter counts as the mixture its layers make along the beam.
+     */
+    private static void showers(Geometry g, List<Advice> out) {
+        final Beam b = beam(g);
+        if (!b.electromagnetic() && !b.hadron() || b.energy() < 50) {
+            return;
+        }
+        final Budget.RayReport ray = Budget.ray(g, b.origin(), b.direction(), true);
+        if (ray.x0() < 3) {
+            return;   // a tracker, a telescope: little to shower in
+        }
+        double x = 0, xz = 0, xec = 0, main = 0;
+        String mainName = null;
+        for (Map.Entry<String, double[]> e : ray.byMaterial().entrySet()) {
+            final Material m = g.materials().material(e.getKey());
+            if (m == null) {
+                continue;
+            }
+            final double t = e.getValue()[0];
+            x += t;
+            xz += t * m.zEffective();
+            xec += t * m.criticalEnergy();
+            if (t > main) {
+                main = t;
+                mainName = m.name();
+            }
+        }
+        if (x <= 0 || xec <= 0) {
+            return;
+        }
+        final double z = xz / x, ec = xec / x, x0 = ray.path() / ray.x0(), rm = ES * x0 / ec;
+        final String beam = Units.best(b.energy(), Units.Category.ENERGY) + " " + b.particle();
+        final String assumed = b.assumed() ? " Judged for a " + beam + " along +z: give the gun its particle and energy"
+            + " (G4editor's Run panel, or the application's generator and run macro) to judge yours." : "";
+        if (b.electromagnetic()) {
+            final double tmax = Math.max(0, Math.log(b.energy() / ec) + (b.particle().equals("gamma") ? 0.5 : -0.5));
+            final double t95 = tmax + 0.08 * z + 9.6;
+            final String medium = String.format(Locale.ROOT, "%.3g X0 along the beam (mostly %s; Z = %.0f, Ec = %.3g MeV,"
+                + " X0 = %s on average)", ray.x0(), mainName, z, ec, Units.best(x0, Units.Category.LENGTH));
+            if (ray.x0() < t95) {
+                out.add(new Advice(Level.WARNING, "A " + beam + " shower leaks out the back", "The detector holds " + medium
+                    + String.format(Locale.ROOT, "; 95 %% of the shower's energy needs %.3g X0, its maximum being at %.2g X0 (PDG:"
+                    + " t95 = tmax + 0.08 Z + 9.6). About %s more depth would hold it.", t95, tmax,
+                    Units.best((t95 - ray.x0()) * x0, Units.Category.LENGTH)) + assumed, null, List.of()));
+            } else {
+                out.add(new Advice(Level.INFO, "A " + beam + " shower is held in depth", "The detector holds " + medium
+                    + String.format(Locale.ROOT, ": 95 %% of the shower needs %.3g X0, its maximum at %.2g X0.", t95, tmax)
+                    + assumed, null, List.of()));
+            }
+            final double r = radius(g, b, ray.x0());
+            if (r > 0 && r < 2 * rm) {
+                out.add(new Advice(Level.WARNING, "A " + beam + " shower leaks out the sides", String.format(Locale.ROOT,
+                    "Around the beam the detector extends %s, %.2g Moliere radii (R_M = %s for its mixture): about 10 %% of"
+                    + " the energy lies beyond one R_M and 1 %% beyond 3.5 (PDG). Some %s, two R_M, hold 95 %%.",
+                    Units.best(r, Units.Category.LENGTH), r / rm, Units.best(rm, Units.Category.LENGTH),
+                    Units.best(2 * rm, Units.Category.LENGTH)) + assumed, null, List.of()));
+            }
+        } else {
+            final double e = b.energy() / 1000, tmax = Math.max(0, 0.2 * Math.log(e) + 0.7), l95 = tmax + 2.5 * Math.pow(e, 0.13);
+            final String medium = String.format(Locale.ROOT, "%.3g interaction lengths along the beam", ray.lambda());
+            if (ray.lambda() < l95) {
+                out.add(new Advice(Level.WARNING, "A " + beam + " shower leaks out the back", "The detector holds " + medium
+                    + String.format(Locale.ROOT, "; 95 %% of a hadron shower of that energy needs %.2g lambda_I (Fabjan and"
+                    + " Gianotti: L95 = tmax + 2.5 lambda_att, lambda_att = E^0.13 lambda_I). Its energy resolution is then"
+                    + " ruled by the leakage, not the sampling.", l95) + assumed, null, List.of()));
+            } else {
+                out.add(new Advice(Level.INFO, "A " + beam + " shower is held in depth", "The detector holds " + medium
+                    + String.format(Locale.ROOT, ": 95 %% of the hadron shower needs %.2g lambda_I.", l95) + assumed, null,
+                    List.of()));
+            }
+        }
+    }
+
+    /**
+     * How far the detector reaches around the beam: the largest distance at which rays parallel to it, all
+     * around, still cross half the radiation lengths the beam's own ray does; 0 when it cannot be told.
+     */
+    private static double radius(Geometry g, Beam b, double onAxis) {
+        final Vec3 u = b.direction().orthogonal().unit(), v = b.direction().cross(u).unit();
+        double lo = 0, hi = g.world().solid().extent().diagonal() / 2;
+        for (int it = 0; it < 24; it++) {
+            final double r = 0.5 * (lo + hi);
+            boolean inside = true;
+            for (int k = 0; k < 8 && inside; k++) {
+                final double a = k * Math.PI / 4;
+                final Vec3 o = b.origin().addScaled(u, r * Math.cos(a)).addScaled(v, r * Math.sin(a));
+                inside = Budget.ray(g, o, b.direction(), true).x0() >= 0.5 * onAxis;
+            }
+            if (inside) {
+                lo = r;
+            } else {
+                hi = r;
+            }
+        }
+        return lo;
     }
 
     /** Copies of one volume in a row with a constant pitch: candidates for G4PVReplica or G4PVParameterised. */

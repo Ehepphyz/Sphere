@@ -31,6 +31,7 @@ public class edSettingsFchooser extends JDialog {
 
     public edSettingsFchooser(Window parent, File initialDir) {
         super(parent, "Select Directory Path", ModalityType.APPLICATION_MODAL);
+        IconManager.applyAppIcon(this);
 
         setLayout(new BorderLayout());
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);

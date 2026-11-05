@@ -12,7 +12,7 @@ import java.util.Locale;
  * The files a geometry lives in, and the conversions between them: GDML as
  * G4editor writes it (parametric, for Geant4), portable GDML (numbers, every
  * material written out, for ROOT's GDML reader as well as Geant4's), and ROOT
- * files holding a TGeoManager. A file is recognised by what it holds, not by
+ * files holding a TGeoManager. A file is recognized by what it holds, not by
  * its name: "root" at its start is ROOT, an XML document is GDML.
  */
 public final class GeometryFiles {

@@ -454,7 +454,7 @@ final class PropertySheet extends JPanel {
         table.getColumnModel().getColumn(1).setCellEditor(new Editor());
     }
 
-    /** The editor fits the row: text, a checkbox, a material list, a colour chooser. */
+    /** The editor fits the row: text, a checkbox, a material list, a color chooser. */
     private final class Editor extends AbstractCellEditor implements TableCellEditor {
         private static final long serialVersionUID = 1L;
         private TableCellEditor delegate;

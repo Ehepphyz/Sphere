@@ -19,7 +19,7 @@ public final class LogicalVolume {
     String material;
     final List<PhysicalVolume> daughters = new ArrayList<>();
 
-    // Visualisation (G4VisAttributes), carried in GDML as auxiliary tags
+    // Visualization (G4VisAttributes), carried in GDML as auxiliary tags
     int color = 0xFF9AA7B8;  // ARGB
     boolean visible = true;
     boolean wireframe;
@@ -105,7 +105,7 @@ public final class LogicalVolume {
         invalidate();
     }
 
-    /** Alpha of the colour, 0..1. */
+    /** Alpha of the color, 0..1. */
     public double alpha() {
         return ((color >>> 24) & 0xFF) / 255.0;
     }

@@ -1,6 +1,6 @@
 package com.sphere.core.hepmc3;
 
-/** The serialisable content of a particle: PDG id, status, generated mass, momentum. */
+/** The serializable content of a particle: PDG id, status, generated mass, momentum. */
 public final class GenParticleData {
 
     public int pid;

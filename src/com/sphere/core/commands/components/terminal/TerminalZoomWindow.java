@@ -18,6 +18,7 @@ public class TerminalZoomWindow extends JFrame {
     public TerminalZoomWindow(TerminalPanel source, String terminalName) {
         super(terminalName == null || terminalName.isBlank()
               ? "Terminal" : terminalName + " -- enlarged");
+        com.sphere.utils.IconManager.applyAppIcon(this);
 
         mirror = new TerminalMirrorView(source);
 

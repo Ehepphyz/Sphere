@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * The N-subjettiness jet shape, fastjet::contrib::Nsubjettiness
  * (J. Thaler and K. Van Tilburg, JHEP 03 (2011) 015 and JHEP 02 (2012)
- * 093): N-jettiness of a jet's constituents. For the unnormalised measure,
+ * 093): N-jettiness of a jet's constituents. For the unnormalized measure,
  * tau_N = sum_i pt_i min_a DeltaR_ia^beta.
  *
  * The recommended axes are KT_Axes, WTA_KT_Axes, OnePass_KT_Axes and
@@ -87,7 +87,7 @@ public class Nsubjettiness implements FunctionOfPseudoJet<Double> {
         warnOld();
     }
 
-    /** The v1.0 constructor, where the normalised cutoff measure was the only one. */
+    /** The v1.0 constructor, where the normalized cutoff measure was the only one. */
     public Nsubjettiness(int n, Njettiness.AxesMode axesMode, double beta, double r0, double rcutoff) {
         this.njettinessFinder = new Njettiness(axesMode, new NormalizedCutoffMeasure(beta, r0, rcutoff));
         this.n = n;

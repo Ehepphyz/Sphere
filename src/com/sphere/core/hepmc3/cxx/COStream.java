@@ -8,7 +8,7 @@ import java.math.BigDecimal;
  * showpos; the width applies to the next item only and is then reset; the
  * fill goes on the left unless left or internal is asked.
  *
- * <p>HepMC3 prints its listings and serialises its attributes through
+ * <p>HepMC3 prints its listings and serializes its attributes through
  * ostreams set this way (Print::listing at precision 2 with scientific and
  * showpos, GenHeavyIon at setprecision(8)...), so the text must come out of
  * the same state machine to be the same text.

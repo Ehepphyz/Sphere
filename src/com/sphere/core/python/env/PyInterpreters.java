@@ -74,7 +74,7 @@ public final class PyInterpreters {
             children(seen, Path.of(home, ".cache", "pypoetry", "virtualenvs"), "bin/python", "Poetry");
         }
         conda(seen, home);
-        // Virtual environments: the workspace's, the usual folders, and the neighbours of the configured one.
+        // Virtual environments: the workspace's, the usual folders, and the neighbors of the configured one.
         final Path cwd = Path.of("").toAbsolutePath();
         for (String n : new String[]{"venv", ".venv", "env"}) add(seen, PipRunner.venvPython(cwd.resolve(n)), "workspace");
         venvsIn(seen, cwd.resolve("WorkSpace"), "workspace");

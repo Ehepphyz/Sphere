@@ -241,7 +241,7 @@ public abstract class Solid {
         return tables.get(element);
     }
 
-    /** Sets a parameter's expression; call evaluate() afterwards. */
+    /** Sets a parameter's expression; call evaluate() afterward. */
     public final void set(String key, String expr) {
         final Param p = params.get(key);
         if (p == null) {

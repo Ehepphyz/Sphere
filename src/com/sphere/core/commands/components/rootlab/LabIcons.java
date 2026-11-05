@@ -13,7 +13,7 @@ import java.awt.geom.Path2D;
 
 /**
  * The ROOT Lab's icons, drawn rather than loaded: they stay sharp at any
- * display scale and take the theme's colours. One glyph per kind of thing a
+ * display scale and take the theme's colors. One glyph per kind of thing a
  * CERN data file holds, and one per state a test can be in.
  */
 public final class LabIcons implements Icon {
@@ -101,10 +101,10 @@ public final class LabIcons implements Icon {
                 case MATRIX -> matrix(g, ink);
                 case OBJECT -> object(g, ink);
                 case SUITE -> suite(g, ink);
-                case PASSED -> disc(g, GREEN, "check");
-                case FAILED -> disc(g, RED, "cross");
-                case ERROR -> disc(g, RED, "bang");
-                case WARNING -> disc(g, AMBER, "bang");
+                case PASSED -> disk(g, GREEN, "check");
+                case FAILED -> disk(g, RED, "cross");
+                case ERROR -> disk(g, RED, "bang");
+                case WARNING -> disk(g, AMBER, "bang");
                 case SKIPPED -> ring(g, ImagingTheme.subduedText());
                 case RUNNING -> running(g);
                 case PENDING -> ring(g, new Color(ink.getRed(), ink.getGreen(), ink.getBlue(), 90));
@@ -241,7 +241,7 @@ public final class LabIcons implements Icon {
         g.drawLine(8, 10, 12, 10);
     }
 
-    private static void disc(Graphics2D g, Color color, String mark) {
+    private static void disk(Graphics2D g, Color color, String mark) {
         g.setColor(color);
         g.fillOval(1, 1, 14, 14);
         g.setColor(Color.WHITE);

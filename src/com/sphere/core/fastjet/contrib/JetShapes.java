@@ -10,7 +10,7 @@ import com.sphere.core.fastjet.PseudoJet;
 import java.util.List;
 
 /**
- * Jet shapes: generalised angularities lambda^kappa_beta = sum z_i^kappa
+ * Jet shapes: generalized angularities lambda^kappa_beta = sum z_i^kappa
  * (Delta_i / R)^beta (A. Larkoski, J. Thaler, W. Waalewijn, JHEP 11 (2014)
  * 129), with their usual names (multiplicity, pTD, Les Houches
  * angularity, width or girth, thrust-like mass), and the jet pull vector
@@ -83,7 +83,7 @@ public final class JetShapes {
         return new double[]{ty.doubleValue(), tphi.doubleValue()};
     }
 
-    /** The pull angle of jet a towards jet b: between a's pull vector and the direction a -> b. */
+    /** The pull angle of jet a toward jet b: between a's pull vector and the direction a -> b. */
     public static double pullAngle(PseudoJet a, PseudoJet b) {
         final double[] t = pull(a);
         final double dy = b.rap() - a.rap();

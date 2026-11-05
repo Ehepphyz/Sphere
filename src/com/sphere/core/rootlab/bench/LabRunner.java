@@ -53,11 +53,11 @@ public final class LabRunner {
         }
     }
 
-    private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicBoolean canceled = new AtomicBoolean();
     private volatile ExecutorService pool;
 
     public void cancel() {
-        cancelled.set(true);
+        canceled.set(true);
         final ExecutorService p = pool;
         if (p != null) {
             p.shutdownNow();
@@ -66,7 +66,7 @@ public final class LabRunner {
 
     /** Runs the suites and waits for them. Network suites are skipped unless allowed. */
     public Summary run(List<LabSuite> suites, boolean network, Listener listener) {
-        cancelled.set(false);
+        canceled.set(false);
         final Listener l = listener == null ? new Listener() { } : listener;
         final long t0 = System.nanoTime();
         final List<LabResult> all = Collections.synchronizedList(new ArrayList<>());
@@ -126,7 +126,7 @@ public final class LabRunner {
     private List<LabResult> runSuite(LabSuite suite, boolean network, Listener l) {
         final List<LabResult> results = new ArrayList<>();
         l.suiteStarted(suite);
-        final LabContext ctx = new LabContext(line -> l.log(suite, line), cancelled::get, network);
+        final LabContext ctx = new LabContext(line -> l.log(suite, line), canceled::get, network);
         List<LabTest> tests;
         try {
             tests = suite.tests();
@@ -140,7 +140,7 @@ public final class LabRunner {
         }
         for (LabTest test : tests) {
             LabResult r;
-            if (cancelled.get()) {
+            if (canceled.get()) {
                 r = new LabResult(suite.id(), test.id(), test.title(), LabStatus.SKIPPED, "run canceled", List.of(), 0);
             } else if (suite.network() && !network) {
                 r = new LabResult(suite.id(), test.id(), test.title(), LabStatus.SKIPPED,

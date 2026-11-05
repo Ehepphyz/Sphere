@@ -13,7 +13,7 @@ import java.util.List;
 /**
  * How tau_N is measured, MeasureDefinition (Nsubjettiness 2.3.2): the
  * distance of a particle to an axis and to the beam, their weights, the
- * normalisation, and the one-pass minimisation of the axes they allow.
+ * normalization, and the one-pass minimization of the axes they allow.
  *
  * The measures themselves are the nested classes, as in the C++:
  * {@link NormalizedMeasure}, {@link UnnormalizedMeasure},
@@ -162,7 +162,7 @@ public abstract class MeasureDefinition {
     }
 
     /**
-     * The generic one-pass minimisation: particles assigned to their nearest
+     * The generic one-pass minimization: particles assigned to their nearest
      * axis, each axis moved to their (weighted) light-like sum, while tau
      * decreases; the best axes met are returned.
      */
@@ -238,7 +238,7 @@ public abstract class MeasureDefinition {
         perp_lorentz_dot
     }
 
-    /** The original N-subjettiness measure, DefaultMeasure: pt DeltaR^beta, normalised by pt R0^beta. */
+    /** The original N-subjettiness measure, DefaultMeasure: pt DeltaR^beta, normalized by pt R0^beta. */
     public static class DefaultMeasure extends MeasureDefinition {
         protected final double beta;
         protected final double r0;
@@ -349,7 +349,7 @@ public abstract class MeasureDefinition {
             return measureType.name();
         }
 
-        /** The v1.0 minimisation for pt_R: a Lloyd iteration of light-like axes in (y, phi). */
+        /** The v1.0 minimization for pt_R: a Lloyd iteration of light-like axes in (y, phi). */
         @Override
         public List<PseudoJet> getOnePassAxes(int nJets, List<PseudoJet> inputJets, List<PseudoJet> seedAxes,
                                               int nAttempts, double accuracy) {
@@ -619,7 +619,7 @@ public abstract class MeasureDefinition {
         }
     }
 
-    /** OriginalGeometricMeasure(Rcutoff): dot-product distances, no normalisation. */
+    /** OriginalGeometricMeasure(Rcutoff): dot-product distances, no normalization. */
     public static class OriginalGeometricMeasure extends MeasureDefinition {
         protected final double rcutoff;
         protected final double rcutoffSq;
@@ -781,7 +781,7 @@ public abstract class MeasureDefinition {
         }
     }
 
-    /** A light-like axis in (y, phi) with a weight and a momentum, for the minimisations. */
+    /** A light-like axis in (y, phi) with a weight and a momentum, for the minimizations. */
     public static final class LightLikeAxis {
         private double rap;
         private double phi;

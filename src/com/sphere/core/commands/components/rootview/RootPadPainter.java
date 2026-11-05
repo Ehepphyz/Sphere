@@ -141,7 +141,7 @@ final class RootPadPainter {
     }
 
     /* ------------------------------------------------------------------ */
-    /* The colours of the canvas                                           */
+    /* The colors of the canvas                                           */
     /* ------------------------------------------------------------------ */
 
     /**
@@ -168,7 +168,7 @@ final class RootPadPainter {
      */
     static Color ground = palette.getCanvasPaper();
 
-    /** ROOT's paper (white, or no colour) is the palette's; any other fill is the author's. */
+    /** ROOT's paper (white, or no color) is the palette's; any other fill is the author's. */
     static Color paper(Color c) {
         return c == null || isWhite(c) ? palette.getCanvasPaper() : c;
     }
@@ -197,9 +197,9 @@ final class RootPadPainter {
     }
 
     /**
-     * ROOT's ink (black, or no colour) is the ink of the ground; any other
-     * colour carries data and is kept, except on the theme's dark paper, where
-     * ROOT's dark colours (602, kBlue, kBlack+n) vanish: there it is lightened
+     * ROOT's ink (black, or no color) is the ink of the ground; any other
+     * color carries data and is kept, except on the theme's dark paper, where
+     * ROOT's dark colors (602, kBlue, kBlack+n) vanish: there it is lightened
      * toward the ink, its hue kept, just enough to read (a contrast of 3:1).
      */
     static Color ink(Color c) {
@@ -213,7 +213,7 @@ final class RootPadPainter {
         return ground != null && ground.getRGB() == paper.getRGB() && luminance(paper) < 0.18;
     }
 
-    /** The least mix of a colour with the ink of a ground that reads there with the contrast asked. */
+    /** The least mix of a color with the ink of a ground that reads there with the contrast asked. */
     static Color readable(Color c, Color under, double wanted) {
         final double g = luminance(under);
         if (contrast(luminance(c), g) >= wanted) return c;
@@ -234,14 +234,14 @@ final class RootPadPainter {
             (int) Math.round(c.getBlue() + (toward.getBlue() - c.getBlue()) * t), c.getAlpha());
     }
 
-    /** A text's colour on the pad being drawn. */
+    /** A text's color on the pad being drawn. */
     static Color text(Color c) {
         return text(c, ground);
     }
 
     /**
-     * A text's colour on a ground: black is the ink of that ground; another
-     * colour is the author's, kept unless it would not read there (a contrast
+     * A text's color on a ground: black is the ink of that ground; another
+     * color is the author's, kept unless it would not read there (a contrast
      * under 3:1), then moved toward the ink, its hue kept, until it does.
      */
     static Color text(Color c, Color under) {
@@ -582,8 +582,8 @@ final class RootPadPainter {
                 steps.lineTo(px(view, h.x.edge(i + 1)), py(view, v));
             }
             steps.lineTo(px(view, h.x.edge(n)), py(view, base));
-            // THistPainter::PaintHist fills only for a fill colour other than 0, which arrives as white:
-            // filled as paper it put a dark slab under the curve on a coloured frame.
+            // THistPainter::PaintHist fills only for a fill color other than 0, which arrives as white:
+            // filled as paper it put a dark slab under the curve on a colored frame.
             if (h.hasFill() && !isWhite(h.fill)) {
                 g.setPaint(fillPaint(h));
                 g.fill(steps);
@@ -906,7 +906,7 @@ final class RootPadPainter {
         return Double.isFinite(f) ? Math.max(0, Math.min(1, f)) : 0;
     }
 
-    /** Contour lines by marching squares, at 20 levels, in the palette's colours. */
+    /** Contour lines by marching squares, at 20 levels, in the palette's colors. */
     private static void contours(Graphics2D g, Hist h, View view, double[] zr, boolean lz, Color[] colors, String o) {
         final int nx = h.nx();
         final int ny = h.ny();
@@ -1005,9 +1005,9 @@ final class RootPadPainter {
     /* ---- axes, as TGaxis paints them from TAttAxis and TAxis ------------ */
 
     /**
-     * The major ticks of an axis: ROOT's optimised round numbers, as many as
+     * The major ticks of an axis: ROOT's optimized round numbers, as many as
      * ndivisions allows at most, or exactly ndivisions parts when the
-     * optimisation is off (SetNdivisions(n, kFALSE) or a negative n).
+     * optimization is off (SetNdivisions(n, kFALSE) or a negative n).
      */
     static double[] styledTicks(double lo, double hi, boolean log, RootScene.AxisStyle st) {
         if (!(hi > lo)) return new double[0];
@@ -1140,11 +1140,11 @@ final class RootPadPainter {
     }
 
     /**
-     * An axis of the frame, as TGaxis draws it: the line in the axis colour,
+     * An axis of the frame, as TGaxis draws it: the line in the axis color,
      * ticks of TickLength on the side its tick option asks (and on the
      * opposite side when the pad's Tickx/Ticky says so), labels in their
-     * font, size, offset and colour, the power of ten factored out, and the
-     * title at its offset, at the end of the axis or centred, turned over if
+     * font, size, offset and color, the power of ten factored out, and the
+     * title at its offset, at the end of the axis or centered, turned over if
      * RotateTitle is set.
      */
     private static void axis(Graphics2D g, Rectangle area, Rectangle frame, Pad pad, View view, boolean isX, double lo,
@@ -1821,7 +1821,7 @@ final class RootPadPainter {
 
     /**
      * A TPave and what derives from it: its border and the shadow ROOT draws
-     * as a thicker border on the bottom right (in its shadow colour), round
+     * as a thicker border on the bottom right (in its shadow color), round
      * corners when a corner radius is set, the label of a TPaveText on its
      * top edge, and its lines: a legend's in NColumns columns under its
      * header, a pave text's in its font and alignment, inside its margin.
@@ -2137,7 +2137,7 @@ final class RootPadPainter {
      * A fill as ROOT paints it: solid (1001), hollow (0), a hatch of the 3000s,
      * or 4000 to 4100 for a transparency of 0 to 100 percent. The hatches are
      * those of TAttFill: 3001 to 3025 its predefined patterns, 3ijk (3100 and
-     * over) lines i half-millimetres apart at the angles j and k.
+     * over) lines i half-millimeters apart at the angles j and k.
      */
     static java.awt.Paint fillPaint(Item item, Color base) {
         final Color c = base == null ? fillColor(item) : base;

@@ -4,7 +4,7 @@ package com.sphere.core.geant4;
  * A rigid transformation p' = R p + t, with R a proper rotation -- or, for
  * a mirrored placement, a rotation times the mirror through z = 0.
  *
- * Two Geant4 conventions meet here and both are spelt out once, so that the
+ * Two Geant4 conventions meet here and both are spelled out once, so that the
  * editor, the GDML file and the generated C++ agree on where a volume is:
  *
  *  - GDML angles (x, y, z) make R_gdml = Rz(z) Ry(y) Rx(x): CLHEP's

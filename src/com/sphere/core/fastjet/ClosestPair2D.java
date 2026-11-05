@@ -9,10 +9,10 @@ import java.util.List;
  * T. Chan's dynamic closest pair in two dimensions, as fastjet::ClosestPair2D:
  * the points are kept along three shifted Z-order curves, each in a search
  * tree whose nodes are also linked in a ring, and every point looks for its
- * neighbour among the thirty that follow it on each curve.
+ * neighbor among the thirty that follow it on each curve.
  *
  * The coordinates and the distances are pairs, so under double-double
- * arithmetic the neighbours are those of the 106-bit points; the curves
+ * arithmetic the neighbors are those of the 106-bit points; the curves
  * themselves only need the doubles.
  */
 final class ClosestPair2D {

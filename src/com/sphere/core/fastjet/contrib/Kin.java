@@ -5,7 +5,7 @@ import com.sphere.core.fastjet.PseudoJet;
 
 /**
  * The kinematic quantities the substructure tools share, each in two
- * flavours: plain double, and double-double (106 bits) when the jets are
+ * flavors: plain double, and double-double (106 bits) when the jets are
  * double-double, so that the angles and momentum fractions the tools cut on
  * are known to 2^-106 relative.
  */

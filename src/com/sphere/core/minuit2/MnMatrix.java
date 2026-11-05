@@ -99,7 +99,7 @@ public final class MnMatrix {
 
     /**
      * fa * a + fb * b, as the C++ builds it into a new vector: b copied and
-     * scaled by fb, then fa * a added (the (LAVector, A) specialisation).
+     * scaled by fb, then fa * a added (the (LAVector, A) specialization).
      */
     public static LAVector sum(double fa, LAVector a, double fb, LAVector b) {
         final LAVector r = b.copy().scale(fb);

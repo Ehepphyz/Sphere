@@ -14,9 +14,9 @@ public final class RootScene {
 
     /**
      * What TAttAxis and TAxis keep besides the binning: divisions, label and
-     * title fonts, sizes, offsets and colours, the tick side, and the flags
+     * title fonts, sizes, offsets and colors, the tick side, and the flags
      * of the axis's context menu (more log labels, no exponent, time display...).
-     * ROOT's defaults; a null colour is the canvas ink.
+     * ROOT's defaults; a null color is the canvas ink.
      */
     public static final class AxisStyle {
         public int ndivisions = 510;
@@ -127,7 +127,7 @@ public final class RootScene {
         }
     }
 
-    /** What every drawn object has: its names, the option, its colours. */
+    /** What every drawn object has: its names, the option, its colors. */
     public abstract static class Item {
         public String kind = "";
         public String className = "";
@@ -330,7 +330,7 @@ public final class RootScene {
         public String label = "";
         /** TLegend::SetNColumns. */
         public int nColumns = 1;
-        /** TLegend::SetHeader and its option ("C" centred, "R" right). */
+        /** TLegend::SetHeader and its option ("C" centered, "R" right). */
         public String header;
         public String headerOption = "";
         public int textFont = 42;

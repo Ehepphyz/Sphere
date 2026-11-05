@@ -41,6 +41,16 @@ public class CommandDefinitions {
         register(":set", "Assign or update an application runtime context variable", Handlers::setCommand);
         register(":create new", "Create a new file within the active directory", Handlers::createNew);
 
+        // --- :spdf, the PDF reader and editor (pure Java, in SphereCoder) ---
+        register(":spdf", "Open :spdf, Sphere's PDF editor, in SphereCoder: thumbnails, text edited in place (fonts, colors, styles), annotations, pages, redaction, smart search, document analysis, Ctrl+K commands in plain words. Usage: :spdf [file.pdf]", PdfCommands::open);
+        register(":spdf info", "What a PDF is: version, pages, metadata, fonts. Usage: :spdf info <file.pdf>", PdfCommands::info);
+        register(":spdf text", "A PDF's text in reading order (columns followed). Usage: :spdf text <file.pdf> [pages, e.g. 1-3]", PdfCommands::text);
+        register(":spdf summary", "Language, key terms, an extractive summary and the quantities, links, DOIs, arXiv ids a PDF names. Usage: :spdf summary <file.pdf>", PdfCommands::summary);
+        register(":spdf search", "Search a PDF, accents, case, ligatures and hyphenated line ends ignored. Usage: :spdf search <file.pdf> <words>", PdfCommands::search);
+        register(":spdf compress", "Rewrite a PDF smaller (object streams, unused objects dropped). Usage: :spdf compress <in.pdf> [out.pdf]", PdfCommands::compress);
+        register(":spdf merge", "One PDF from several. Usage: :spdf merge <out.pdf> <in1.pdf> <in2.pdf> [...]", PdfCommands::merge);
+        register(":spdf extract", "Some pages of a PDF as a new one. Usage: :spdf extract <in.pdf> <pages, e.g. 1-3,7> <out.pdf>", PdfCommands::extract);
+
         // --- ROOT Lab: CERN data files and ROOT's test programs, in Java ---
         register(":rootlab", "ROOT Lab: ROOT's test programs in Java, and CERN data files checked and summarized", RootLabCommands::overview);
         register(":rootlab test", "Run ROOT's test programs ported to Java. Usage: :rootlab test [suite ...] [--network]", RootLabCommands::test);
@@ -61,6 +71,7 @@ public class CommandDefinitions {
         register(":g4 material", "Radiation and interaction lengths of a material. Usage: :g4 material <name> [thickness]", G4Commands::material);
         register(":g4 check", "Check a GDML design for overlaps. Usage: :g4 check <design.gdml> [points]", G4Commands::check);
         register(":g4 info", "Volumes, masses and material budget of a GDML design. Usage: :g4 info <design.gdml>", G4Commands::info);
+        register(":g4 advise", "The Geant4 assistant on an application's C++ (angles read in radians, lengths without units, NIST names, copy numbers, fields and detectors made on the master thread) and on the detector (shower containment for the gun's beam); 'fix' writes the code's fixes. Usage: :g4 advise <application folder|design.gdml> [fix]", G4Commands::advise);
         register(":g4 export", "Write a complete Geant4 C++ application for a design. Usage: :g4 export <design.gdml> <folder>", G4Commands::export);
         register(":g4 do", "Run a G4editor console command on a GDML file and save it. Usage: :g4 do <design.gdml> <command>", G4Commands::doCommand);
         register(":g4 bridge", "The Geant4 engine in geantbackend/. Usage: :g4 bridge build|status|test|stop", G4Commands::bridge);
@@ -286,6 +297,10 @@ public class CommandDefinitions {
         FjContribCommands.register();
         // --- HepMC3, the event record, in Java: read, look, search, write, hand to every engine ---
         HepMCCommands.register();
+        // --- Machine learning: PyTorch, TensorFlow/Keras, JAX and pyhf in one engine, networks run back in Java and C++ ---
+        MlCommands.register();
+        // --- PyTorch and TensorFlow models made portable graphs, run in Java and C++ without either, memory planned ---
+        TorchCommands.register();
         // --- CLHEP, in Java bit for bit: units and quantities, vectors, geometry, matrices, random numbers, GenericFunctions ---
         ClhepCommands.register();
         // --- Minuit2, ROOT's minimizer, in Java bit for bit: minimize, Hesse, Minos, contours, the viewer's fits ---

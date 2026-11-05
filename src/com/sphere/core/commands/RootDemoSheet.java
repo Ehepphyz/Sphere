@@ -48,7 +48,7 @@ final class RootDemoSheet {
         for (Outcome o : outcomes) {
             final List<Path> shown = onePerCanvas(o.pictures());
             if (shown.isEmpty()) {
-                // A demo that ran well and drew nothing is grey, with the reason; a failure is red.
+                // A demo that ran well and drew nothing is gray, with the reason; a failure is red.
                 cells.add(new Cell(o.demo().label(), null, o.ok()
                     ? "no canvas: " + (o.note() == null ? "it left none" : o.note())
                     : o.errors().isEmpty() ? "failed" : o.errors().get(0), !o.ok()));
@@ -117,7 +117,7 @@ final class RootDemoSheet {
 
     /**
      * The share of pixels that differ between two pictures, and a picture of
-     * where: the new one faded to grey, the differing pixels in red. A picture
+     * where: the new one faded to gray, the differing pixels in red. A picture
      * whose size changed counts as changed everywhere.
      */
     static Difference difference(Path before, Path after) throws IOException {
@@ -139,8 +139,8 @@ final class RootDemoSheet {
                     differing++;
                     out.setRGB(x, y, 0xE00000);
                 } else {
-                    final int grey = 190 + ((q >> 16 & 255) + (q >> 8 & 255) + (q & 255)) / 12;
-                    out.setRGB(x, y, grey << 16 | grey << 8 | grey);
+                    final int gray = 190 + ((q >> 16 & 255) + (q >> 8 & 255) + (q & 255)) / 12;
+                    out.setRGB(x, y, gray << 16 | gray << 8 | gray);
                 }
             }
         }

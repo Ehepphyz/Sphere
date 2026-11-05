@@ -38,6 +38,7 @@ public class SettingsEditorWindow extends JFrame {
         this.originalSystemPathSnapshot = getSystemPathDataSnapshot();
 
         setTitle("Configuration File Editor — settings.conf");
+        com.sphere.utils.IconManager.applyAppIcon(this);
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         setLayout(new BorderLayout());
 

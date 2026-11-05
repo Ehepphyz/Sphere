@@ -722,12 +722,12 @@ public final class HepMCCommands {
         v1.addParticleIn(ep);
         v1.addParticleOut(z);
         evt.addVertex(v1);
-        final int[] flavours = {1, 2, 3, 4, 5};
+        final int[] flavors = {1, 2, 3, 4, 5};
         final double[] masses = {0.33, 0.33, 0.5, 1.5, 4.8};
-        final int q = rnd.nextInt(flavours.length);
+        final int q = rnd.nextInt(flavors.length);
         final FourVector[] qq = twoBody(z.momentum(), masses[q], masses[q], rnd);
-        final GenParticle quark = new GenParticle(qq[0], flavours[q], 2);
-        final GenParticle anti = new GenParticle(qq[1], -flavours[q], 2);
+        final GenParticle quark = new GenParticle(qq[0], flavors[q], 2);
+        final GenParticle anti = new GenParticle(qq[1], -flavors[q], 2);
         quark.setGeneratedMass(masses[q]);
         anti.setGeneratedMass(masses[q]);
         final GenVertex v2 = new GenVertex();

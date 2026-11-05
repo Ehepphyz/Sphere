@@ -501,7 +501,7 @@ public final class EditorIcons {
                 float dy = c[3] * k;
                 GeneralPath p = new GeneralPath();
                 if (restore) {
-                    // an elbow set in from the corner, opening outwards
+                    // an elbow set in from the corner, opening outward
                     p.moveTo(cx + dx, cy);
                     p.lineTo(cx + dx, cy + dy);
                     p.lineTo(cx, cy + dy);

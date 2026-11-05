@@ -9,7 +9,7 @@ import com.sphere.core.fastjet.PseudoJet;
  *
  * In double this is FastJet's arithmetic, n = p/|p| and 1 - n_a.n_b, which
  * loses all relative precision below theta ~ 1e-8. In double-double the
- * direction is normalised to 106 bits and 1 - cos(theta) is taken as half
+ * direction is normalized to 106 bits and 1 - cos(theta) is taken as half
  * the squared chord |n_a - n_b|^2, which has no cancellation at all.
  */
 public final class EEDirection {
@@ -37,7 +37,7 @@ public final class EEDirection {
         final DD norm2 = jet.kt2DD().add(jet.pzDD().sqr());
         if (!norm2.gt(0.0)) {
             // FastJet divides by zero here; the distances are then NaN and
-            // such a jet only ever meets the beam. Keep that behaviour.
+            // such a jet only ever meets the beam. Keep that behavior.
             xH = yH = zH = Double.NaN;
             xL = yL = zL = 0.0;
             return;

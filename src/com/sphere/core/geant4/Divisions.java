@@ -5,7 +5,7 @@ import java.util.List;
 
 /**
  * The copies of a G4PVDivision, computed as Geant4's division
- * parameterisations compute them (G4ParameterisationBoxX ...
+ * parameterizations compute them (G4ParameterisationBoxX ...
  * G4ParameterisationPolyhedraZ, source/geometry/divisions): for each copy,
  * the solid it is cut to and where it stands in the mother.
  *

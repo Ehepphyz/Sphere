@@ -269,6 +269,7 @@ final class RootEngineCall {
     static void showCode(Component parent, RootTarget t, RootMethod m, String code, String why) {
         final JDialog d = new JDialog(SwingUtilities.getWindowAncestor(parent), t.title() + " — " + m.name,
             java.awt.Dialog.ModalityType.MODELESS);
+        com.sphere.utils.IconManager.applyAppIcon(d);
         final JTextArea area = new JTextArea(code, 28, 96);
         area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         area.setEditable(false);

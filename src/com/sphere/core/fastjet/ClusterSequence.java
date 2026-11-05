@@ -15,7 +15,7 @@ import java.util.function.Consumer;
 
 /**
  * The clustering of a set of particles, and everything that can be asked of
- * it afterwards: inclusive and exclusive jets, subjets, constituents and the
+ * it afterward: inclusive and exclusive jets, subjets, constituents and the
  * whole history. The counterpart of fastjet::ClusterSequence.
  *
  * The history is kept exactly as FastJet keeps it: one element per initial
@@ -447,7 +447,7 @@ public class ClusterSequence {
     /* Scales                                                              */
     /* ------------------------------------------------------------------ */
 
-    /** The per-jet factor of the distance, kt^2p in the generalised form. */
+    /** The per-jet factor of the distance, kt^2p in the generalized form. */
     public double jetScaleForAlgorithm(PseudoJet jet) {
         if (jetAlgorithm == JetAlgorithm.KT) {
             return jet.kt2();

@@ -199,6 +199,7 @@ public final class RootPipelineWindow extends JFrame {
 
     private RootPipelineWindow(RootBackend engine, String activeProject) {
         super("ROOT pipeline builder");
+        com.sphere.utils.IconManager.applyAppIcon(this);
         this.engine = engine;
         this.activeProject = activeProject;
 
@@ -233,7 +234,7 @@ public final class RootPipelineWindow extends JFrame {
         title.setForeground(palette.getTextPrimary());
 
         JLabel hint = new JLabel("Compiled into includes/, loaded when Sphere starts, "
-                                 + "and callable by name from :root afterwards.");
+                                 + "and callable by name from :root afterward.");
         hint.setForeground(palette.getTextSecondary());
 
         band.add(title);
@@ -1772,7 +1773,7 @@ public final class RootPipelineWindow extends JFrame {
     }
 
     /**
-     * Says why the form cannot be saved yet, and greys the buttons that would
+     * Says why the form cannot be saved yet, and grays the buttons that would
      * fail, rather than letting the compiler discover it three minutes later.
      */
     private void validateForm() {
@@ -2084,7 +2085,7 @@ public final class RootPipelineWindow extends JFrame {
         }
     }
 
-    /** The family beside the title, so a long catalogue keeps its shape. */
+    /** The family beside the title, so a long catalog keeps its shape. */
     private final class RecipeRenderer extends DefaultListCellRenderer {
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,

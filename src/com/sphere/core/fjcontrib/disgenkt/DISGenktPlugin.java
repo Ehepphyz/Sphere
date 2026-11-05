@@ -17,12 +17,12 @@ import com.sphere.core.fjcontrib.internal.StdSort;
 import java.util.List;
 
 /**
- * The generalised-kt algorithm for deep-inelastic scattering in the Breit
+ * The generalized-kt algorithm for deep-inelastic scattering in the Breit
  * frame, fastjet::contrib::DISGenktPlugin (DISGenkt, fastjet-contrib 1.104;
  * M. van Beekveld, S. Ferrario Ravasio, A. Karlberg and D. Peake):
  * e+e--like distances
  * d_ij = min(E_i^2p, E_j^2p) (1 - cos theta_ij) / (1 - cos R) and a beam
- * distance d_iB = E_i^2p (1 - s cos theta_i) towards the incoming beam of
+ * distance d_iB = E_i^2p (1 - s cos theta_i) toward the incoming beam of
  * sign s; the jet along the beam is the "macrojet".
  *
  * <p>With {@link Precision#DOUBLE} the clustering is the C++ one bit for bit.

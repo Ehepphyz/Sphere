@@ -13,18 +13,18 @@ import java.util.List;
 import java.util.function.ToDoubleFunction;
 
 /**
- * Interleaved flavour neutralisation, fastjet::contrib::FlavNeutraliser
+ * Interleaved flavor neutralization, fastjet::contrib::FlavNeutraliser
  * (IFNPlugin 1.0.4): the history of a clustering is replayed step by step,
- * and before the softer of two merging objects brings its flavour into the
- * harder one, it may first neutralise it against a flavoured object closer
+ * and before the softer of two merging objects brings its flavor into the
+ * harder one, it may first neutralize it against a flavored object closer
  * to it in the measure
  * <pre>
  *   u_ik = max(pt_i^2, pt_k^2)^p min(pt_i^2, pt_k^2)^q
  *          x 2 [ (cosh(a dy) - 1)/a^2 - (cos dphi - 1) ]
  * </pre>
  * The kinematics of the jets stay those of the base algorithm; only the
- * flavours move. Recursion lets the partner k look for its own preferred
- * neutraliser first, so that flavour is not stolen from where it belongs.
+ * flavors move. Recursion lets the partner k look for its own preferred
+ * neutralizer first, so that flavor is not stolen from where it belongs.
  *
  * <p>The rapidity is taken from log1p for |y| &lt; 0.1 and small azimuthal
  * differences from a transverse cross product, as the C++ does; with the
@@ -115,7 +115,7 @@ public class FlavNeutraliser {
         return dphi;
     }
 
-    /** u_12, the neutralisation distance; refScale matters for the aktlike measures only. */
+    /** u_12, the neutralization distance; refScale matters for the aktlike measures only. */
     public double neutralisationDistance(PseudoJet p1, PseudoJet p2, double refScale) {
         if (sphericalAlgo) {
             final double norm = 1.0 / (p1.modp() * p2.modp());
@@ -214,10 +214,10 @@ public class FlavNeutraliser {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Flavour bookkeeping                                                 */
+    /* Flavor bookkeeping                                                 */
     /* ------------------------------------------------------------------ */
 
-    /** Whether j and k carry flavour that can cancel. */
+    /** Whether j and k carry flavor that can cancel. */
     static boolean haveFlavourToNeutralise(PseudoJet j, PseudoJet k, boolean modulo2) {
         final FlavInfo f1 = FlavHistory.currentFlavourOf(j);
         final FlavInfo f2 = FlavHistory.currentFlavourOf(k);
@@ -227,7 +227,7 @@ public class FlavNeutraliser {
         return false;
     }
 
-    /** Cancels what flavour j and k can cancel, recording it in both histories at histStep. */
+    /** Cancels what flavor j and k can cancel, recording it in both histories at histStep. */
     static void neutraliseFlavour(PseudoJet j, PseudoJet k, int histStep, boolean modulo2) {
         final int[] f1 = FlavHistory.currentFlavourOf(j).words();
         final int[] f2 = FlavHistory.currentFlavourOf(k).words();
@@ -261,7 +261,7 @@ public class FlavNeutraliser {
     /* The replay                                                          */
     /* ------------------------------------------------------------------ */
 
-    /** A flavoured object and its distance u to the one looking for a neutraliser. */
+    /** A flavored object and its distance u to the one looking for a neutralizer. */
     private static final class Candidate {
         final PseudoJet jet;
         double u;
@@ -275,8 +275,8 @@ public class FlavNeutraliser {
     private static final Comparator<Candidate> BY_U_DECREASING = (x, y) -> x.u > y.u ? -1 : (y.u > x.u ? 1 : 0);
 
     /**
-     * Replays the clustering of cs with neutralisation, and answers what is to
-     * replace cs.jets(): the same momenta, with the flavour histories this
+     * Replays the clustering of cs with neutralization, and answers what is to
+     * replace cs.jets(): the same momenta, with the flavor histories this
      * gave. The C++ copies of the jets share their user information with the
      * sequence's, and so do these copies.
      */
@@ -347,7 +347,7 @@ public class FlavNeutraliser {
         return jets;
     }
 
-    /** The inclusive jets after neutralisation, above ptmin, in the order of the C++. */
+    /** The inclusive jets after neutralization, above ptmin, in the order of the C++. */
     public List<PseudoJet> inclusiveJets(ClusterSequence cs, double ptmin) {
         final List<ClusterSequence.HistoryElement> hist = cs.history();
         final List<PseudoJet> jets = neutralise(cs);
@@ -375,8 +375,8 @@ public class FlavNeutraliser {
     }
 
     /**
-     * The recursive variant: before i takes flavour from k, k first looks
-     * among the other candidates (j included, i excluded) for a neutraliser
+     * The recursive variant: before i takes flavor from k, k first looks
+     * among the other candidates (j included, i excluded) for a neutralizer
      * it is closer to, so that i does not steal what belongs elsewhere.
      */
     void useCandidatesRecursive(PseudoJet jetI, double uij, int ihStep, List<Candidate> candidates,

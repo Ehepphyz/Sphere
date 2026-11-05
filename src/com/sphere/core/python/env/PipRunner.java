@@ -24,7 +24,7 @@ import java.util.function.Consumer;
 public final class PipRunner {
 
     private volatile Process current;
-    private volatile boolean cancelled;
+    private volatile boolean canceled;
 
     /** One change an install would make. */
     public record Change(String name, String from, String to) {
@@ -94,7 +94,7 @@ public final class PipRunner {
 
     /** Runs a command, every line of its output to out as it comes; answers its exit code. */
     public int run(List<String> command, Consumer<String> out) throws IOException, InterruptedException {
-        cancelled = false;
+        canceled = false;
         final ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
         pb.environment().put("PYTHONIOENCODING", "utf-8");
@@ -117,13 +117,13 @@ public final class PipRunner {
             p.destroyForcibly();
             throw new IOException("stopped after ten minutes");
         }
-        if (cancelled) out.accept("(stopped)");
+        if (canceled) out.accept("(stopped)");
         return p.exitValue();
     }
 
     /** Stops what runs, its children too (pip starts builds). */
     public void cancel() {
-        cancelled = true;
+        canceled = true;
         final Process p = current;
         if (p == null) return;
         p.descendants().forEach(ProcessHandle::destroy);

@@ -22,6 +22,7 @@ public class FlatFileChooser extends JDialog {
 
     public FlatFileChooser(Window parent, File initialDir) {
         super(parent, "Select File", ModalityType.APPLICATION_MODAL);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         
         setLayout(new BorderLayout());
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);

@@ -25,14 +25,14 @@ import java.text.AttributedCharacterIterator;
 import java.util.Map;
 
 /**
- * A ROOT canvas drawn in the theme's colours rather than on white paper.
+ * A ROOT canvas drawn in the theme's colors rather than on white paper.
  *
- * Every colour the painters ask for passes through here. What ROOT means as
- * paper and ink (white, black and the greys between: pad fills, frames,
+ * Every color the painters ask for passes through here. What ROOT means as
+ * paper and ink (white, black and the grays between: pad fills, frames,
  * axes, labels, a black histogram line) takes the theme's surface and text
- * colours, light and dark swapped; what carries data (a colour scale, a
- * coloured line, a fill) keeps its exact colour, so a COLZ map still reads on
- * its colour bar. Text is checked against the pixels it is about to cover:
+ * colors, light and dark swapped; what carries data (a color scale, a
+ * colored line, a fill) keeps its exact color, so a COLZ map still reads on
+ * its color bar. Text is checked against the pixels it is about to cover:
  * dark text on the theme's dark paper is lightened, the same text on a light
  * pastel fill is left as it was, so a title stays readable wherever it lies.
  *
@@ -55,10 +55,10 @@ final class InkGraphics extends Graphics2D {
     }
 
     /* ------------------------------------------------------------------ */
-    /* The colours                                                         */
+    /* The colors                                                         */
     /* ------------------------------------------------------------------ */
 
-    /** Paper and ink to the theme; a colour that carries data left alone. */
+    /** Paper and ink to the theme; a color that carries data left alone. */
     Color ink(Color c) {
         if (c == null) return null;
         final int r = c.getRed();
@@ -68,7 +68,7 @@ final class InkGraphics extends Graphics2D {
         final int min = Math.min(r, Math.min(gr, b));
         final double saturation = max == 0 ? 0 : (max - min) / (double) max;
         if (max - min >= 30 && saturation >= 0.18) return c;
-        // A grey: black becomes the text, white the paper, the greys between.
+        // A gray: black becomes the text, white the paper, the grays between.
         final double t = (0.2126 * r + 0.7152 * gr + 0.0722 * b) / 255.0;
         return new Color(mix(text.getRed(), paper.getRed(), t), mix(text.getGreen(), paper.getGreen(), t),
             mix(text.getBlue(), paper.getBlue(), t), c.getAlpha());
@@ -92,7 +92,7 @@ final class InkGraphics extends Graphics2D {
     }
 
     /**
-     * The colour a string is drawn in: its own when it reads on the ground
+     * The color a string is drawn in: its own when it reads on the ground
      * under it (a contrast of 3:1), else moved toward white or black, its hue
      * kept, until it does.
      */
@@ -130,7 +130,7 @@ final class InkGraphics extends Graphics2D {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Colour state                                                        */
+    /* Color state                                                        */
     /* ------------------------------------------------------------------ */
 
     @Override

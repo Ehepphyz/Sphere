@@ -706,7 +706,7 @@ public final class ZstdBlock {
     // ---- bit readers -------------------------------------------------------
 
     /**
-     * Reads bits from the end of the buffer towards its start, most significant
+     * Reads bits from the end of the buffer toward its start, most significant
      * first, which is how the entropy streams are written.
      */
     private static final class BackwardBits {

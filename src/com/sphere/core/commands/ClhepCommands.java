@@ -1042,7 +1042,7 @@ public final class ClhepCommands {
 
     /**
      * f(x) on an Evaluator expression, as a GenericFunctions function: x is set in the session's calculator
-     * for each value, and put back as it was afterwards.
+     * for each value, and put back as it was afterward.
      */
     private static final class Expression implements AutoCloseable {
         private final Quantities q = quantities();

@@ -13,7 +13,7 @@ import java.util.function.Consumer;
  * What a test has at hand while it runs: the reference files shipped with
  * Sphere (the .root files of ROOT's test/ directory and the compression
  * fixtures), a scratch folder of its own, a log, and whether the run was
- * cancelled.
+ * canceled.
  */
 public final class LabContext {
 
@@ -21,14 +21,14 @@ public final class LabContext {
     public static final String REFDATA = "/com/sphere/core/rootlab/refdata/";
 
     private final Consumer<String> log;
-    private final java.util.function.BooleanSupplier cancelled;
+    private final java.util.function.BooleanSupplier canceled;
     private final boolean network;
     private final List<String> details = new ArrayList<>();
     private Path scratch;
 
-    public LabContext(Consumer<String> log, java.util.function.BooleanSupplier cancelled, boolean network) {
+    public LabContext(Consumer<String> log, java.util.function.BooleanSupplier canceled, boolean network) {
         this.log = log == null ? s -> { } : log;
-        this.cancelled = cancelled == null ? () -> false : cancelled;
+        this.canceled = canceled == null ? () -> false : canceled;
         this.network = network;
     }
 
@@ -51,8 +51,8 @@ public final class LabContext {
         return network;
     }
 
-    public boolean cancelled() {
-        return cancelled.getAsBoolean();
+    public boolean canceled() {
+        return canceled.getAsBoolean();
     }
 
     /** Fails the test with that message unless the condition holds. */

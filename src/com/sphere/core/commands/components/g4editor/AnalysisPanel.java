@@ -460,7 +460,7 @@ final class AnalysisPanel extends JTabbedPane {
         }
         rayInfo.setText(b.toString());
         rayInfo.setCaretPosition(0);
-        // Draw the ray in the 3D view, coloured per segment
+        // Draw the ray in the 3D view, colored per segment
         vp.tracks.clear();
         vp.trackColors.clear();
         final double len = model.geometry.world().solid().extent().diagonal();
@@ -553,7 +553,7 @@ final class AnalysisPanel extends JTabbedPane {
             g.drawString("180", 18, top + 9);
             g.drawString("-180", 14, top + ph);
             g.drawString("phi", 18, top + ph / 2);
-            // Colour bar
+            // Color bar
             final int cbx = left + pw + 8;
             for (int y = 0; y < ph; y++) {
                 g.setColor(new Color(viridis(1 - (double) y / ph)));
@@ -602,7 +602,7 @@ final class AnalysisPanel extends JTabbedPane {
         }
     }
 
-    /** The viridis colour map, a few anchors interpolated. */
+    /** The viridis color map, a few anchors interpolated. */
     static int viridis(double t) {
         final double[][] c = {{68, 1, 84}, {59, 82, 139}, {33, 145, 140}, {94, 201, 98}, {253, 231, 37}};
         t = Math.max(0, Math.min(1, t));

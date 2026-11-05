@@ -29,6 +29,7 @@ public class PresetDetailsWindow extends JDialog {
                                File projectDirectory,
                                ProjectManifest manifest) {
         super(owner, "Preset Details — " + Objects.requireNonNull(projectDirectory, "Project directory context reference cannot be null.").getName(), false);
+        com.sphere.utils.IconManager.applyAppIcon(this);
 
         this.workspaceManager = Objects.requireNonNull(workspaceManager, "Workspace manager tracking reference context pointer cannot be null.");
         this.projectDirectory = projectDirectory;

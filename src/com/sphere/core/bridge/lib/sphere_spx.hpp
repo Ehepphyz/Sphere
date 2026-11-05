@@ -1068,7 +1068,7 @@ inline void hepmcCheck(const std::string& eventsPath, const std::string& outPath
 namespace spx {
 namespace root {
 
-/** A histogram an engine published, as a TH1D; the band goes in the bin errors (symmetrised). */
+/** A histogram an engine published, as a TH1D; the band goes in the bin errors (symmetrized). */
 inline TH1D* histogram(const std::string& fileOrName, const char* name = nullptr) {
     const File f(resolve(fileOrName));
     std::int64_t ne = 0, nv = 0;

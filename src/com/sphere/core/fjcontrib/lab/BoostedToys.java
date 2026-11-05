@@ -10,25 +10,25 @@ import java.util.SplittableRandom;
 
 /**
  * Toy events with a boosted object, at parton level, to try substructure,
- * flavour and pileup tools without a generator.
+ * flavor and pileup tools without a generator.
  *
  * <p>Each hard parton is showered by an angular-ordered soft-collinear
  * cascade: emissions fill its Lund plane with the leading-log density
  * 2 C_R alpha_s / pi per unit ln(1/theta) and ln(1/z), down to kt = ktMin,
  * each gluon emitted cascading in turn inside its own angle, and a gluon
- * sometimes splitting to a quark pair instead (the soft flavoured pairs the
- * flavour algorithms must be safe against). The emitter recoils, so that
+ * sometimes splitting to a quark pair instead (the soft flavored pairs the
+ * flavor algorithms must be safe against). The emitter recoils, so that
  * three-momentum is conserved and each splitting gives the jet its mass,
  * m^2 = z(1-z) E^2 theta^2. Quark jets radiate with C_F, gluon jets with C_A,
  * and the Lund density ':fjco lundmap' shows sits at the value put in.
- * Decaying W, Z, H and top quarks radiate inside the cone of their colour
+ * Decaying W, Z, H and top quarks radiate inside the cone of their color
  * dipoles, which keeps two- and three-prong jets narrower than QCD jets.
- * The partons carry their PDG code as user index, as the fjcontrib flavour
+ * The partons carry their PDG code as user index, as the fjcontrib flavor
  * examples' own input does.
  *
  * <p>The object recoils against nothing visible (as against a neutrino pair),
  * so that the leading jet is the object; {@link Options#recoil()} adds a QCD
- * parton back to back instead. Not a generator: no hadronisation, no running
+ * parton back to back instead. Not a generator: no hadronization, no running
  * coupling. Enough for the tools to behave as on real jets.
  */
 public final class BoostedToys {
@@ -129,7 +129,7 @@ public final class BoostedToys {
         final double mt = Math.sqrt(m * m + pt * pt);
         final double[] res = {mt * Math.cosh(y), pt * Math.cos(phi), pt * Math.sin(phi), mt * Math.sinh(y)};
         final double[][] d = twoBody(res, m, 0, r);
-        // a colour singlet radiates inside the angle between its two partons
+        // a color singlet radiates inside the angle between its two partons
         final double opening = angle(d[0], d[1]);
         shower(ev, pdgs[0], three(d[0]), opening, o, r, 0);
         shower(ev, pdgs[1], three(d[1]), opening, o, r, 0);

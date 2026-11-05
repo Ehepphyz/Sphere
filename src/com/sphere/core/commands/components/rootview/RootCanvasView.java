@@ -79,7 +79,7 @@ public final class RootCanvasView extends JComponent {
     private final List<Pad> order = new ArrayList<>();
     private Consumer<String> status = s -> { };
     private Runnable changeListener = () -> { };
-    /** The pads in the theme's canvas colours (ThemePalette's canvas keys); off, in ROOT's own. */
+    /** The pads in the theme's canvas colors (ThemePalette's canvas keys); off, in ROOT's own. */
     private boolean themePaper = true;
     /** Set while a snapshot is taken: a picture to keep is drawn on ROOT's white paper. */
     private boolean exporting;
@@ -197,6 +197,7 @@ public final class RootCanvasView extends JComponent {
             @Override
             public void open(RootScene s, String title) {
                 final JFrame f = new JFrame(title);
+                com.sphere.utils.IconManager.applyAppIcon(f);
                 final RootCanvasView v = new RootCanvasView();
                 v.setScene(s);
                 v.setStatusListener(self.status);
@@ -209,6 +210,7 @@ public final class RootCanvasView extends JComponent {
             @Override
             public void show(String title, String text) {
                 final JDialog d = new JDialog(SwingUtilities.getWindowAncestor(self), title, java.awt.Dialog.ModalityType.MODELESS);
+                com.sphere.utils.IconManager.applyAppIcon(d);
                 final JTextArea a = new JTextArea(text, 30, 100);
                 a.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
                 a.setEditable(false);
@@ -251,10 +253,10 @@ public final class RootCanvasView extends JComponent {
     }
 
     /**
-     * Draws the pads in the theme's canvas colours (the canvas keys of
+     * Draws the pads in the theme's canvas colors (the canvas keys of
      * ThemePalette: paper, ink, grid, boxes...), the default; off, in ROOT's
      * own white paper and black ink, which are the light palette's canvas
-     * keys. A colour that carries data stays ROOT's either way. Pictures taken
+     * keys. A color that carries data stays ROOT's either way. Pictures taken
      * with snapshot are always ROOT's.
      */
     public void setThemePaper(boolean on) {
@@ -272,7 +274,7 @@ public final class RootCanvasView extends JComponent {
         return painted.isEmpty() ? null : (Pad) painted.get(0)[0];
     }
 
-    /** TPad::cd: the pad the next Draw goes to, framed in the selection colour. */
+    /** TPad::cd: the pad the next Draw goes to, framed in the selection color. */
     public Pad currentPad() {
         return current;
     }
@@ -430,7 +432,7 @@ public final class RootCanvasView extends JComponent {
             g = gray.createGraphics();
         }
         try {
-            // The theme's canvas colours, or ROOT's own (the light palette's) for ROOT's paper and for a snapshot.
+            // The theme's canvas colors, or ROOT's own (the light palette's) for ROOT's paper and for a snapshot.
             RootPadPainter.palette = themePaper && !exporting ? ThemeManager.getCurrentPalette()
                 : ThemePaletteLight.INSTANCE;
             g.setColor(RootPadPainter.palette.getCanvasGround());
@@ -458,7 +460,7 @@ public final class RootCanvasView extends JComponent {
         } finally {
             if (gray != null) {
                 g.dispose();
-                // TCanvas::SetGrayscale: each colour by its luminance, as ROOT converts the colour table.
+                // TCanvas::SetGrayscale: each color by its luminance, as ROOT converts the color table.
                 final int[] px = gray.getRGB(0, 0, gray.getWidth(), gray.getHeight(), null, 0, gray.getWidth());
                 for (int k = 0; k < px.length; k++) {
                     final int r = px[k] >> 16 & 255;

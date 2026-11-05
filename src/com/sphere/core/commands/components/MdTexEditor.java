@@ -740,6 +740,7 @@ public class MdTexEditor extends JPanel {
 
         SwingUtilities.invokeLater(() -> {
             JFrame frame = new JFrame("Sphere - Zero-Dependency Markdown Sandbox");
+            IconManager.applyAppIcon(frame);
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 
             MdTexEditor editorPanel = new MdTexEditor();

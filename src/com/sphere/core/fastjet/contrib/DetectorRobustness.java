@@ -118,7 +118,7 @@ public final class DetectorRobustness {
         return out;
     }
 
-    /** The event as calorimeter cells (massless, at the cell centre), optionally smeared and noisy. */
+    /** The event as calorimeter cells (massless, at the cell center), optionally smeared and noisy. */
     static List<PseudoJet> towers(List<PseudoJet> event, Detector d, SplittableRandom smear, double noise,
                                   SplittableRandom rnd, boolean everyCell) {
         final int neta = (int) Math.ceil(2 * d.etaMax() / d.cellEta());

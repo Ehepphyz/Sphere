@@ -83,6 +83,7 @@ public final class JupylabXeditor extends JFrame {
 
     public JupylabXeditor(Path ipynbPath) throws Exception {
         super("JupylabXeditor - " + (ipynbPath == null ? "untitled" : ipynbPath.getFileName()));
+        com.sphere.utils.IconManager.applyAppIcon(this);
         this.currentPath = ipynbPath;
         if (ipynbPath != null && Files.exists(ipynbPath)) {
             this.notebook = loadNotebook(ipynbPath);
@@ -1130,7 +1131,7 @@ public final class JupylabXeditor extends JFrame {
                 editorScrollPane.setBorder(null);
                 editorScrollPane.setViewportBorder(null);
                 
-                // Route viewport mouse wheel streaming upwards seamlessly to the top master scroll component
+                // Route viewport mouse wheel streaming upward seamlessly to the top master scroll component
                 editorScrollPane.addMouseWheelListener(e -> {
                     JScrollPane mainScrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, cellsContainer);
                     if (mainScrollPane != null) {
@@ -1320,7 +1321,7 @@ public final class JupylabXeditor extends JFrame {
                 JScrollPane sp = new JScrollPane(codeEditor);
                 sp.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
                 
-                // Route viewport mouse wheel streaming upwards seamlessly to the top master scroll component
+                // Route viewport mouse wheel streaming upward seamlessly to the top master scroll component
                 sp.addMouseWheelListener(e -> {
                     JScrollPane mainScrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, cellsContainer);
                     if (mainScrollPane != null) {
@@ -1424,7 +1425,7 @@ public final class JupylabXeditor extends JFrame {
             JScrollPane sp = new JScrollPane(raw);
             sp.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
             
-            // Route viewport mouse wheel streaming upwards seamlessly to the top master scroll component
+            // Route viewport mouse wheel streaming upward seamlessly to the top master scroll component
             sp.addMouseWheelListener(e -> {
                 JScrollPane mainScrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, cellsContainer);
                 if (mainScrollPane != null) {

@@ -10,13 +10,13 @@ import java.util.List;
  * The per-particle information jet-like event shapes are built from,
  * fastjet::jwj::EventStorage (JetsWithoutJets 1.0.0; D. Bertolini,
  * T. Chan and J. Thaler, JHEP 1404 (2014) 013): for every particle i, the
- * scalar pt within R_jet (and R_sub) of it, the mass of that neighbourhood,
- * the neighbours themselves, and whether it passes the pt cut and the
+ * scalar pt within R_jet (and R_sub) of it, the mass of that neighborhood,
+ * the neighbors themselves, and whether it passes the pt cut and the
  * trimming condition. A particle's weight pt_i / pt_in_Rjet makes the sum of
  * the weights over a would-be jet equal to one, which is how jets are
  * counted without jets.
  *
- * <p>The neighbour search goes, as in the C++ contrib, either through every
+ * <p>The neighbor search goes, as in the C++ contrib, either through every
  * particle or through a rapidity-azimuth grid of cells at least 2 R_jet
  * wide (the "local storage"); both visit the candidates in increasing index
  * order, so they give the same sums bit for bit. Beyond the C++ contrib the
@@ -28,7 +28,7 @@ public class EventStorage {
 
     private static final double TWOPI = 2.0 * Math.PI;
 
-    /** One particle and its neighbourhood, fastjet::jwj::ParticleStorage. */
+    /** One particle and its neighborhood, fastjet::jwj::ParticleStorage. */
     public static final class ParticleStorage {
         private final PseudoJet pj;
         private final double rap;
@@ -79,7 +79,7 @@ public class EventStorage {
     /**
      * The rapidity-azimuth cells, fastjet::jwj::LocalStorage: cell k holds the
      * particles whose coordinate over the spread floors or ceils to k, so it
-     * covers two spreads centred on k * spread, and a particle looks up the
+     * covers two spreads centered on k * spread, and a particle looks up the
      * cell its coordinate rounds to.
      */
     private static final class LocalStorage {
@@ -249,7 +249,7 @@ public class EventStorage {
     }
 
     /**
-     * The smallest relative distance, over the particles whose neighbourhood
+     * The smallest relative distance, over the particles whose neighborhood
      * was examined, of pt_in_Rjet to the pt cut and of pt_in_Rsub/pt_in_Rjet
      * to fcut (when trimming): the jet count and every shape built on this
      * storage are stable under changes of the particles' pt smaller than it.

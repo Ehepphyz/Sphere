@@ -19,7 +19,7 @@ import java.util.Map;
  * SystemOfUnits and PhysicalConstants at CLHEP's own value, and the variables {@link #let} defines.
  *
  * <p>Its dimension is found without any table of dimensions: the expression is evaluated again in seven
- * systems of units, each with one SI base unit (metre, kilogram, second, ampere, kelvin, mole, candela) twice
+ * systems of units, each with one SI base unit (meter, kilogram, second, ampere, kelvin, mole, candela) twice
  * as large, and the ratio of the values is two to the power of that unit's exponent. A sum of quantities of
  * different dimensions, or a function of a dimensioned quantity, has ratios that are no such powers: it is
  * said to be inconsistent.

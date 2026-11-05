@@ -213,16 +213,16 @@ public final class ImageFileIO {
         final int h = raster.getHeight();
         final int bands = raster.getNumBands();
         final boolean alpha = image.getColorModel().hasAlpha();
-        final int colour = Math.max(1, alpha ? bands - 1 : bands);
+        final int color = Math.max(1, alpha ? bands - 1 : bands);
 
         // The range, from a sample of at most about a million values.
-        final long total = (long) w * h * Math.min(colour, 3);
+        final long total = (long) w * h * Math.min(color, 3);
         final int stride = (int) Math.max(1, total / 1_000_000);
         float[] sample = new float[(int) Math.min(total, 1_000_000L) + 3];
         int n = 0;
         long seen = 0;
         final float[] row = new float[w];
-        for (int b = 0; b < Math.min(colour, 3); b++) {
+        for (int b = 0; b < Math.min(color, 3); b++) {
             for (int y = 0; y < h; y++) {
                 raster.getSamples(0, y, w, 1, b, row);
                 for (int x = 0; x < w; x++) {
@@ -247,7 +247,7 @@ public final class ImageFileIO {
         final float scale = 255f / (hi - lo);
 
         final BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        final float[][] rows = new float[Math.min(colour, 3)][w];
+        final float[][] rows = new float[Math.min(color, 3)][w];
         for (int y = 0; y < h; y++) {
             for (int b = 0; b < rows.length; b++) raster.getSamples(0, y, w, 1, b, rows[b]);
             for (int x = 0; x < w; x++) {

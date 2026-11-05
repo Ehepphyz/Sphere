@@ -3,7 +3,9 @@ package com.sphere.core.commands;
 import com.sphere.components.g4editor.G4CodeFrame;
 import com.sphere.components.g4editor.G4EditorFrame;
 import com.sphere.core.geant4.Budget;
+import com.sphere.core.geant4.CodeAdvisor;
 import com.sphere.core.geant4.CppExport;
+import com.sphere.core.geant4.CppGeometry;
 import com.sphere.core.geant4.Geometry;
 import com.sphere.core.geant4.GeometryFiles;
 import com.sphere.core.geant4.Mass;
@@ -17,6 +19,7 @@ import com.sphere.core.geantbackend.Geant4AppBuilder;
 import com.sphere.core.geantbackend.Geant4Bridge;
 import com.sphere.core.geantbackend.Geant4BridgeCompiler;
 import com.sphere.core.geantbackend.Geant4Locator;
+import com.sphere.core.geantbackend.RunAdvisor;
 import com.sphere.utils.AppLogger;
 import com.sphere.utils.SettingsManager;
 
@@ -156,10 +159,13 @@ public final class G4Commands {
         AppLogger.raw("  :g4 material <name> [thickness]      X0, lambda_I, Moliere radius of a NIST or GDML material");
         AppLogger.raw("  :g4 check <design.gdml> [points]     overlap check, as G4PVPlacement::CheckOverlaps");
         AppLogger.raw("  :g4 info <design.gdml>               volumes, masses, material budget along z");
+        AppLogger.raw("  :g4 advise <folder|design> [fix]     the assistant: the code's mistakes (angles in radians, NIST");
+        AppLogger.raw("                                       names, copy numbers, threads) and the detector's (showers)");
         AppLogger.raw("  :g4 export <design.gdml> <folder>    a complete Geant4 C++ application (CMake)");
         AppLogger.raw("  :g4 do <design.gdml> <command...>    a G4editor console command, saved back to the file");
         AppLogger.raw("  :g4 bridge build|status|test|stop    the engine in geantbackend/");
-        AppLogger.raw("  :g4 run <design.gdml> <events> [particle] [energy]   a run in Geant4");
+        AppLogger.raw("  :g4 run <design.gdml> <events> [particle] [energy] [B=4]   a run in Geant4, read back:");
+        AppLogger.raw("                                       steps, shower profile, energy kept, resolution");
         AppLogger.raw("  :g4 commands [/dir/|/command|word]   Geant4's UI commands: browse, help, search");
         AppLogger.raw("  :g4 ui <command>                     a Geant4 UI command, applied by the engine");
         AppLogger.raw("  :g4 macro <file.mac>                 check a macro against Geant4's commands");
@@ -222,7 +228,7 @@ public final class G4Commands {
         };
     }
 
-    /** A design from a GDML file or from the geometry of a ROOT file, recognised by its content. */
+    /** A design from a GDML file or from the geometry of a ROOT file, recognized by its content. */
     private static Geometry read(String spec) {
         final Path p = local(spec);
         try {
@@ -308,6 +314,111 @@ public final class G4Commands {
         for (Geometry.Issue i : g.issues()) {
             AppLogger.error(i.message());
         }
+    }
+
+    /** One finding of the assistant in the log, its fixes as the commands that apply them. */
+    private static void advice(com.sphere.core.geant4.Advisor.Advice a, String prefix) {
+        final String line = a.title() + ". " + a.detail();
+        switch (a.level()) {
+            case ERROR -> AppLogger.error(line);
+            case WARNING -> AppLogger.warn(line);
+            default -> AppLogger.info(line);
+        }
+        for (com.sphere.core.geant4.Advisor.Fix f : a.fixes()) {
+            AppLogger.raw("    " + f.label() + ":" + prefix + f.command());
+        }
+    }
+
+    /**
+     * :g4 advise: the assistant on a Geant4 application (its C++ read as G4code reads it) or on a design. The
+     * code's mistakes come with their fixes, which 'fix' writes into the files, each where the text it expects
+     * still is; the detector's with the console command that fixes it.
+     */
+    public static void advise(String input, CommandExecutionContext ctx) {
+        final List<String> w = words(input, ":g4 advise");
+        if (w.isEmpty()) {
+            Handlers.usage(":g4 advise <application folder|design.gdml|geometry.root> [fix]");
+            return;
+        }
+        final Path p = local(w.get(0));
+        final boolean fix = w.size() > 1 && w.get(1).equalsIgnoreCase("fix");
+        if (!Files.isDirectory(p)) {
+            final Geometry g = read(w.get(0));
+            if (g == null) {
+                return;
+            }
+            final List<com.sphere.core.geant4.Advisor.Advice> all = com.sphere.core.geant4.Advisor.review(g);
+            AppLogger.result(p.getFileName() + ": " + all.size() + " findings of the design assistant");
+            for (com.sphere.core.geant4.Advisor.Advice a : all) {
+                advice(a, " :g4 do " + w.get(0) + " ");
+            }
+            return;
+        }
+        final List<CppGeometry.Source> src = CppGeometry.sourcesOf(p);
+        final CppGeometry.Result r = CppGeometry.read(src, p);
+        final Map<Path, String> texts = new LinkedHashMap<>();
+        for (CppGeometry.Source s : src) {
+            texts.put(s.path().toAbsolutePath().normalize(), s.text());
+        }
+        final List<CodeAdvisor.Finding> code = CodeAdvisor.review(r, texts);
+        AppLogger.result(p.getFileName() + ": " + (r.entry().isEmpty() ? "no detector read" : r.entry() + " read, "
+            + r.geometry().volumes().size() + " volumes") + "; " + code.size() + " finding" + (code.size() == 1 ? "" : "s")
+            + " in the code");
+        final List<CodeAdvisor.Edit> edits = new ArrayList<>();
+        for (CodeAdvisor.Finding f : code) {
+            final String at = p.relativize(f.file().toAbsolutePath().normalize()) + ":" + f.line() + ":" + f.column() + "  ";
+            switch (f.severity()) {
+                case ERROR -> AppLogger.error(at + f.title());
+                case WARNING -> AppLogger.warn(at + f.title());
+                default -> AppLogger.info(at + f.title());
+            }
+            AppLogger.raw("    " + f.detail() + (f.fix() == null ? "" : "  Fix: " + f.fix().label()));
+            if (f.fix() != null) {
+                edits.addAll(f.fix().edits());
+            }
+        }
+        if (r.geometry().world() != null) {
+            r.geometry().settings().putAll(CodeAdvisor.gun(texts, p));
+            for (com.sphere.core.geant4.Advisor.Advice a : com.sphere.core.geant4.Advisor.review(r.geometry())) {
+                if (!a.title().contains("share copy numbers")) {
+                    advice(a.fixes().isEmpty() ? a : new com.sphere.core.geant4.Advisor.Advice(a.level(), a.title(),
+                        a.detail(), a.target(), List.of()), "");
+                }
+            }
+        }
+        if (!fix) {
+            if (!edits.isEmpty()) {
+                AppLogger.raw("  :g4 advise " + w.get(0) + " fix   writes the " + edits.size() + " fixes into the code"
+                    + " (or open it in :g4code, Assistant tab)");
+            }
+            return;
+        }
+        // the fixes, file by file, the last first so that the earlier offsets hold
+        int written = 0;
+        final Map<Path, List<CodeAdvisor.Edit>> byFile = new LinkedHashMap<>();
+        for (CodeAdvisor.Edit e : edits) {
+            byFile.computeIfAbsent(e.file().toAbsolutePath().normalize(), k -> new ArrayList<>()).add(e);
+        }
+        for (Map.Entry<Path, List<CodeAdvisor.Edit>> e : byFile.entrySet()) {
+            final StringBuilder b = new StringBuilder(texts.get(e.getKey()));
+            final List<CodeAdvisor.Edit> list = new ArrayList<>(e.getValue());
+            list.sort((x, y) -> y.start() - x.start());
+            int floor = Integer.MAX_VALUE, n = 0;
+            for (CodeAdvisor.Edit x : list) {
+                if (x.end() <= floor && x.end() <= b.length() && b.substring(x.start(), x.end()).equals(x.expected())) {
+                    b.replace(x.start(), x.end(), x.text());
+                    floor = x.start();
+                    n++;
+                }
+            }
+            try {
+                Files.writeString(e.getKey(), b.toString());
+                written += n;
+            } catch (Exception ex) {
+                AppLogger.error("Cannot write " + e.getKey() + ": " + ex.getMessage());
+            }
+        }
+        AppLogger.success(written + " fixes written into " + byFile.size() + " file" + (byFile.size() == 1 ? "" : "s"));
     }
 
     public static void export(String input, CommandExecutionContext ctx) {
@@ -422,8 +533,26 @@ public final class G4Commands {
     public static void run(String input, CommandExecutionContext ctx) {
         final List<String> w = words(input, ":g4 run");
         if (w.size() < 2) {
-            Handlers.usage(":g4 run <design.gdml> <events> [particle] [energy, e.g. 1GeV]");
+            Handlers.usage(":g4 run <design.gdml> <events> [particle] [energy, e.g. 1GeV] [B=4 | B=bx,by,bz, in tesla]");
             return;
+        }
+        // a uniform field, in tesla: B=4 along z, or its three components
+        final List<String> rest = new ArrayList<>(w.subList(2, w.size()));
+        final double[] field = new double[3];
+        for (java.util.Iterator<String> it = rest.iterator(); it.hasNext(); ) {
+            final String t = it.next();
+            if (t.toLowerCase(Locale.ROOT).startsWith("b=")) {
+                final String[] c = t.substring(2).split(",");
+                try {
+                    for (int i = 0; i < c.length && i < 3; i++) {
+                        field[c.length == 1 ? 2 : i] = Double.parseDouble(c[i].replaceAll("(?i)t(esla)?$", ""));
+                    }
+                } catch (NumberFormatException e) {
+                    AppLogger.error("B=" + t.substring(2) + ": the field is in tesla, B=4 along z or B=bx,by,bz");
+                    return;
+                }
+                it.remove();
+            }
         }
         final Path design = local(w.get(0));
         new Thread(() -> {
@@ -444,9 +573,10 @@ public final class G4Commands {
                 bridge.call("load", Map.of("path", bridge.enginePath(design))).get();
                 final Map<String, Object> args = new LinkedHashMap<>();
                 args.put("events", Integer.parseInt(w.get(1)));
-                args.put("particle", w.size() > 2 ? w.get(2) : "e-");
-                args.put("energy_MeV", w.size() > 3 ? com.sphere.core.geant4.Expr.eval(com.sphere.core.geant4.Inputs.normalize(
-                    w.get(3), Units.Category.ENERGY, "mm"), null) : 1000.0);
+                args.put("particle", rest.size() > 0 ? rest.get(0) : "e-");
+                args.put("energy_MeV", rest.size() > 1 ? com.sphere.core.geant4.Expr.eval(com.sphere.core.geant4.Inputs.normalize(
+                    rest.get(1), Units.Category.ENERGY, "mm"), null) : 1000.0);
+                args.put("field_T", List.of(field[0], field[1], field[2]));
                 args.put("trackEvents", 0);
                 final Geometry g = read(w.get(0));
                 if (g != null) {
@@ -461,6 +591,14 @@ public final class G4Commands {
                     AppLogger.raw(String.format(Locale.ROOT, "  %-24s mean %s  rms %s", e.getKey(),
                         Units.best(G4Json.num(e.getValue(), "mean_MeV", 0), Units.Category.ENERGY),
                         Units.best(G4Json.num(e.getValue(), "rms_MeV", 0), Units.Category.ENERGY)));
+                }
+                for (String l : RunAdvisor.report(r)) {
+                    AppLogger.raw(l);
+                }
+                if (g != null) {
+                    for (com.sphere.core.geant4.Advisor.Advice a : RunAdvisor.review(r, g)) {
+                        advice(a, "  :g4 do " + w.get(0) + " ");
+                    }
                 }
             } catch (Exception e) {
                 AppLogger.error("geant4-bridge: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));

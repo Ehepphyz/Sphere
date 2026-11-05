@@ -44,7 +44,13 @@ public final class Bridge {
         // Sphere's Minuit2 autopilot on ROOT's own Minuit2, for ROOT macros, C++ programs and PyROOT
         "sphere_autopilot.hpp",
         // the Sphere x87 ABI: long double on the x87 unit, one C interface for every language (x86-64)
-        "sphere_x87.S", "sphere_x87.h");
+        "sphere_x87.S", "sphere_x87.h",
+        // machine learning: the engine and Python library (PyTorch, Keras, pyhf), and its networks run from C++
+        "sphere_ml.py", "sphere_nn.hpp",
+        // any PyTorch or Keras model as a portable graph: its export and numpy reference, its C++ runtime
+        "sphere_graph.py", "sphere_graph.hpp", "sphere_graph_tool.cpp",
+        // TensorFlow's models (frozen graphs, SavedModels) read without TensorFlow, into the same graphs
+        "sphere_tf.py");
 
     private static volatile boolean materialized;
 

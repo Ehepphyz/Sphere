@@ -104,7 +104,7 @@ public final class RootSpectrum {
 
     /**
      * TH2::Smooth: each bin replaced by the kernel's weighted mean of its
-     * neighbours. v holds nx * ny contents, x fastest; err may be null.
+     * neighbors. v holds nx * ny contents, x fastest; err may be null.
      */
     public static void smooth2D(double[] v, double[] err, int nx, int ny, String option) {
         final String o = option == null ? "" : option.toLowerCase(java.util.Locale.ROOT);
@@ -146,7 +146,7 @@ public final class RootSpectrum {
      * The background under a spectrum, by SNIP: the window clipped from
      * niter down to 1 (or up, "BackIncreasingWindow"), of order 2 or 4
      * ("BackOrder4"), each point compared with the mean of its smoothed
-     * neighbours unless "nosmoothing", in a window of 3 to 15 ("BackSmoothing5"...).
+     * neighbors unless "nosmoothing", in a window of 3 to 15 ("BackSmoothing5"...).
      */
     public static double[] background(double[] spectrum, int niter, String option) {
         final String o = option == null ? "" : option.toLowerCase(java.util.Locale.ROOT);

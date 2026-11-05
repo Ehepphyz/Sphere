@@ -70,12 +70,12 @@ public final class FileCompare {
     private FileCompare() {
     }
 
-    public static Result compare(RootIO a, RootIO b, BooleanSupplier cancelled) throws java.io.IOException {
+    public static Result compare(RootIO a, RootIO b, BooleanSupplier canceled) throws java.io.IOException {
         final Map<String, RootNode> histA = histograms(a);
         final Map<String, RootNode> histB = histograms(b);
         final Result result = new Result();
         for (Map.Entry<String, RootNode> e : histA.entrySet()) {
-            if (cancelled != null && cancelled.getAsBoolean()) {
+            if (canceled != null && canceled.getAsBoolean()) {
                 break;
             }
             final RootNode nb = histB.get(e.getKey());

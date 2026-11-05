@@ -18,11 +18,11 @@ import java.util.List;
  * S. Caletti, A.J. Larkoski, S. Marzani and D. Reichelt, "Practical jet
  * flavour through NNLO", Eur. Phys. J. C 82 (2022) 632, arXiv:2205.01109).
  *
- * <p>The flavour of a jet is the net flavour of the constituents that survive
+ * <p>The flavor of a jet is the net flavor of the constituents that survive
  * Soft Drop after the jet is reclustered with the JADE algorithm, which makes
  * it infrared and collinear safe to NNLO. The jet itself is left as it is:
- * only its user information changes, to a FlavHistory of that flavour. The
- * constituents must carry flavour (a FlavRecombiner on the jet definition
+ * only its user information changes, to a FlavHistory of that flavor. The
+ * constituents must carry flavor (a FlavRecombiner on the jet definition
  * gives it to them).
  */
 public class SDFlavourCalc {

@@ -8,14 +8,14 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * How the flavour of a particle or jet changed along a clustering,
- * fastjet::contrib::FlavHistory: pairs (history step, flavour), the first
- * the initial flavour, the last the current one. Flavour neutralisation
+ * How the flavor of a particle or jet changed along a clustering,
+ * fastjet::contrib::FlavHistory: pairs (history step, flavor), the first
+ * the initial flavor, the last the current one. Flavor neutralization
  * appends to it; the user information of a PseudoJet holds it.
  */
 public class FlavHistory {
 
-    /** One entry: the cluster-sequence step at which the flavour became this one. */
+    /** One entry: the cluster-sequence step at which the flavor became this one. */
     public record Step(int histIndex, FlavInfo flavour) {
     }
 
@@ -46,7 +46,7 @@ public class FlavHistory {
         return history.get(0).flavour();
     }
 
-    /** The step at which the current flavour was acquired. */
+    /** The step at which the current flavor was acquired. */
     public int currentHistIndex() {
         return history.get(history.size() - 1).histIndex();
     }
@@ -69,7 +69,7 @@ public class FlavHistory {
         history.set(history.size() - 1, new Step(s.histIndex(), s.flavour().labelledAsBeam()));
     }
 
-    /** Appends a flavour, unless it is the current one already. */
+    /** Appends a flavor, unless it is the current one already. */
     public void updateFlavourHistory(FlavInfo newFlavour, int histStep) {
         if (!newFlavour.equals(currentFlavour())) history.add(new Step(histStep, newFlavour));
     }
@@ -84,7 +84,7 @@ public class FlavHistory {
         return Collections.unmodifiableList(history);
     }
 
-    /** The flavour the object had at a given step. */
+    /** The flavor the object had at a given step. */
     public FlavInfo flavourAtStep(int step) {
         if (history.get(0).histIndex() > step) {
             throw new FastJetException("A particle without FlavHistory was searched for FlavHistory.");
@@ -96,14 +96,14 @@ public class FlavHistory {
         return indexNeeded == -1 ? currentFlavour() : history.get(indexNeeded).flavour();
     }
 
-    /** Back to the initial flavour alone. */
+    /** Back to the initial flavor alone. */
     public void resetFlavourHistory() {
         final Step first = history.get(0);
         history.clear();
         history.add(first);
     }
 
-    /** How many times the flavour changed after creation. */
+    /** How many times the flavor changed after creation. */
     public int changes() {
         return history.size() - 1;
     }
@@ -112,14 +112,14 @@ public class FlavHistory {
     /* Of a particle                                                       */
     /* ------------------------------------------------------------------ */
 
-    /** The current flavour of a particle with a FlavHistory, or its FlavInfo. */
+    /** The current flavor of a particle with a FlavHistory, or its FlavInfo. */
     public static FlavInfo currentFlavourOf(PseudoJet particle) {
         if (particle.hasUserInfo(FlavHistory.class)) return particle.userInfo(FlavHistory.class).currentFlavour();
         if (particle.hasUserInfo(FlavInfo.class)) return particle.userInfo(FlavInfo.class);
         throw new FastJetException("A particle without FlavHistory was searched for FlavHistory.");
     }
 
-    /** The initial flavour of a particle with a FlavHistory, or its FlavInfo. */
+    /** The initial flavor of a particle with a FlavHistory, or its FlavInfo. */
     public static FlavInfo initialFlavourOf(PseudoJet particle) {
         if (particle.hasUserInfo(FlavHistory.class)) return particle.userInfo(FlavHistory.class).initialFlavour();
         if (particle.hasUserInfo(FlavInfo.class)) return particle.userInfo(FlavInfo.class);
@@ -136,7 +136,7 @@ public class FlavHistory {
         throw new FastJetException("A particle without FlavHistory was searched for FlavHistory.");
     }
 
-    /** Whether a particle carries a flavour this package can read. */
+    /** Whether a particle carries a flavor this package can read. */
     public static boolean hasFlavour(PseudoJet particle) {
         return particle.hasUserInfo(FlavHistory.class) || particle.hasUserInfo(FlavInfo.class);
     }

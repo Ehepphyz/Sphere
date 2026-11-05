@@ -144,7 +144,7 @@ public class PresetJsonEditorPanel extends JPanel {
                             "Preset parameters saved successfully.",
                             "Synchronization Complete", JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception processingFaultException) {
-                    // A cancelled worker carries no cause of its own.
+                    // A canceled worker carries no cause of its own.
                     Throwable reason = processingFaultException.getCause() != null
                         ? processingFaultException.getCause() : processingFaultException;
                     AppLogger.error("Failed executing storage data write: " + reason.getMessage());

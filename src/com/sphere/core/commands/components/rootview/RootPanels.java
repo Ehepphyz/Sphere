@@ -49,6 +49,7 @@ final class RootPanels {
         final View v = t.canvas.view(pad);
         final Window owner = SwingUtilities.getWindowAncestor(t.canvas);
         final JDialog d = new JDialog(owner, "DrawPanel — " + t.title(), java.awt.Dialog.ModalityType.MODELESS);
+        com.sphere.utils.IconManager.applyAppIcon(d);
         final String[] options = RootCanvasView.options(main);
         final JPanel choices = new JPanel(new GridLayout(0, 4, 4, 2));
         choices.setBorder(BorderFactory.createTitledBorder("Draw option"));
@@ -147,6 +148,7 @@ final class RootPanels {
             this.onX = onX;
             dialog = new JDialog(SwingUtilities.getWindowAncestor(parent), (onX ? "ProjectionX of " : "ProjectionY of ")
                 + (pad.main() == null ? pad.name : pad.main().name), java.awt.Dialog.ModalityType.MODELESS);
+            com.sphere.utils.IconManager.applyAppIcon(dialog);
             view.setPreferredSize(new Dimension(520, 360));
             view.setHost(parent.host());
             dialog.getContentPane().add(view);
@@ -239,6 +241,7 @@ final class RootPanels {
         final RootScene.Axis along = RootDataActions.axisOf(h, Math.min(2, third));
         final JDialog d = new JDialog(SwingUtilities.getWindowAncestor(t.canvas), "Slices of " + h.name + " (" + option + ")",
             java.awt.Dialog.ModalityType.MODELESS);
+        com.sphere.utils.IconManager.applyAppIcon(d);
         final RootCanvasView view = new RootCanvasView();
         view.setHost(t.canvas.host());
         view.setPreferredSize(new Dimension(640, 480));

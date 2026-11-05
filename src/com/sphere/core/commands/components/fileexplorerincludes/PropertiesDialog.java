@@ -29,6 +29,7 @@ public class PropertiesDialog extends JDialog {
     public PropertiesDialog(Window owner, File file) {
 
         super(owner, "Properties - " + file.getName(), ModalityType.APPLICATION_MODAL);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         setLayout(new BorderLayout());
         getContentPane().setBackground(palette.getBackgroundSurface());
 

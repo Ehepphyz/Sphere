@@ -25,7 +25,7 @@ final class Icons {
     }
 
     static final Color BLUE = new Color(0x4A7FD0), GREEN = new Color(0x34A853), ORANGE = new Color(0xE8833A),
-        RED = new Color(0xD64545), GREY = new Color(0x6B7480), PURPLE = new Color(0x8B6CC9), TEAL = new Color(0x2AA198);
+        RED = new Color(0xD64545), GRAY = new Color(0x6B7480), PURPLE = new Color(0x8B6CC9), TEAL = new Color(0x2AA198);
 
     static Icon of(int size, Consumer<Graphics2D> painter) {
         return new Icon() {
@@ -156,7 +156,7 @@ final class Icons {
             g.fill(p);
             g.setColor(shade(c, 0.55));
             g.draw(p);
-            g.setColor(GREY);
+            g.setColor(GRAY);
             g.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[] {2f, 2f}, 0));
             g.drawLine(10, 1, 10, 19);
             g.setStroke(new BasicStroke(1.5f));
@@ -249,7 +249,7 @@ final class Icons {
                 g.setColor(cs[i]);
                 g.fillRect(2 + i * 3 + i / 2, 18 - h[i], 3, h[i]);
             }
-            g.setColor(GREY);
+            g.setColor(GRAY);
             g.drawLine(1, 18, 19, 18);
         });
     }
@@ -281,7 +281,7 @@ final class Icons {
 
     static Icon grid(int s) {
         return of(s, g -> {
-            g.setColor(GREY);
+            g.setColor(GRAY);
             for (int i = 3; i <= 17; i += 4) {
                 g.drawLine(i, 2, i, 18);
                 g.drawLine(2, i, 18, i);
@@ -293,7 +293,7 @@ final class Icons {
 
     static Icon fit(int s) {
         return of(s, g -> {
-            g.setColor(GREY);
+            g.setColor(GRAY);
             g.setStroke(new BasicStroke(1.6f));
             g.drawPolyline(new int[] {2, 2, 6}, new int[] {6, 2, 2}, 3);
             g.drawPolyline(new int[] {14, 18, 18}, new int[] {2, 2, 6}, 3);
@@ -318,7 +318,7 @@ final class Icons {
             final Polygon p = new Polygon(new int[] {4, 12, 16, 16, 4}, new int[] {2, 2, 6, 18, 18}, 5);
             g.setColor(Color.WHITE);
             g.fill(p);
-            g.setColor(GREY);
+            g.setColor(GRAY);
             g.draw(p);
             g.drawPolyline(new int[] {12, 12, 16}, new int[] {2, 6, 6}, 3);
             switch (kind) {
@@ -385,7 +385,7 @@ final class Icons {
                 g.setColor(i % 2 == 0 ? new Color(0x5A6070) : new Color(0x40C8D8));
                 g.fillRect(3 + i * 3, 4, 2 + (i % 2), 12);
             }
-            g.setColor(GREY);
+            g.setColor(GRAY);
             g.drawRect(2, 3, 16, 14);
         });
     }

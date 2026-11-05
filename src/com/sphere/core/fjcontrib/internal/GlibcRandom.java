@@ -5,7 +5,7 @@ package com.sphere.core.fjcontrib.internal;
  * feedback generator, r[i] = r[i-3] + r[i-31], seeded through the
  * 16807 congruential sequence), with its global state: a contrib that calls
  * rand() without srand() draws, here as in C, the sequence of seed 1. The
- * randomised N-subjettiness minimisation (MultiPass axes) and the random
+ * randomized N-subjettiness minimization (MultiPass axes) and the random
  * pieces of other contribs thus give the numbers the C++ gives on Linux.
  */
 public final class GlibcRandom {

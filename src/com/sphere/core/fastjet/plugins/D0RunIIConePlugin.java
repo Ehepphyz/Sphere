@@ -541,7 +541,7 @@ public final class D0RunIIConePlugin implements JetDefinition.Plugin {
                 if (sharedET > jmax.pT * sharedETFraction
                     && (imax.pT > ptMinLeadingProtojet || jmax.pT > ptMinSecondProtojet)
                     && (imax.nbMerge() < mergeMax || imax.pT > ptMinNoMergeMax)) {
-                    // the neighbour's items go to imax
+                    // the neighbor's items go to imax
                     boolean same = true;
                     for (HepEntity tk : jmax.items) {
                         if (!imax.contains(tk)) {

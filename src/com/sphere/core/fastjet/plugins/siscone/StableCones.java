@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * siscone::Cstable_cones: the seedless search for all stable cones of radius
  * R (G.P. Salam, G. Soyez, JHEP 05 (2007) 086). For every particle taken as
- * the parent, the circles through it and each neighbour are visited in
+ * the parent, the circles through it and each neighbor are visited in
  * order of angle, the cone contents being updated one particle at a time;
  * each candidate goes to the hash with whether its parent and child are
  * where they should be, cocircular configurations being enumerated apart.
@@ -17,7 +17,7 @@ import java.util.List;
  */
 class StableCones extends Vicinity {
 
-    /** Cborder_store: a particle on a cocircular border, by angle about the centre. */
+    /** Cborder_store: a particle on a cocircular border, by angle about the center. */
     private static final class BorderStore {
         final Cmomentum mom;
         final double angle;
@@ -96,7 +96,7 @@ class StableCones extends Vicinity {
         nbTot += 2;
     }
 
-    /** Moves to the next centre; true when back to the first (the C++ recursion made a loop). */
+    /** Moves to the next center; true when back to the first (the C++ recursion made a loop). */
     private boolean updateCone() {
         while (true) {
             centreIdx++;

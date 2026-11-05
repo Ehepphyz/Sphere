@@ -39,6 +39,7 @@ public class ProjectSettingsFrame extends JDialog implements WorkspaceListener {
     public ProjectSettingsFrame(Frame owner, File projectDirectory, WorkspaceManager manager) {
         
         super(owner, "Project Settings — " + projectDirectory.getName(), false);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         
         this.projectDirectory = projectDirectory;
         this.workspaceManager = manager;
@@ -250,13 +251,13 @@ public class ProjectSettingsFrame extends JDialog implements WorkspaceListener {
     private JPanel createPlaceholderTab(String message) {
         JPanel placeholderPanel = new JPanel(new BorderLayout());
         
-        // Remplacement du gris statique par le puits ou le fond de surface sombre
+        // The theme's surface background instead of a fixed gray
         placeholderPanel.setBackground(palette.getBackgroundSurface());
         
         JLabel messageLabel = new JLabel(message, SwingConstants.CENTER);
         messageLabel.setFont(FontLoader.getGlobalFont(Font.PLAIN, 12));
         
-        // Remplacement du jaune canari statique par la couleur de texte secondaire ou l'accent
+        // The theme's secondary text color instead of a fixed canary yellow
         messageLabel.setForeground(palette.getTextSecondary());
         
         placeholderPanel.add(messageLabel, BorderLayout.CENTER);

@@ -7,7 +7,7 @@ import com.sphere.core.fastjet.PseudoJet;
 /**
  * The distance underlying a QCD-aware clustering,
  * fastjet::contrib::QCDAwarePlugin::DistanceMeasure: kt, anti-kt, C/A, or
- * the flavour-kt of hep-ph/0601139. The flavour factors multiply it.
+ * the flavor-kt of hep-ph/0601139. The flavor factors multiply it.
  */
 public interface DistanceMeasure {
 
@@ -56,7 +56,7 @@ public interface DistanceMeasure {
     }
 
     /**
-     * Flavour-kt: when the softer object is a quark, kt^2 becomes
+     * Flavor-kt: when the softer object is a quark, kt^2 becomes
      * max(pt)^alpha min(pt)^(2-alpha) (Banfi, Salam and Zanderighi).
      */
     static DistanceMeasure flavourKt(double r, double alpha) {

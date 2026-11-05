@@ -265,7 +265,7 @@ final class ApiBrowser extends JPanel {
         if (!(o instanceof Geant4Api.ClassInfo c)) {
             return;
         }
-        // One text colour; what matters more is larger or bold, never another shade. Links are the accent.
+        // One text color; what matters more is larger or bold, never another shade. Links are the accent.
         final String accent = hex(accent(), "#2f6fde");
         final StringBuilder b = new StringBuilder("<html><body style='font-family:sans-serif;font-size:11px'>");
         b.append("<div style='font-size:15px'><b>").append(esc(c.name())).append("</b></div>");
@@ -368,7 +368,7 @@ final class ApiBrowser extends JPanel {
         return c == null ? fallback : String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
     }
 
-    /** A row: the class (or method) on the left, its category on the right, both in the list's one colour. */
+    /** A row: the class (or method) on the left, its category on the right, both in the list's one color. */
     private static final class Renderer extends JPanel implements ListCellRenderer<Object> {
         private static final long serialVersionUID = 1L;
         private final JLabel name = new JLabel(), where = new JLabel();

@@ -254,13 +254,13 @@ public final class CommandPalette extends EditorWidgets.Card {
         return isVisible();
     }
 
-    public void close(boolean cancelled) {
+    public void close(boolean canceled) {
         if (!isVisible()) {
             return;
         }
         closing = true;
         KeyboardFocusManager.getCurrentKeyboardFocusManager().removePropertyChangeListener("focusOwner", focusWatcher);
-        if (cancelled && active != null) {
+        if (canceled && active != null) {
             active.cancel();
         }
         setVisible(false);

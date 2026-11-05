@@ -319,7 +319,7 @@ public final class RFileWriter implements AutoCloseable {
 
     /**
      * Writes an object under a key of the top directory (TDirectoryFile::WriteTObject):
-     * the next cycle of its name, the payload serialised for the key's length
+     * the next cycle of its name, the payload serialized for the key's length
      * (the tags inside count from the key's start), compressed when it is worth it.
      */
     public Key writeObject(String className, String objName, String objTitle, IntFunction<byte[]> payloadForKeylen)
@@ -445,7 +445,7 @@ public final class RFileWriter implements AutoCloseable {
         return at;
     }
 
-    /** TFile::MakeFree with TFree::AddFree: the segment joins its neighbours, and its first bytes say its size. */
+    /** TFile::MakeFree with TFree::AddFree: the segment joins its neighbors, and its first bytes say its size. */
     private void makeFree(long first, long last) throws IOException {
         Free added = null;
         for (int i = 0; i < free.size(); i++) {

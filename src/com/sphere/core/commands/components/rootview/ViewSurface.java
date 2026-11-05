@@ -11,7 +11,7 @@ import java.awt.LayoutManager;
  * A panel that paints its own background.
  *
  * The look and feel derives its painter colors when it is installed, so a
- * background set afterwards never reaches them; painting here is what keeps the
+ * background set afterward never reaches them; painting here is what keeps the
  * viewer the same shade as the rest of Sphere.
  */
 class ViewSurface extends JPanel {

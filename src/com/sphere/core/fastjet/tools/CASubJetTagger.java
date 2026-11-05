@@ -9,7 +9,7 @@ import com.sphere.core.fastjet.WrappedStructure;
 /**
  * The Cambridge/Aachen subjet tagger of Butterworth, Ellis, Rizzi and Salam,
  * fastjet::CASubJetTagger: through every splitting of the C/A tree that
- * passes the z cut, find the one that maximises a chosen distance.
+ * passes the z cut, find the one that maximizes a chosen distance.
  */
 public class CASubJetTagger implements Transformer {
 

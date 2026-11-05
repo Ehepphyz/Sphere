@@ -19,7 +19,7 @@ import static com.sphere.core.rootbackend.RootPipelineManifest.Kind;
  */
 public final class RootPipelineRecipes {
 
-    /** What a recipe is about, so a long list still reads as a catalogue. */
+    /** What a recipe is about, so a long list still reads as a catalog. */
     public enum Family {
         START("start"),
         KINEMATICS("kinematics"),
@@ -768,7 +768,7 @@ public final class RootPipelineRecipes {
               // xf(x) = a0 * x^a1 * (1-x)^a2 * (1 + a3*sqrt(x) + a4*x)
               //
               // This is the form the global fits start from at their input
-              // scale: a1 governs the small-x rise, a2 the fall towards x = 1,
+              // scale: a1 governs the small-x rise, a2 the fall toward x = 1,
               // and the bracket bends the middle. It is not CT18 or NNPDF --
               // those are grids, not formulas -- but it is a real parton
               // density, it needs nothing installed, and its parameters can be
@@ -933,7 +933,7 @@ public final class RootPipelineRecipes {
             mods(RootPipelineModules.MATH),
             """
               // The Moyal approximation to the Landau distribution: a long tail
-              // towards large losses, which a Gaussian would never produce and
+              // toward large losses, which a Gaussian would never produce and
               // which is what makes a truncated mean necessary.
               if (sigma <= 0.0) {
                 return 0.0;
@@ -1051,7 +1051,7 @@ public final class RootPipelineRecipes {
      * Every recipe, grouped by family.
      *
      * Forty entries in one flat list is a heap to scroll through. Sorted by
-     * family it is a catalogue, and the window shows the family beside each
+     * family it is a catalog, and the window shows the family beside each
      * title so the boundaries are visible without separators.
      */
     public static List<Recipe> all() {

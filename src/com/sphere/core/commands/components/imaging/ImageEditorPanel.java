@@ -56,6 +56,39 @@ public final class ImageEditorPanel extends JPanel {
 
     private Runnable titleListener;
 
+    /**
+     * Where a picture opened from another document goes back: a picture of a
+     * PDF page, say. Saving puts it back; the document shows the edits while
+     * they are made.
+     */
+    public interface Link {
+        /** Where the picture comes from, as a phrase: "picture on page 3 of paper.pdf". */
+        String label();
+
+        /** Puts the edited picture back. */
+        void apply(BufferedImage image);
+
+        /** Shows the picture as it is being edited (a moment after each change). */
+        default void preview(BufferedImage image) {
+        }
+
+        /** The editor let go of the picture (closed, or another one opened). */
+        default void closed() {
+        }
+
+        /** Two links to the same picture have the same key (its tab is then reused). */
+        default Object key() {
+            return this;
+        }
+    }
+
+    private Link link;
+    private String linkedName;
+    private final JLabel linkLabel = new JLabel();
+    private JComponent linkBar;
+    private final javax.swing.Timer previewTimer = new javax.swing.Timer(350, e -> runPreview());
+    private long previewSignature;
+
     public ImageEditorPanel() {
         setLayout(new BorderLayout());
         setBackground(ImagingTheme.panel());
@@ -65,14 +98,169 @@ public final class ImageEditorPanel extends JPanel {
         adjustments = new AdjustmentsPanel(canvas);
         digitizer = new DigitizerPanel(canvas);
 
-        add(buildToolbar(), BorderLayout.NORTH);
+        JPanel north = new JPanel(new BorderLayout());
+        north.setOpaque(false);
+        north.add(buildToolbar(), BorderLayout.NORTH);
+        linkBar = buildLinkBar();
+        linkBar.setVisible(false);
+        north.add(linkBar, BorderLayout.SOUTH);
+        add(north, BorderLayout.NORTH);
         add(buildCenter(), BorderLayout.CENTER);
         add(buildStatusBar(), BorderLayout.SOUTH);
 
         canvas.setPointerListener(this::showPointer);
         canvas.addChangeListener(this::refreshStatus);
+        canvas.addChangeListener(() -> {
+            if (link != null) {
+                previewTimer.restart();
+            }
+        });
+        previewTimer.setRepeats(false);
         installShortcuts();
         refreshStatus();
+    }
+
+    /* ---- linked pictures ----------------------------------------------------- */
+
+    /** The strip shown while the picture belongs to another document: where it goes, and the way back. */
+    private JComponent buildLinkBar() {
+        // the way back stays in sight however narrow the tab: the words give way, the buttons do not
+        ImagingTheme.Surface bar = new ImagingTheme.Surface(new BorderLayout(8, 0), true);
+        bar.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, ImagingTheme.border()),
+            BorderFactory.createEmptyBorder(4, 10, 4, 8)));
+        linkLabel.setFont(ImagingTheme.uiFont(Font.PLAIN, 12f));
+        linkLabel.setForeground(ImagingTheme.text());
+        linkLabel.setMinimumSize(new Dimension(40, 10));
+        bar.add(linkLabel, BorderLayout.CENTER);
+        JButton back = ImagingTheme.textButton("Put Back", "Write the edited picture into the document it came from (Ctrl+S)");
+        back.addActionListener(e -> save());
+        JButton copy = ImagingTheme.textButton("Save a Copy…", "Write the picture to a file of its own");
+        copy.addActionListener(e -> saveAs());
+        JPanel buttons = new JPanel();
+        buttons.setOpaque(false);
+        buttons.setLayout(new BoxLayout(buttons, BoxLayout.X_AXIS));
+        buttons.add(back);
+        buttons.add(Box.createHorizontalStrut(4));
+        buttons.add(copy);
+        bar.add(buttons, BorderLayout.EAST);
+        return bar;
+    }
+
+    /**
+     * Opens a picture that belongs to another document: saving puts it back
+     * there through the link. False when the user kept the picture open now.
+     */
+    public boolean openLinked(BufferedImage image, String name, Link newLink) {
+        if (!releaseLink(true)) {
+            return false;
+        }
+        ImageDocument doc = new ImageDocument(image, null, "png");
+        canvas.setDocument(doc);
+        layers.reload();
+        link = newLink;
+        linkedName = name;
+        previewSignature = signature(doc);
+        linkLabel.setText("From the " + newLink.label() + " · shown live · Ctrl+S puts it back");
+        linkLabel.setToolTipText("<html>This picture belongs to the " + newLink.label() + ".<br>The page shows your edits as "
+            + "you make them; Ctrl+S (or Put Back) writes them into it,<br>as one step its Undo can take back.</html>");
+        linkBar.setVisible(true);
+        refreshStatus();
+        SwingUtilities.invokeLater(canvas::zoomToFit);
+        return true;
+    }
+
+    public Link getLink() {
+        return link;
+    }
+
+    /**
+     * Lets go of the linked picture (the document shows its own again). With
+     * ask, unsaved edits are offered to be put back first; false when the
+     * user cancels.
+     */
+    public boolean releaseLink(boolean ask) {
+        if (link == null) {
+            return true;
+        }
+        ImageDocument doc = canvas.getDocument();
+        if (ask && doc != null && doc.isDirty()) {
+            Object[] options = { "Put Back", "Discard", "Cancel" };
+            int r = JOptionPane.showOptionDialog(this, "Put the edited picture back into the " + link.label() + "?",
+                "Sphere Image", JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+            if (r == 2 || r == JOptionPane.CLOSED_OPTION) {
+                return false;
+            }
+            if (r == 0) {
+                applyLink();
+            }
+        }
+        previewTimer.stop();
+        Link l = link;
+        link = null;
+        linkedName = null;
+        linkBar.setVisible(false);
+        l.closed();
+        return true;
+    }
+
+    private void applyLink() {
+        ImageDocument doc = canvas.getDocument();
+        if (doc == null || link == null) {
+            return;
+        }
+        try {
+            link.apply(doc.render(false));
+            doc.markClean();
+            previewSignature = signature(doc);
+        } catch (RuntimeException e) {
+            JOptionPane.showMessageDialog(this, "Could not put the picture back: " + e.getMessage(), "Sphere Image",
+                JOptionPane.ERROR_MESSAGE);
+        }
+        refreshStatus();
+    }
+
+    /** Hands the picture as it stands to the link, when it changed since the last time. */
+    private void runPreview() {
+        ImageDocument doc = canvas.getDocument();
+        if (link == null || doc == null) {
+            return;
+        }
+        long sig = signature(doc);
+        if (sig == previewSignature) {
+            return;
+        }
+        previewSignature = sig;
+        link.preview(doc.render(false));
+    }
+
+    /**
+     * A cheap fingerprint of what the picture looks like: its layers, their
+     * state, and a few hundred pixels of each. A zoom changes nothing of it.
+     */
+    private static long signature(ImageDocument doc) {
+        long h = doc.getWidth() * 31L + doc.getHeight();
+        for (ImageLayer layer : doc.getLayers()) {
+            h = h * 31 + System.identityHashCode(layer.getImage());
+            h = h * 31 + (layer.isVisible() ? 1 : 0);
+            h = h * 31 + Double.hashCode(layer.getOpacity());
+            h = h * 31 + layer.getAnnotations().size();
+            for (Annotation a : layer.getAnnotations()) {
+                h = h * 31 + java.util.Objects.hash(a.kind, a.x1, a.y1, a.x2, a.y2, a.color, a.fillColor, a.strokeWidth,
+                                                     a.text, a.fontSize, a.bold, a.freehand.getBounds2D());
+            }
+            BufferedImage img = layer.getImage();
+            if (img != null) {
+                int w = img.getWidth();
+                int ht = img.getHeight();
+                for (int k = 0; k < 512; k++) {
+                    int x = (int) ((k * 7919L) % w);
+                    int y = (int) ((k * 104729L) % ht);
+                    h = h * 31 + img.getRGB(x, y);
+                }
+            }
+        }
+        return h;
     }
 
     @Override
@@ -97,6 +285,9 @@ public final class ImageEditorPanel extends JPanel {
     // ---- document ----------------------------------------------------------
 
     public void open(File file) {
+        if (!releaseLink(true)) {
+            return;
+        }
         try {
             ImageDocument doc = ImageFileIO.open(file);
             canvas.setDocument(doc);
@@ -113,6 +304,9 @@ public final class ImageEditorPanel extends JPanel {
     }
 
     public void openBlank(int width, int height) {
+        if (!releaseLink(true)) {
+            return;
+        }
         canvas.setDocument(new ImageDocument(width, height));
         layers.reload();
         refreshStatus();
@@ -127,13 +321,19 @@ public final class ImageEditorPanel extends JPanel {
         if (doc == null) {
             return "Image";
         }
-        final String name = doc.getFile() == null ? "Untitled" : doc.getFile().getName();
+        final String name = link != null && linkedName != null ? linkedName
+            : doc.getFile() == null ? "Untitled" : doc.getFile().getName();
         return doc.isDirty() ? name + " *" : name;
     }
 
     public void save() {
         ImageDocument doc = canvas.getDocument();
         if (doc == null) {
+            return;
+        }
+        if (link != null) {
+            // a picture of another document goes back there
+            applyLink();
             return;
         }
         // An SVG has no writer here, and neither has an untitled document, so both
@@ -515,14 +715,14 @@ public final class ImageEditorPanel extends JPanel {
 
     // ---- commands ----------------------------------------------------------
 
-    private void undo() {
+    public void undo() {
         if (canvas.getDocument() != null) {
             canvas.getDocument().undo();
             canvas.refresh();
         }
     }
 
-    private void redo() {
+    public void redo() {
         if (canvas.getDocument() != null) {
             canvas.getDocument().redo();
             canvas.refresh();

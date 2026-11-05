@@ -4,7 +4,7 @@ import java.util.List;
 
 /**
  * A clustering with areas of whichever kind an AreaDefinition names,
- * fastjet::ClusterSequenceArea. The work is done by the specialised sequence;
+ * fastjet::ClusterSequenceArea. The work is done by the specialized sequence;
  * this one takes over its history, so its jets answer area questions
  * directly.
  */

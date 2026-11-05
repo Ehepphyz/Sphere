@@ -20,7 +20,7 @@ import java.util.List;
 /**
  * ROOT's control bar of demos, as Sphere shows it: a column of buttons, each
  * running one demo in a ROOT of its own, whose canvases then appear in the
- * Plots tab. A button says while its demo runs, and afterwards whether it
+ * Plots tab. A button says while its demo runs, and afterward whether it
  * drew; its tooltip keeps what went wrong.
  */
 final class RootDemoBar {
@@ -39,6 +39,7 @@ final class RootDemoBar {
             }
             final Window owner = KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow();
             final JDialog dialog = new JDialog(owner, "ROOT demos", java.awt.Dialog.ModalityType.MODELESS);
+            com.sphere.utils.IconManager.applyAppIcon(dialog);
             final JPanel column = ImagingTheme.column();
             column.setLayout(new BoxLayout(column, BoxLayout.Y_AXIS));
             column.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));

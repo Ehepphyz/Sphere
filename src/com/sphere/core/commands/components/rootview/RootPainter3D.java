@@ -36,7 +36,7 @@ final class RootPainter3D {
     private record Poly(Path2D shape, double depth, Color fill, Color edge) {
     }
 
-    /** The view: rotation, scale and centre, from the cube [-1,1]^3 to the screen. */
+    /** The view: rotation, scale and center, from the cube [-1,1]^3 to the screen. */
     static final class Projection {
         final double ct;
         final double st;
@@ -459,13 +459,13 @@ final class RootPainter3D {
         g.setFont(RootPadPainter.labelFont(box));
         final FontMetrics fm = g.getFontMetrics();
         g.setColor(RootPadPainter.inkColor());
-        final double[] centre = pr.at(0, 0, 0);
+        final double[] center = pr.at(0, 0, 0);
         // x along the nearer of the two bottom edges that run in x; y likewise.
         final double ey = pr.at(0, -1, -1)[2] < pr.at(0, 1, -1)[2] ? -1 : 1;
         final double ex = pr.at(-1, 0, -1)[2] < pr.at(1, 0, -1)[2] ? -1 : 1;
-        axis(g, fm, pr, centre, RootPadPainter.ticks(r.x0, r.x1, false), false, r::nx,
+        axis(g, fm, pr, center, RootPadPainter.ticks(r.x0, r.x1, false), false, r::nx,
             t -> new double[]{t, ey, -1}, title(view.xTitle, main, 'x'));
-        axis(g, fm, pr, centre, RootPadPainter.ticks(r.y0, r.y1, false), false, r::ny,
+        axis(g, fm, pr, center, RootPadPainter.ticks(r.y0, r.y1, false), false, r::ny,
             t -> new double[]{ex, t, -1}, title(view.yTitle, main, 'y'));
         // z up the vertical edge furthest to the left on the screen.
         double bestX = Double.POSITIVE_INFINITY;
@@ -483,7 +483,7 @@ final class RootPainter3D {
         }
         final double fx = zx;
         final double fy = zy;
-        axis(g, fm, pr, centre, RootPadPainter.ticks(r.z0, r.z1, r.lz), r.lz, r::nz,
+        axis(g, fm, pr, center, RootPadPainter.ticks(r.z0, r.z1, r.lz), r.lz, r::nz,
             t -> new double[]{fx, fy, t}, title(view.zTitle, main, 'z'));
     }
 
@@ -491,16 +491,16 @@ final class RootPainter3D {
         double[] at(double t);
     }
 
-    private static void axis(Graphics2D g, FontMetrics fm, Projection pr, double[] centre, double[] ticks, boolean log,
+    private static void axis(Graphics2D g, FontMetrics fm, Projection pr, double[] center, double[] ticks, boolean log,
                              Norm norm, Place place, String title) {
         final double[] a = place.at(-1);
         final double[] b = place.at(1);
         final double[] pa = pr.at(a[0], a[1], a[2]);
         final double[] pb = pr.at(b[0], b[1], b[2]);
         g.draw(new Line2D.Double(pa[0], pa[1], pb[0], pb[1]));
-        // Outward, away from the cube's centre on the screen.
-        final double mx = (pa[0] + pb[0]) / 2 - centre[0];
-        final double my = (pa[1] + pb[1]) / 2 - centre[1];
+        // Outward, away from the cube's center on the screen.
+        final double mx = (pa[0] + pb[0]) / 2 - center[0];
+        final double my = (pa[1] + pb[1]) / 2 - center[1];
         final double len = Math.max(1e-9, Math.hypot(mx, my));
         final double ox = mx / len;
         final double oy = my / len;

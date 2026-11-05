@@ -19,7 +19,7 @@ namespace g4b {
 /** What a command may do besides answering: report progress, notice a cancel. */
 struct Context {
   std::function<void(double fraction, const std::string &message)> progress = [](double, const std::string &) {};
-  std::function<bool()> cancelled = [] { return false; };
+  std::function<bool()> canceled = [] { return false; };
 };
 
 /** A command failed in a way the client should be told about. */

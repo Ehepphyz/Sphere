@@ -112,7 +112,7 @@ public final class LundMap {
         return new Map2D(xmin, xmax, ymin, ymax, nx, ny, sum, jets, decl, def.description());
     }
 
-    /** The plane as a heat map, with its colour scale and the leading-log levels marked on it. */
+    /** The plane as a heat map, with its color scale and the leading-log levels marked on it. */
     public static BufferedImage render(Map2D m, String title) {
         final int w = 900;
         final int h = 640;
@@ -134,7 +134,7 @@ public final class LundMap {
             for (int iy = 0; iy < m.ny(); iy++) {
                 final double v = m.density()[ix][iy];
                 if (v <= 0) continue;
-                g.setColor(colour(v / max));
+                g.setColor(color(v / max));
                 g.fillRect(left + (int) (ix * cw), top + ph - (int) ((iy + 1) * ch), (int) Math.ceil(cw), (int) Math.ceil(ch));
             }
         }
@@ -152,10 +152,10 @@ public final class LundMap {
         }
         g.drawString("ln(1/Δ)", left + pw / 2 - 20, h - 18);
         g.drawString("ln(kt/GeV)", 6, top - 10);
-        // the colour scale
+        // the color scale
         final int sx = left + pw + 40;
         for (int k = 0; k < ph; k++) {
-            g.setColor(colour(1.0 - (double) k / ph));
+            g.setColor(color(1.0 - (double) k / ph));
             g.fillRect(sx, top + k, 22, 1);
         }
         g.setColor(Color.DARK_GRAY);
@@ -182,7 +182,7 @@ public final class LundMap {
     }
 
     /** A perceptual blue-to-yellow scale. */
-    private static Color colour(double t) {
+    private static Color color(double t) {
         final double u = Math.max(0, Math.min(1, t));
         final double[][] stops = {{0.267, 0.005, 0.329}, {0.229, 0.322, 0.546}, {0.128, 0.567, 0.551},
             {0.369, 0.789, 0.383}, {0.993, 0.906, 0.144}};

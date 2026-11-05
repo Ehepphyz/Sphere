@@ -41,7 +41,7 @@ public abstract class Attribute {
         return true;
     }
 
-    /** The string form, or null when the attribute cannot be serialised (C++: to_string returning false). */
+    /** The string form, or null when the attribute cannot be serialized (C++: to_string returning false). */
     public abstract String serialize();
 
     public boolean isParsed() {
@@ -75,11 +75,11 @@ public abstract class Attribute {
         string = st == null ? "" : st;
     }
 
-    /** The serialised form, or a mark when there is none. */
+    /** The serialized form, or a mark when there is none. */
     @Override
     public String toString() {
         final String s = serialize();
-        return s == null ? "<not serialisable " + getClass().getSimpleName() + ">" : s;
+        return s == null ? "<not serializable " + getClass().getSimpleName() + ">" : s;
     }
 
     /* ---- typed construction, as std::make_shared<T>() ---------------------- */

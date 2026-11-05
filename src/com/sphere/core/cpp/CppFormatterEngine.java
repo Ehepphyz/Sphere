@@ -249,7 +249,7 @@ public final class CppFormatterEngine {
     }
 
     /**
-     * Backwards-compatible overload for code formatting.
+     * Backward-compatible overload for code formatting.
      * Defaults to separating output and error streams.
      */
     public FormatResult formatCode(String code) {
@@ -257,7 +257,7 @@ public final class CppFormatterEngine {
     }
 
     /**
-     * Backwards-compatible overload for file formatting.
+     * Backward-compatible overload for file formatting.
      * Defaults to performing an active in-place rewrite (dryRun = false) 
      * and separating output streams (mergeStreams = false).
      */

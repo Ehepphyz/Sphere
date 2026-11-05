@@ -11,9 +11,9 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * The generalised energy correlation functions, EnergyCorrelatorGeneralized
+ * The generalized energy correlation functions, EnergyCorrelatorGeneralized
  * (I. Moult, L. Necib and J. Thaler, JHEP 12 (2016) 153): ECFG(v, N, beta),
- * normalised energies, and only the v smallest pairwise angles of each
+ * normalized energies, and only the v smallest pairwise angles of each
  * N-tuple (v = -1: all of them).
  */
 public class EnergyCorrelatorGeneralized implements FunctionOfPseudoJet<Double> {

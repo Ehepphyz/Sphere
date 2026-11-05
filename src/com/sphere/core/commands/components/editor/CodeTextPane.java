@@ -63,6 +63,10 @@ public final class CodeTextPane extends JTextArea {
 
     private int rightReserve;
     private List<String[]> watermark = List.of();
+    /** Text shown past the end of lines, by 1-based line: what the code computes there, say. */
+    private Map<Integer, String> inlays = Map.of();
+    /** The lines the text had when the inlays were given: a line typed in or taken out moves them off theirs. */
+    private int inlayLines = -1;
     private Function<MouseEvent, String> tooltipProvider;
     private Consumer<Runnable> atomicRunner = Runnable::run;
 
@@ -242,6 +246,19 @@ public final class CodeTextPane extends JTextArea {
         repaint();
     }
 
+    /**
+     * Text drawn after the end of lines, in the watermark's color, by 1-based line: not part of the document,
+     * never selected nor copied. An empty map takes them all away.
+     */
+    public void setInlays(Map<Integer, String> byLine) {
+        final Map<Integer, String> now = byLine == null ? Map.of() : Map.copyOf(byLine);
+        inlayLines = lineCountTotal();
+        if (!now.equals(inlays)) {
+            inlays = now;
+            repaint();
+        }
+    }
+
     public void setTooltipProvider(Function<MouseEvent, String> provider) {
         this.tooltipProvider = provider;
     }
@@ -408,6 +425,7 @@ public final class CodeTextPane extends JTextArea {
             g3.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
             paintBracketBoxes(g3);
             paintSquiggles(g3, lines);
+            paintInlays(g3, lines);
             paintLink(g3);
             paintWatermark(g3);
         } finally {
@@ -684,7 +702,7 @@ public final class CodeTextPane extends JTextArea {
         for (int line = marginTop; line <= marginBottom; line++) {
             indent[line - marginTop] = indentColumns(lineText(line), tab);
         }
-        // Blank lines take the smaller indent of their neighbours.
+        // Blank lines take the smaller indent of their neighbors.
         int[] level = new int[indent.length];
         for (int k = 0; k < indent.length; k++) {
             if (indent[k] >= 0) {
@@ -885,6 +903,33 @@ public final class CodeTextPane extends JTextArea {
         g2.setColor(EditorTheme.link());
         int y = (int) (a.getY() + a.getHeight() - 2);
         g2.fillRect((int) a.getX(), y, (int) Math.max(2, b.getX() - a.getX()), 1);
+    }
+
+    /** The inlays of the visible lines: italic, a little smaller, on a faint pill three spaces past the text. */
+    private void paintInlays(Graphics2D g2, int[] lines) {
+        if (inlays.isEmpty() || inlayLines != lineCountTotal()) {
+            return;   // none, or the lines moved since they were given: the next ones will be in place
+        }
+        final Font f = getFont().deriveFont(Font.ITALIC, getFont().getSize2D() * 0.92f);
+        final FontMetrics fm = g2.getFontMetrics(f);
+        applyTextHints(g2);
+        g2.setFont(f);
+        for (int line = lines[0]; line <= lines[1] && line < lineCountTotal(); line++) {
+            final String t = inlays.get(line + 1);
+            if (t == null || t.isEmpty()) {
+                continue;
+            }
+            final Rectangle2D end = view(lineEndOffset(line));
+            if (end == null) {
+                continue;
+            }
+            final float x = (float) end.getX() + fm.charWidth(' ') * 3;
+            final float top = (float) end.getY() + 2, h = (float) end.getHeight() - 4;
+            g2.setColor(EditorTheme.alpha(EditorTheme.foreground(), 14));
+            g2.fill(new RoundRectangle2D.Float(x - 5, top, fm.stringWidth(t) + 10, h, 7, 7));
+            g2.setColor(EditorTheme.watermark());
+            g2.drawString(t, x, (float) (end.getY() + (end.getHeight() + fm.getAscent() - fm.getDescent()) / 2));
+        }
     }
 
     private void paintWatermark(Graphics2D g2) {

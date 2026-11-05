@@ -171,7 +171,7 @@ public final class ContribCatalog {
             u(":fjco obs nkt:fkt=0.06,ptcut=40 nca:mcut=30,ycut=0.1"), new String[0], "subjetcounting");
         add("JetFFMoments", Sphere.FJCONTRIB_JET_FF_MOMENTS_VERSION, Category.SUBSTRUCTURE,
             "Moments of the jet fragmentation function, pileup subtracted",
-            "M_N = sum z_i^N; N from -0.5 upwards, rho-subtracted with the jet area.",
+            "M_N = sum z_i^N; N from -0.5 upward, rho-subtracted with the jet area.",
             u(":fjco obs ffm:n=2"), new String[0], "jetffmoments");
 
         // --- pileup --------------------------------------------------------

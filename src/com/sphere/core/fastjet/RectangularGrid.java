@@ -2,7 +2,7 @@ package com.sphere.core.fastjet;
 
 /**
  * A grid of equal cells in rapidity and azimuth, fastjet::RectangularGrid,
- * optionally keeping only the cells whose centre a selector accepts.
+ * optionally keeping only the cells whose center a selector accepts.
  */
 public class RectangularGrid {
 

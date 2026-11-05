@@ -2,7 +2,7 @@ package com.sphere.core.clhep.units;
 
 /**
  * CLHEP's system of units (Units/SystemOfUnits.h), each value written as CLHEP writes it, so that
- * the doubles are CLHEP's to the last bit: millimetre, nanosecond, MeV, positron charge, kelvin,
+ * the doubles are CLHEP's to the last bit: millimeter, nanosecond, MeV, positron charge, kelvin,
  * mole and candela are 1. A quantity is a number times its unit ({@code 10 * cm}); a value is read
  * in a unit by dividing by it ({@code length / cm}). Geant4 uses these very values.
  *

@@ -232,8 +232,8 @@ public final class TGeoReader {
         final Map<RObject, String> materials = new IdentityHashMap<>();
         final Map<String, String> customElements = new HashMap<>();
         final Map<String, Integer> shapeKinds = new TreeMap<>();
-        /** What was recognised and turned into another solid, by kind, with a few examples. */
-        final Map<String, List<String>> recognised = new LinkedHashMap<>();
+        /** What was recognized and turned into another solid, by kind, with a few examples. */
+        final Map<String, List<String>> recognized = new LinkedHashMap<>();
         /** Placements whose ROOT node may overlap its siblings (AddNodeOverlap: GEANT3's MANY). */
         final Set<PhysicalVolume> many = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
         /** Placements of division slices (TGeoNodeOffset): ROOT's navigator gives them their mother's overlapping state. */
@@ -266,8 +266,8 @@ public final class TGeoReader {
         }
 
         /** Counts a recognition of a kind ("TGeoGtra read as G4GenericTrap"), keeping a few names as examples. */
-        void recognise(String kind, String example) {
-            recognised.computeIfAbsent(kind, k -> new ArrayList<>()).add(example);
+        void recognize(String kind, String example) {
+            recognized.computeIfAbsent(kind, k -> new ArrayList<>()).add(example);
         }
 
         String unique(String base) {
@@ -358,7 +358,7 @@ public final class TGeoReader {
                 notes.add(flattened + " assembly placement" + (flattened > 1 ? "s" : "")
                     + " opened up: their parts are placed in the assembly's mother, as Geant4 does");
             }
-            recognised.forEach((kind, names) -> notes.add(names.size() + " " + kind
+            recognized.forEach((kind, names) -> notes.add(names.size() + " " + kind
                 + (names.isEmpty() ? "" : " (" + String.join(", ", names.subList(0, Math.min(3, names.size())))
                     + (names.size() > 3 ? ", ..." : "") + ")")));
             for (Geometry.Issue i : g.issues()) {
@@ -613,7 +613,7 @@ public final class TGeoReader {
             return med == null ? null : med.object("fMaterial");
         }
 
-        /** Colour, transparency and visibility, as TGeoVolume keeps them. */
+        /** Color, transparency and visibility, as TGeoVolume keeps them. */
         void style(RObject vol, LogicalVolume lv) {
             final int index = vol.integer("fLineColor");
             int transparency = (byte) vol.integer("fTransparency");
@@ -625,7 +625,7 @@ public final class TGeoReader {
             }
             final int alpha = (int) Math.round(255 * (1 - Math.max(0, Math.min(100, transparency)) / 100.0));
             if (index <= 1 || !RootColors.defined(index)) {
-                // ROOT's default (black) says nothing: colour by material, as the editor does
+                // ROOT's default (black) says nothing: color by material, as the editor does
                 lv.color = (MaterialColors.colorFor(lv.material) & 0xFFFFFF) | (alpha << 24);
             } else {
                 final java.awt.Color c = RootColors.color(index);
@@ -735,7 +735,7 @@ public final class TGeoReader {
 
         /**
          * A TGeo division: a replica when it is one (same volume, slices
-         * centred and filling the mother along x, y or z, or turning around
+         * centered and filling the mother along x, y or z, or turning around
          * z), one placement per slice otherwise.
          */
         void division(RObject vol, LogicalVolume mother, Mat pre, String prefix, RObject finder, List<RObject> nodes) {
@@ -755,13 +755,13 @@ public final class TGeoReader {
                 && !isAssembly(first)) {
                 final double[] origin = arr(shape.get("fOrigin"), 3);
                 final double tol = 1e-9 * Math.max(1, Math.abs(step) * n);
-                final boolean centred = Math.abs(start + end) < tol && Math.abs(end - start - n * step) < tol;
+                final boolean centered = Math.abs(start + end) < tol && Math.abs(end - start - n * step) < tol;
                 switch (kind) {
-                    case "TGeoPatternX" -> axis = centred && Math.abs(2 * shape.real("fDX") - n * step) < tol
+                    case "TGeoPatternX" -> axis = centered && Math.abs(2 * shape.real("fDX") - n * step) < tol
                         && Math.abs(origin[0]) < tol ? PhysicalVolume.Replica.Axis.kXAxis : null;
-                    case "TGeoPatternY" -> axis = centred && Math.abs(2 * shape.real("fDY") - n * step) < tol
+                    case "TGeoPatternY" -> axis = centered && Math.abs(2 * shape.real("fDY") - n * step) < tol
                         && Math.abs(origin[1]) < tol ? PhysicalVolume.Replica.Axis.kYAxis : null;
-                    case "TGeoPatternZ" -> axis = centred && Math.abs(2 * shape.real("fDZ") - n * step) < tol
+                    case "TGeoPatternZ" -> axis = centered && Math.abs(2 * shape.real("fDZ") - n * step) < tol
                         && Math.abs(origin[2]) < tol ? PhysicalVolume.Replica.Axis.kZAxis : null;
                     case "TGeoPatternCylPhi" -> axis = Math.abs(n * step - 360) < 1e-9 || phiSpan(mother, start, n * step)
                         ? PhysicalVolume.Replica.Axis.kPhi : null;
@@ -962,7 +962,7 @@ public final class TGeoReader {
             final double density = mat.real("fDensity");
             final boolean mixture = mat.className.equals("TGeoMixture");
             if (density < 1e-10 || (!mixture && mat.real("fZ") < 0.5)) {
-                recognise("vacuum material(s) read as G4_Galactic", raw);
+                recognize("vacuum material(s) read as G4_Galactic", raw);
                 return "G4_Galactic";
             }
             String name = clean(raw, "Material");
@@ -1099,7 +1099,7 @@ public final class TGeoReader {
                             s.set("x", mm(2 * (sh.real("fDX") + Math.abs(o[0]))));
                             s.set("y", mm(2 * (sh.real("fDY") + Math.abs(o[1]))));
                             s.set("z", mm(2 * (sh.real("fDZ") + Math.abs(o[2]))));
-                            recognise("world box(es) off the origin, grown to be centered on it", name);
+                            recognize("world box(es) off the origin, grown to be centered on it", name);
                         } else {
                             shapeFrames.put(sh, Mat.translation(o[0], o[1], o[2]));
                         }
@@ -1180,7 +1180,7 @@ public final class TGeoReader {
                 case "TGeoTrap":
                     return trap(name, sh);
                 case "TGeoGtra":
-                    recognise("twisted trapezoid(s), TGeoGtra, read as G4GenericTrap", name);
+                    recognize("twisted trapezoid(s), TGeoGtra, read as G4GenericTrap", name);
                     return arb8(name, sh);
                 case "TGeoArb8":
                     return arb8(name, sh);
@@ -1280,7 +1280,7 @@ public final class TGeoReader {
                 return s;
             } catch (GeometryException notPlanar) {
                 // TGeoTrap is an arb8 that accepts what G4Trap refuses (faces a little off plane)
-                recognise("trapezoid(s) G4Trap refuses, read as G4GenericTrap", name);
+                recognize("trapezoid(s) G4Trap refuses, read as G4GenericTrap", name);
                 return arb8(name, sh);
             }
         }
@@ -1347,7 +1347,7 @@ public final class TGeoReader {
                 s.set("cz", mm(r * f[2]));
                 s.set("zcut1", "0*mm");
                 s.set("zcut2", "0*mm");
-                recognise("scaled sphere(s) read as G4Ellipsoid", name);
+                recognize("scaled sphere(s) read as G4Ellipsoid", name);
                 return s;
             }
             final ScaledSolid s = new ScaledSolid(name, solid(base, name + "_base"));
@@ -1449,7 +1449,7 @@ public final class TGeoReader {
         }
 
         /**
-         * TGeoHalfSpace has no Geant4 counterpart: a box ten metres deep and
+         * TGeoHalfSpace has no Geant4 counterpart: a box ten meters deep and
          * wide stands in for it, its face on the plane, which is the same
          * thing inside any detector that fits in it.
          */
@@ -1461,7 +1461,7 @@ public final class TGeoReader {
             s.set("x", mm(2 * half));
             s.set("y", mm(2 * half));
             s.set("z", mm(2 * half));
-            // the box's +z face on the plane: its centre half a box behind, its z axis along the normal
+            // the box's +z face on the plane: its center half a box behind, its z axis along the normal
             final Vec3 u = n.orthogonal().unit(), v = n.cross(u);
             final double[] r = {u.x(), v.x(), n.x(), u.y(), v.y(), n.y(), u.z(), v.z(), n.z()};
             shapeFrames.put(sh, new Mat(r, new double[] {p[0] - n.x() * half, p[1] - n.y() * half, p[2] - n.z() * half},
@@ -1833,7 +1833,7 @@ public final class TGeoReader {
             return b;
         }
 
-        // Symmetric detectors meet the same overlap again and again (a sector and its neighbour,
+        // Symmetric detectors meet the same overlap again and again (a sector and its neighbor,
         // 18 times over): what is worked out once, for a solid and what cuts it as placed
         // relative to it, serves every copy -- and the cut volumes are shared, not made anew.
         private final Map<Object, Integer> ids = new IdentityHashMap<>();
@@ -1842,8 +1842,8 @@ public final class TGeoReader {
         private final Map<String, LogicalVolume> clipped = new HashMap<>();
         private final Map<String, Integer> sets = new HashMap<>();
 
-        // the volume a cut one was made from: a sibling's daughter cut by its own neighbours wins, as
-        // ROOT has it, where the original does less what those neighbours (which cut too) take
+        // the volume a cut one was made from: a sibling's daughter cut by its own neighbors wins, as
+        // ROOT has it, where the original does less what those neighbors (which cut too) take
         private final Map<LogicalVolume, LogicalVolume> origin = new IdentityHashMap<>();
 
         private LogicalVolume original(LogicalVolume lv) {

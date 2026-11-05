@@ -97,7 +97,7 @@ final class Delaunay {
         edges.merge(key, 1, Integer::sum);
     }
 
-    /** Centre and squared radius of the circle through three points. */
+    /** Center and squared radius of the circle through three points. */
     private static double[] circle(double[] x, double[] y, int a, int b, int c) {
         final double ax = x[a];
         final double ay = y[a];

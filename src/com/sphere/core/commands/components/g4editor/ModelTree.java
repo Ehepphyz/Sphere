@@ -390,7 +390,7 @@ final class ModelTree extends JPanel {
     // ------------------------------------------------------------------
 
     /**
-     * A row: the volume's icon, then runs of text in their own colours, drawn directly. The rows were HTML
+     * A row: the volume's icon, then runs of text in their own colors, drawn directly. The rows were HTML
      * labels, which Swing parses and lays out each time it measures or paints one: a few milliseconds a row,
      * a quarter of a second to repaint the visible part of a big tree as the mouse moved over it.
      */
@@ -399,12 +399,12 @@ final class ModelTree extends JPanel {
         private static final Color LV = new Color(0x7a8494), REPLICA = new Color(0x2a8a5a), MATERIAL = new Color(0x8a93a3),
             SENSITIVE = new Color(0xd07020), HIDDEN = new Color(0xb0b0b0), ERROR = new Color(0xd03030);
         private final List<String> runs = new ArrayList<>();
-        private final List<Color> colours = new ArrayList<>();   // null: the label's own (selected or not)
+        private final List<Color> colors = new ArrayList<>();   // null: the label's own (selected or not)
         private boolean bold;
 
         private void run(String text, Color c) {
             runs.add(text);
-            colours.add(c);
+            colors.add(c);
         }
 
         @Override
@@ -412,10 +412,10 @@ final class ModelTree extends JPanel {
                                                       int row, boolean hasFocus) {
             final JLabel l = (JLabel) super.getTreeCellRendererComponent(t, value, sel, expanded, leaf, row, hasFocus);
             // The tree's UI paints the selected row itself, a light fill in the light theme: the text keeps the
-            // tree's colour, where the default renderer turned the selected one white
+            // tree's color, where the default renderer turned the selected one white
             l.setForeground(t.getForeground());
             runs.clear();
-            colours.clear();
+            colors.clear();
             bold = false;
             final Object u = ((DefaultMutableTreeNode) value).getUserObject();
             if (u instanceof Node n) {
@@ -498,7 +498,7 @@ final class ModelTree extends JPanel {
             final java.awt.FontMetrics fm = g2.getFontMetrics();
             final int y = (getHeight() - fm.getHeight()) / 2 + fm.getAscent();
             for (int i = 0; i < runs.size(); i++) {
-                g2.setColor(colours.get(i) == null ? getForeground() : colours.get(i));
+                g2.setColor(colors.get(i) == null ? getForeground() : colors.get(i));
                 g2.drawString(runs.get(i), x, y);
                 x += fm.stringWidth(runs.get(i));
             }

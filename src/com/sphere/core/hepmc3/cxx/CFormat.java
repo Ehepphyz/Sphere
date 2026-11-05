@@ -29,7 +29,7 @@ public final class CFormat {
     /**
      * How the C library writes the sign of a NaN, the one place where the
      * three disagree: glibc writes "-nan" for a NaN whose sign bit is set;
-     * mingw-w64 (Windows) never writes a minus but honours the + and space
+     * mingw-w64 (Windows) never writes a minus but honors the + and space
      * flags ("+nan"); the BSD libc of macOS writes no sign at all.
      */
     public enum NanStyle { GLIBC, MINGW, BSD }

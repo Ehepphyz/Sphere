@@ -160,10 +160,10 @@ public final class ContribCitations {
         component("clusteringveto", "ClusteringVetoPlugin", "mass-jump clustering veto", MASS_JUMP);
         component("cs", "ConstituentSubtractor", "constituent subtraction", CS);
         component("ics", "ConstituentSubtractor", "iterative constituent subtraction", CS, ICS);
-        component("disgenkt", "DISGenkt", "generalised-kt algorithm for DIS", DIS_GENKT, PANSCALES_DIS);
+        component("disgenkt", "DISGenkt", "generalized-kt algorithm for DIS", DIS_GENKT, PANSCALES_DIS);
         component("dynamicr", "DynamicR", "Dynamic Radius jet algorithm", DYNAMIC_R);
         component("ecf", "EnergyCorrelator", "energy correlation functions, C and D series", ECF, D2);
-        component("ecfg", "EnergyCorrelator", "generalised energy correlators, N, M and U series", ECF, ECFG);
+        component("ecfg", "EnergyCorrelator", "generalized energy correlators, N, M and U series", ECF, ECFG);
         component("flavorcone", "FlavorCone", "FlavorCone jets", FLAVOR_CONE);
         component("genericsubtractor", "GenericSubtractor", "generic pileup subtraction of jet shapes", GENERIC_SUB);
         component("jetcleanser", "JetCleanser", "jet cleansing", CLEANSING);

@@ -189,6 +189,7 @@ public final class SphereBrowser extends JFrame {
 
     private SphereBrowser() {
         super("Sphere TBrowser");
+        com.sphere.utils.IconManager.applyAppIcon(this);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         final Dimension screen = Toolkit.getDefaultToolkit().getScreenSize();
         setSize(Math.min(1560, (int) (screen.width * 0.9)), Math.min(980, (int) (screen.height * 0.88)));
@@ -803,7 +804,7 @@ public final class SphereBrowser extends JFrame {
         @Override
         public Component getTreeCellRendererComponent(JTree t, Object value, boolean sel, boolean expanded,
                                                       boolean leaf, int row, boolean focus) {
-            // The theme's colours, read at each paint so that a change of theme reaches the tree.
+            // The theme's colors, read at each paint so that a change of theme reaches the tree.
             setBackgroundNonSelectionColor(ImagingTheme.surface());
             setTextNonSelectionColor(ImagingTheme.text());
             setBackgroundSelectionColor(ImagingTheme.accent());
@@ -1125,7 +1126,7 @@ public final class SphereBrowser extends JFrame {
     /**
      * A tab's header, opaque and painted here: the look and feel draws the tab
      * strip light while the theme's labels are light too, and a title drawn in
-     * the theme's colour vanished into its own tab.
+     * the theme's color vanished into its own tab.
      */
     private JPanel tabHeader(String title, JComponent doc, boolean closable) {
         final JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
@@ -1150,7 +1151,7 @@ public final class SphereBrowser extends JFrame {
         return head;
     }
 
-    /** The tab shown on the accent, the others on the surface, every title in the colour that reads on its ground. */
+    /** The tab shown on the accent, the others on the surface, every title in the color that reads on its ground. */
     private void restyleTabs() {
         final int selected = tabs.getSelectedIndex();
         for (int i = 0; i < tabs.getTabCount(); i++) {
@@ -1166,7 +1167,7 @@ public final class SphereBrowser extends JFrame {
         tabs.repaint();
     }
 
-    /** Everything whose colours were chosen here, chosen again from the current theme. */
+    /** Everything whose colors were chosen here, chosen again from the current theme. */
     private void retheme() {
         if (tabs == null || filter == null) return;
         getContentPane().setBackground(ImagingTheme.panel());
@@ -1276,7 +1277,7 @@ public final class SphereBrowser extends JFrame {
         }
     }
 
-    /** A canvas: live, in 3D, analysed, as its picture, as its bins. */
+    /** A canvas: live, in 3D, analyzed, as its picture, as its bins. */
     private final class SceneDoc extends Doc implements BrowserMenus.CanvasDoc {
         RootScene scene;
         final RootCanvasView canvas = new RootCanvasView();
@@ -1307,7 +1308,7 @@ public final class SphereBrowser extends JFrame {
             view("Canvas", "The canvas from its numbers, as ROOT draws it, live to the mouse", () -> canvas);
             view("3D Space", "Sphere's 3D engine: turn, zoom, stretch X Y Z, cut, iso-surfaces, stereo", this::space);
             view("Analysis", "Fits, ranking of models, peaks, Bayesian Blocks, comparisons", () -> new AnalysisPanel(
-                analysed(), canvas::repaint, SphereBrowser.this::openMade, SphereBrowser.this::openHistograms));
+                analyzed(), canvas::repaint, SphereBrowser.this::openMade, SphereBrowser.this::openHistograms));
             if (picture != null) {
                 view("Picture", "The picture ROOT wrote: " + picture.getFileName(), () -> picture(picture));
             }
@@ -1340,7 +1341,7 @@ public final class SphereBrowser extends JFrame {
             show(space ? "3D Space" : "Canvas");
         }
 
-        private Hist analysed() {
+        private Hist analyzed() {
             final Hist h = Scenes.firstHist(spacePad);
             return h != null ? h : Scenes.firstHist(scene.pad);
         }
@@ -1401,7 +1402,7 @@ public final class SphereBrowser extends JFrame {
         }
 
         private JComponent data() {
-            final Item main = spacePad.main() != null ? spacePad.main() : analysed();
+            final Item main = spacePad.main() != null ? spacePad.main() : analyzed();
             final JTable table = new JTable(new ItemTable(main));
             table.setAutoCreateRowSorter(true);
             table.setFillsViewportHeight(true);

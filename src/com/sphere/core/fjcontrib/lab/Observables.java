@@ -40,7 +40,7 @@ import java.util.function.Function;
 /**
  * Every jet or event observable the contribs provide, under one short name
  * with its parameters: "tau21", "d2:beta=2", "sdmass:beta=0,zcut=0.1",
- * "nsd", "njww:rjet=0.4,ptcut=25". One catalogue feeds the table, the
+ * "nsd", "njww:rjet=0.4,ptcut=25". One catalog feeds the table, the
  * histograms, the exports to the other engines and the discrimination
  * ranking, so that an observable is written once and named the same way
  * everywhere.
@@ -105,7 +105,7 @@ public final class Observables {
     }
 
     /**
-     * An entry of the catalogue.
+     * An entry of the catalog.
      *
      * @param deterministic false when the value draws random numbers (ghosts, multi-pass axes):
      *                      such observables are measured on one thread, in event order
@@ -141,16 +141,16 @@ public final class Observables {
         }
     }
 
-    private static final Map<String, Definition> CATALOGUE = new LinkedHashMap<>();
+    private static final Map<String, Definition> CATALOG = new LinkedHashMap<>();
 
     private static void jet(String name, String contrib, String summary, String params,
                             Function<Args, Evaluator> factory) {
-        CATALOGUE.put(name, new Definition(name, Scope.JET, contrib, summary, params, true, factory));
+        CATALOG.put(name, new Definition(name, Scope.JET, contrib, summary, params, true, factory));
     }
 
     private static void event(String name, String contrib, String summary, String params, boolean deterministic,
                               Function<Args, Evaluator> factory) {
-        CATALOGUE.put(name, new Definition(name, Scope.EVENT, contrib, summary, params, deterministic, factory));
+        CATALOG.put(name, new Definition(name, Scope.EVENT, contrib, summary, params, deterministic, factory));
     }
 
     /** A jet evaluator from a function of the jet and its radius. */
@@ -224,7 +224,7 @@ public final class Observables {
     }
 
     /* ------------------------------------------------------------------ */
-    /* The catalogue                                                       */
+    /* The catalog                                                       */
     /* ------------------------------------------------------------------ */
 
     static {
@@ -273,9 +273,9 @@ public final class Observables {
             a -> { final var t = new EnergyCorrelators.EnergyCorrelatorC2(a.d("beta", 1.0), ecfMeasure(a)); return perJet((j, c) -> t.result(j)); });
         jet("d2", "EnergyCorrelator", "D2, the power-counted two-prong discriminant", "beta=1",
             a -> { final var t = new EnergyCorrelators.EnergyCorrelatorD2(a.d("beta", 1.0), ecfMeasure(a)); return perJet((j, c) -> t.result(j)); });
-        jet("d2g", "EnergyCorrelator", "generalised D2^(alpha, beta)", "alpha=1,beta=2",
+        jet("d2g", "EnergyCorrelator", "generalized D2^(alpha, beta)", "alpha=1,beta=2",
             a -> { final var t = new EnergyCorrelators.EnergyCorrelatorGeneralizedD2(a.d("alpha", 1.0), a.d("beta", 2.0), ecfMeasure(a)); return perJet((j, c) -> t.result(j)); });
-        jet("n2", "EnergyCorrelator", "N2 from generalised correlators, two-prong", "beta=1",
+        jet("n2", "EnergyCorrelator", "N2 from generalized correlators, two-prong", "beta=1",
             a -> { final var t = new EnergyCorrelators.EnergyCorrelatorN2(a.d("beta", 1.0), ecfMeasure(a)); return perJet((j, c) -> t.result(j)); });
         jet("n3", "EnergyCorrelator", "N3, three-prong", "beta=1",
             a -> { final var t = new EnergyCorrelators.EnergyCorrelatorN3(a.d("beta", 1.0), ecfMeasure(a)); return perJet((j, c) -> t.result(j)); });
@@ -401,13 +401,13 @@ public final class Observables {
     private Observables() {
     }
 
-    /** The catalogue, in its order. */
+    /** The catalog, in its order. */
     public static List<Definition> all() {
-        return new ArrayList<>(CATALOGUE.values());
+        return new ArrayList<>(CATALOG.values());
     }
 
     public static Definition definition(String name) {
-        return CATALOGUE.get(name.toLowerCase(Locale.ROOT));
+        return CATALOG.get(name.toLowerCase(Locale.ROOT));
     }
 
     /** The observables shown when none is named. */
@@ -424,7 +424,7 @@ public final class Observables {
         final String t = text.trim();
         final int colon = t.indexOf(':');
         final String name = (colon < 0 ? t : t.substring(0, colon)).toLowerCase(Locale.ROOT);
-        final Definition def = CATALOGUE.get(name);
+        final Definition def = CATALOG.get(name);
         if (def == null) {
             throw new FastJetException("unknown observable '" + name + "'; ':fjco observables' lists them");
         }

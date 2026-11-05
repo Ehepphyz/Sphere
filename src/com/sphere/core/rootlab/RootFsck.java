@@ -148,12 +148,12 @@ public final class RootFsck {
     private RootFsck() {
     }
 
-    public static Report check(RootFile f, Options options, DoubleConsumer progress, BooleanSupplier cancelled)
+    public static Report check(RootFile f, Options options, DoubleConsumer progress, BooleanSupplier canceled)
             throws IOException {
         final long t0 = System.nanoTime();
         final Report r = new Report();
         final DoubleConsumer p = progress == null ? x -> { } : progress;
-        final BooleanSupplier stop = cancelled == null ? () -> false : cancelled;
+        final BooleanSupplier stop = canceled == null ? () -> false : canceled;
         r.location = f.getLocation();
         r.size = f.getSize();
         r.formatVersion = f.getFormatVersion();
@@ -414,7 +414,7 @@ public final class RootFsck {
                 if (firsts.length > 0 && seeks.length > 0) {
                     for (int i = 1; i < Math.min(firsts.length, seeks.length); i++) {
                         if (seeks[i] != 0 && firsts[i] < firsts[i - 1]) {
-                            r.add(Severity.ERROR, where + "." + b.name(), "basket entry numbers go backwards at basket " + i);
+                            r.add(Severity.ERROR, where + "." + b.name(), "basket entry numbers go backward at basket " + i);
                             break;
                         }
                     }

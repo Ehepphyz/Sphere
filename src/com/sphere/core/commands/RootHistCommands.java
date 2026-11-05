@@ -3,7 +3,7 @@ package com.sphere.core.commands;
 import com.sphere.utils.AppLogger;
 
 /**
- * Histograms, graphs, functions, fits and maths.
+ * Histograms, graphs, functions, fits and math.
  *
  * Split out of Handlers, which had grown to hold every backend at once. The
  * helpers these handlers share -- the argument readers, the interpreter call,

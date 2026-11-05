@@ -3,8 +3,8 @@ package com.sphere.core.geant4;
 import java.util.Locale;
 
 /**
- * A colour for a material, so a new volume looks like what it is made of:
- * metals grey, lead dark, copper orange, silicon slate blue, scintillators
+ * A color for a material, so a new volume looks like what it is made of:
+ * metals gray, lead dark, copper orange, silicon slate blue, scintillators
  * cyan, water and gases translucent. Users override it per volume.
  */
 public final class MaterialColors {

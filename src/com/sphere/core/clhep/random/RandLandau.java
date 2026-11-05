@@ -6,7 +6,7 @@ import com.sphere.core.hepmc3.cxx.COStream;
 
 /**
  * CLHEP's RandLandau (Random/RandLandau.h, .icc, RandLandau.cc): the Landau distribution by its inverse
- * CDF, interpolated in a table (linear in the middle, cubic towards the ends) and by Padé approximants in
+ * CDF, interpolated in a table (linear in the middle, cubic toward the ends) and by Padé approximants in
  * the tails.
  */
 public class RandLandau extends HepRandom {
@@ -78,7 +78,7 @@ public class RandLandau extends HepRandom {
             final double f0 = inverseLandau[index];
             final double f1 = inverseLandau[index + 1];
             return f0 + du * (f1 - f0);
-        // towards the ends: cubic
+        // toward the ends: cubic
         } else if (index >= 7 && index <= 980) {
             final double f_1 = inverseLandau[index - 1];
             final double f0 = inverseLandau[index];

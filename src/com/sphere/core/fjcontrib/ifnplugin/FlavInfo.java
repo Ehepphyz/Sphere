@@ -6,16 +6,16 @@ import com.sphere.core.fastjet.PseudoJet;
 import java.util.Arrays;
 
 /**
- * The flavour content of a particle, fastjet::contrib::FlavInfo (IFNPlugin
+ * The flavor content of a particle, fastjet::contrib::FlavInfo (IFNPlugin
  * 1.0.4; F. Caola, R. Grabarczyk, M. Hutt, G.P. Salam, L. Scyboz and
  * J. Thaler, Phys. Rev. D 108 (2023) 094010, arXiv:2306.07314): the net
  * number of d, u, s, c, b and t quarks, read from a PDG code or given
  * directly, with flags for incoming beams and spectators.
  *
  * <p>The C++ class is a mutable value copied at every assignment; here it is
- * immutable, each operation answering a new flavour, so that a flavour kept
+ * immutable, each operation answering a new flavor, so that a flavor kept
  * in a history can never be changed behind its back. Equality compares the
- * six flavours and the flags, as the C++ operator== does.
+ * six flavors and the flags, as the C++ operator== does.
  */
 public final class FlavInfo {
 
@@ -32,18 +32,18 @@ public final class FlavInfo {
     private final int[] content = new int[7];
     private final int pdgCode;
 
-    /** No flavour: a gluon, a photon, a lepton. */
+    /** No flavor: a gluon, a photon, a lepton. */
     public FlavInfo() {
         this(0, 0);
     }
 
-    /** The flavour of a PDG code: quarks, diquarks, mesons and baryons are understood. */
+    /** The flavor of a PDG code: quarks, diquarks, mesons and baryons are understood. */
     public FlavInfo(int pdgCode) {
         this(pdgCode, 0);
     }
 
     /**
-     * The flavour of a PDG code, with flags ({@link #BEAM}, {@link #SPECTATOR}).
+     * The flavor of a PDG code, with flags ({@link #BEAM}, {@link #SPECTATOR}).
      * A code whose quark content cannot be read is refused, where the C++
      * prints a message and exits the program.
      */
@@ -65,7 +65,7 @@ public final class FlavInfo {
                 if (digit[0] > 6 || digit[0] == 0) throw unreadable(pdgCode);
                 content[digit[0]] = netsign;
             } else if (ndigits == 2) {
-                // a lepton, a photon, a gluon, a cluster: no flavour kept
+                // a lepton, a photon, a gluon, a cluster: no flavor kept
             } else {
                 for (int i = 1; i < ndigits; i++) {
                     if (digit[i] > 6) throw unreadable(pdgCode);
@@ -89,7 +89,7 @@ public final class FlavInfo {
         updateFlavourlessAttribute();
     }
 
-    /** From the net numbers of each flavour. */
+    /** From the net numbers of each flavor. */
     public FlavInfo(int nd, int nu, int ns, int nc, int nb, int nt) {
         this(nd, nu, ns, nc, nb, nt, 0);
     }
@@ -106,7 +106,7 @@ public final class FlavInfo {
         updateFlavourlessAttribute();
     }
 
-    /** A flavour from its seven words as they stand, the flavourless flag recomputed. */
+    /** A flavor from its seven words as they stand, the flavorless flag recomputed. */
     FlavInfo(int[] words, int pdgCode) {
         this.pdgCode = pdgCode;
         System.arraycopy(words, 0, content, 0, 7);
@@ -131,7 +131,7 @@ public final class FlavInfo {
     /* Reading                                                             */
     /* ------------------------------------------------------------------ */
 
-    /** The net number of quarks of flavour iflv, 1 = d to 6 = t (0 gives the flags). */
+    /** The net number of quarks of flavor iflv, 1 = d to 6 = t (0 gives the flags). */
     public int get(int iflv) {
         return content[iflv];
     }
@@ -162,7 +162,7 @@ public final class FlavInfo {
         return isFlavourless();
     }
 
-    /** More than one unit of flavour in all. */
+    /** More than one unit of flavor in all. */
     public boolean isMultiflavoured() {
         int sum = 0;
         for (int i = 1; i <= 6; i++) sum += Math.abs(content[i]);
@@ -170,9 +170,9 @@ public final class FlavInfo {
     }
 
     /**
-     * Whether the particle carries a FlavInfo with some flavour of the
+     * Whether the particle carries a FlavInfo with some flavor of the
      * opposite sign to this one's. Not a test that the two cancel: add them
-     * and ask whether the sum is flavourless for that.
+     * and ask whether the sum is flavorless for that.
      */
     public boolean hasOppositeFlavour(PseudoJet particle) {
         if (!particle.hasUserInfo(FlavInfo.class)) return false;
@@ -189,7 +189,7 @@ public final class FlavInfo {
     }
 
     /* ------------------------------------------------------------------ */
-    /* New flavours from this one                                          */
+    /* New flavors from this one                                          */
     /* ------------------------------------------------------------------ */
 
     /** The sum; beam, spectator and PDG code are lost, as in the C++. */
@@ -204,14 +204,14 @@ public final class FlavInfo {
             content[4] - o.content[4], content[5] - o.content[5], content[6] - o.content[6]);
     }
 
-    /** Each flavour modulo 2, apply_modulo_2(). */
+    /** Each flavor modulo 2, apply_modulo_2(). */
     public FlavInfo modulo2() {
         final int[] w = content.clone();
         for (int i = 1; i <= 6; i++) w[i] = Math.abs(w[i] % 2);
         return new FlavInfo(w, pdgCode);
     }
 
-    /** Each flavour present counted once, apply_any_abs(). */
+    /** Each flavor present counted once, apply_any_abs(). */
     public FlavInfo anyAbs() {
         final int[] w = content.clone();
         for (int i = 1; i <= 6; i++) w[i] = w[i] == 0 ? 0 : 1;
@@ -219,8 +219,8 @@ public final class FlavInfo {
     }
 
     /**
-     * Only the flavour iflv kept, reset_all_but_flav(): b-tagging at hadron
-     * level, where the other flavours are neither needed nor well known.
+     * Only the flavor iflv kept, reset_all_but_flav(): b-tagging at hadron
+     * level, where the other flavors are neither needed nor well known.
      */
     public FlavInfo onlyFlav(int iflv) {
         final int[] w = content.clone();
@@ -230,7 +230,7 @@ public final class FlavInfo {
         return new FlavInfo(w, pdgCode);
     }
 
-    /** With n quarks of flavour iflv, set_flav(). */
+    /** With n quarks of flavor iflv, set_flav(). */
     public FlavInfo withFlav(int iflv, int n) {
         final int[] w = content.clone();
         w[iflv] = n;
@@ -253,7 +253,7 @@ public final class FlavInfo {
     /* Text                                                                */
     /* ------------------------------------------------------------------ */
 
-    /** "[u ]", "[bbar bbar ]", "[g]" for no flavour, as the C++ writes them. */
+    /** "[u ]", "[bbar bbar ]", "[g]" for no flavor, as the C++ writes them. */
     public String description() {
         final StringBuilder s = new StringBuilder("[");
         if (isFlavourless()) {
@@ -309,8 +309,8 @@ public final class FlavInfo {
     /* ------------------------------------------------------------------ */
 
     /**
-     * The FlavInfo a particle carries, or no flavour when it carries none. A
-     * particle carrying a FlavHistory is refused: its flavour depends on the
+     * The FlavInfo a particle carries, or no flavor when it carries none. A
+     * particle carrying a FlavHistory is refused: its flavor depends on the
      * step asked for, see {@link FlavHistory#currentFlavourOf}.
      */
     public static FlavInfo flavourOf(PseudoJet particle) {
@@ -322,16 +322,16 @@ public final class FlavInfo {
         return NO_FLAV;
     }
 
-    /** No flavour, shared. */
+    /** No flavor, shared. */
     public static FlavInfo none() {
         return NO_FLAV;
     }
 
     /**
-     * The flavour of the PDG code a particle carries as its user index, where
+     * The flavor of the PDG code a particle carries as its user index, where
      * Sphere's event readers (LHE, HepMC, FastJet text with a fifth column)
-     * put it; no flavour when the index is not a code FlavInfo can read.
-     * Sphere's addition, so that any loaded event can feed a flavour algorithm.
+     * put it; no flavor when the index is not a code FlavInfo can read.
+     * Sphere's addition, so that any loaded event can feed a flavor algorithm.
      *
      * <p>-1 is read as a dbar: it is FastJet's default index too, so whether
      * an event carries PDG codes at all is for the caller to decide, from the

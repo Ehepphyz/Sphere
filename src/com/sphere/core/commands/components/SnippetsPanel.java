@@ -527,6 +527,7 @@ public class SnippetsPanel extends JPanel {
             }
 
             JDialog dialog = new JDialog((Frame) SwingUtilities.getWindowAncestor(this), "Rename Snippet", true);
+            IconManager.applyAppIcon(dialog);
             dialog.setLayout(new BorderLayout(10, 10));
             JTextField nameField = new JTextField(selected, 20);
             SwingUtilities.invokeLater(nameField::requestFocusInWindow);
@@ -565,6 +566,7 @@ public class SnippetsPanel extends JPanel {
 
     private void createNewSnippet() {
         JDialog dialog = new JDialog((Frame) SwingUtilities.getWindowAncestor(this), "Create New Snippet", true);
+        IconManager.applyAppIcon(dialog);
         dialog.setLayout(new BorderLayout(10, 10));
         JPanel inputPanel = new JPanel(new FlowLayout());
         JTextField nameField = new JTextField(20);
@@ -608,6 +610,7 @@ public class SnippetsPanel extends JPanel {
 
         final SnippetNode finalBase = baseNode;
         JDialog dialog = new JDialog((Frame) SwingUtilities.getWindowAncestor(this), "Create Folder", true);
+        IconManager.applyAppIcon(dialog);
         dialog.setLayout(new BorderLayout(10, 10));
         JTextField nameField = new JTextField(20);
         JPanel center = new JPanel(); center.add(new JLabel("Folder name:")); center.add(nameField);
@@ -653,6 +656,7 @@ public class SnippetsPanel extends JPanel {
             }
 
             JDialog dialog = new JDialog((Frame) SwingUtilities.getWindowAncestor(this), "Rename Folder", true);
+            IconManager.applyAppIcon(dialog);
             dialog.setLayout(new BorderLayout(10, 10));
             JTextField nameField = new JTextField(selected.substring(0, selected.length() - 1), 20);
             JPanel center = new JPanel(); center.add(new JLabel("New folder name:")); center.add(nameField);

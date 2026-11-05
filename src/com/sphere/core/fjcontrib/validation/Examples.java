@@ -33,7 +33,7 @@ public final class Examples {
         l.addAll(KTClusCXXExamples.all());
         l.addAll(FlavorConeExamples.all());
         l.addAll(ScJetExamples.all());
-        l.addAll(FlavourExamples.all());
+        l.addAll(FlavorExamples.all());
         l.addAll(ClusteringExamples.all());
         return l;
     }

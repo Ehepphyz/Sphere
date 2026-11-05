@@ -185,7 +185,7 @@ public final class Pep440 {
         }
     }
 
-    /** How far apart two versions are, for the colour of an update. */
+    /** How far apart two versions are, for the color of an update. */
     public enum Jump { NONE, PATCH, MINOR, MAJOR, DOWNGRADE }
 
     public static Jump jump(Version from, Version to) {

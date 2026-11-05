@@ -16,17 +16,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The flavour dressing algorithm of R. Gauld, A. Huss and G. Stagnitto,
+ * The flavor dressing algorithm of R. Gauld, A. Huss and G. Stagnitto,
  * fastjet::contrib::run_GHS (GHSAlgo 1.0.0; "Flavor Identification of
  * Reconstructed Hadronic Jets", Phys. Rev. Lett. 130 (2023) 161901, erratum
  * 132 (2024) 159901, arXiv:2208.11138 v2, with the corrections of
  * arXiv:2306.07314).
  *
- * <p>Flavour is assigned after the jets are found, whatever algorithm found
- * them: the flavoured particles are clustered among themselves and with the
- * hard jets under a flavour-kt distance, opposite flavours annihilating, and
- * each hard jet takes the flavour of what reaches it. The particles and
- * their flavours are read from the cluster sequence of the jets, which must
+ * <p>Flavor is assigned after the jets are found, whatever algorithm found
+ * them: the flavored particles are clustered among themselves and with the
+ * hard jets under a flavor-kt distance, opposite flavors annihilating, and
+ * each hard jet takes the flavor of what reaches it. The particles and
+ * their flavors are read from the cluster sequence of the jets, which must
  * have been clustered with a {@link FlavRecombiner}.
  */
 public final class GHSAlgo {
@@ -53,7 +53,7 @@ public final class GHSAlgo {
         return Math.abs(rap) < 0.1 ? 0.5 * CRMath.log1p(2 * p.pz() / (p.E() - p.pz())) : rap;
     }
 
-    /** A hard jet (user index 1) or a flavour cluster (user index 0, or -1 - i when inside jet i). */
+    /** A hard jet (user index 1) or a flavor cluster (user index 0, or -1 - i when inside jet i). */
     private static final class BriefJet implements NNBriefJet<BriefJet> {
         private final PseudoJet jet;
         private final Info info;
@@ -144,7 +144,7 @@ public final class GHSAlgo {
             }
             if (first.isJet()) return Double.MAX_VALUE;
             if (other.isParticle()) {
-                // only opposite flavours annihilate
+                // only opposite flavors annihilate
                 final FlavInfo flavA = jet.userInfo(FlavHistory.class).currentFlavour();
                 final FlavInfo flavB = otherIn.jet.userInfo(FlavHistory.class).currentFlavour();
                 if ((flavA.isFlavourless() || flavB.isFlavourless()) && associatedJet() != otherIn.associatedJet()) {
@@ -168,18 +168,18 @@ public final class GHSAlgo {
         }
     }
 
-    /** With alpha = 1, omega = 2 and net flavour, the published defaults. */
+    /** With alpha = 1, omega = 2 and net flavor, the published defaults. */
     public static List<PseudoJet> runGHS(List<PseudoJet> jetsBase, double ptcut) {
         return runGHS(jetsBase, ptcut, 1.0, 2.0, new FlavRecombiner());
     }
 
     /**
-     * The jets of jetsBase above ptcut, dressed with their flavour.
+     * The jets of jetsBase above ptcut, dressed with their flavor.
      *
      * @param jetsBase the jets before any hardness cut; the particles and their
-     *                 flavours come from their cluster sequence
+     *                 flavors come from their cluster sequence
      * @param ptcut    the hardness cut, to match the fiducial jet definition
-     * @param alpha    the power of kt_max/kt_min in the flavour-kt distance
+     * @param alpha    the power of kt_max/kt_min in the flavor-kt distance
      * @param omega    the weight of rapidity separation (0: deltaR^2)
      */
     public static List<PseudoJet> runGHS(List<PseudoJet> jetsBase, double ptcut, double alpha, double omega,
@@ -238,12 +238,12 @@ public final class GHSAlgo {
                 }
                 if (iB < njets) throw new FastJetException("run_GHS: two jets were paired, which cannot be");
                 if (iA < njets) {
-                    // a jet: it takes B's flavour, and B goes
+                    // a jet: it takes B's flavor, and B goes
                     final FlavInfo flavB = all.get(iB).userInfo(FlavHistory.class).currentFlavour();
                     jetFlavs[iA] = flavRecombiner.applySummationChoice(jetFlavs[iA].plus(flavB));
                     nnh.removeJet(iB);
                 } else {
-                    // two flavour clusters merge
+                    // two flavor clusters merge
                     final PseudoJet merged = all.get(iA).copy();
                     merged.resetMomentum(all.get(iA).plus(all.get(iB)));
                     merged.setUserIndex(all.get(iA).userIndex() == all.get(iB).userIndex() ? all.get(iA).userIndex() : 0);

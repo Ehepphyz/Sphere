@@ -8,12 +8,12 @@ import com.sphere.core.fjcontrib.ContribCitations;
 import java.util.List;
 
 /**
- * An event shape that sums a jet measurement over the neighbourhoods of the
+ * An event shape that sums a jet measurement over the neighborhoods of the
  * particles, fastjet::jwj::JetLikeEventShape: sum_i w_i F({p within R_jet of
- * i}) over the particles i whose neighbourhood passes the pt cut (and the
+ * i}) over the particles i whose neighborhood passes the pt cut (and the
  * trimming condition), w_i = pt_i / pt_in_Rjet. With F = 1 it counts the
  * jets, with F = scalar pt it is H_T, and so on; the subclasses compute the
- * common ones from the storage directly, without the neighbours.
+ * common ones from the storage directly, without the neighbors.
  */
 public class JetLikeEventShape implements FunctionOfVectorOfPseudoJets<Double> {
 

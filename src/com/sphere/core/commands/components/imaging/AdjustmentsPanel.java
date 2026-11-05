@@ -75,12 +75,12 @@ public final class AdjustmentsPanel extends JPanel {
         body.add(histogram);
         body.add(Box.createVerticalStrut(8));
 
-        body.add(labelled("Brightness", brightness));
-        body.add(labelled("Contrast", contrast));
-        body.add(labelled("Gamma", gamma));
-        body.add(labelled("Saturation", saturation));
-        body.add(labelled("Black point", black));
-        body.add(labelled("White point", white));
+        body.add(labeled("Brightness", brightness));
+        body.add(labeled("Contrast", contrast));
+        body.add(labeled("Gamma", gamma));
+        body.add(labeled("Saturation", saturation));
+        body.add(labeled("Black point", black));
+        body.add(labeled("White point", white));
 
         ImagingTheme.Surface flags = ImagingTheme.strip(false);
         flags.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -112,7 +112,7 @@ public final class AdjustmentsPanel extends JPanel {
         return body;
     }
 
-    private JComponent labelled(String name, JSlider slider) {
+    private JComponent labeled(String name, JSlider slider) {
         ImagingTheme.Surface row = ImagingTheme.panelOf(new BorderLayout(6, 0));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));

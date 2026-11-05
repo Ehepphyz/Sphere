@@ -1,6 +1,6 @@
 package com.sphere.core.hepmc3;
 
-/** The serialisable content of a vertex: status and position. */
+/** The serializable content of a vertex: status and position. */
 public final class GenVertexData {
 
     public int status;

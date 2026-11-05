@@ -21,7 +21,7 @@ import static com.sphere.core.fjcontrib.nsubjettiness.MeasureDefinition.f2;
 /**
  * How the N axes are found, AxesDefinition (Nsubjettiness 2.3.2): seeds
  * from a jet algorithm (exclusive, inclusive-hardest, or N+m choose N), then
- * no refining, a one-pass minimisation of tau, or several passes from
+ * no refining, a one-pass minimization of tau, or several passes from
  * jiggled seeds. The definitions are the nested classes, with the C++
  * names: {@code new KT_Axes()}, {@code new OnePass_WTA_KT_Axes()},
  * {@code new GenET_GenKT_Axes(delta, p, R0)}...
@@ -96,7 +96,7 @@ public abstract class AxesDefinition {
         needsManualAxes = o.needsManualAxes;
     }
 
-    /** Several one-pass minimisations from seeds jiggled within the noise range; the best is kept. */
+    /** Several one-pass minimizations from seeds jiggled within the noise range; the best is kept. */
     protected List<PseudoJet> getMultiPassAxes(int nJets, List<PseudoJet> inputJets, List<PseudoJet> seedAxes,
                                                MeasureDefinition measure) {
         List<PseudoJet> bestAxes = measure.getOnePassAxes(nJets, inputJets, seedAxes, nAttempts, accuracy);
@@ -312,7 +312,7 @@ public abstract class AxesDefinition {
     /* The named axes                                                   */
     /* ---------------------------------------------------------------- */
 
-    /** Exclusive generalised kt with p = 1/2, E scheme. */
+    /** Exclusive generalized kt with p = 1/2, E scheme. */
     public static class HalfKT_Axes extends ExclusiveJetAxes {
         public HalfKT_Axes() {
             super(new JetDefinition(JetAlgorithm.GENKT, JetDefinition.MAX_ALLOWABLE_R, 0.5));
@@ -363,7 +363,7 @@ public abstract class AxesDefinition {
         @Override public AxesDefinition create() { final AntiKT_Axes c = new AntiKT_Axes(r0); c.copyPasses(this); return c; }
     }
 
-    /** Exclusive generalised kt (p = 1/2), winner take all. */
+    /** Exclusive generalized kt (p = 1/2), winner take all. */
     public static class WTA_HalfKT_Axes extends ExclusiveJetAxes {
         public WTA_HalfKT_Axes() {
             super(withRecombiner(JetAlgorithm.GENKT, JetDefinition.MAX_ALLOWABLE_R, 0.5, new WinnerTakeAllRecombiner()));
@@ -399,7 +399,7 @@ public abstract class AxesDefinition {
         @Override public AxesDefinition create() { final WTA_CA_Axes c = new WTA_CA_Axes(); c.copyPasses(this); return c; }
     }
 
-    /** Exclusive generalised kt of power p. */
+    /** Exclusive generalized kt of power p. */
     public static class GenKT_Axes extends ExclusiveJetAxes {
         protected final double p;
         protected final double r0;
@@ -421,7 +421,7 @@ public abstract class AxesDefinition {
         @Override public AxesDefinition create() { final GenKT_Axes c = new GenKT_Axes(p, r0); c.copyPasses(this); return c; }
     }
 
-    /** Exclusive generalised kt of power p, winner take all. */
+    /** Exclusive generalized kt of power p, winner take all. */
     public static class WTA_GenKT_Axes extends ExclusiveJetAxes {
         protected final double p;
         protected final double r0;
@@ -443,7 +443,7 @@ public abstract class AxesDefinition {
         @Override public AxesDefinition create() { final WTA_GenKT_Axes c = new WTA_GenKT_Axes(p, r0); c.copyPasses(this); return c; }
     }
 
-    /** Exclusive generalised kt of power p, generalised Et recombination of power delta. */
+    /** Exclusive generalized kt of power p, generalized Et recombination of power delta. */
     public static class GenET_GenKT_Axes extends ExclusiveJetAxes {
         protected final double delta;
         protected final double p;
@@ -476,7 +476,7 @@ public abstract class AxesDefinition {
         @Override public AxesDefinition create() { final GenET_GenKT_Axes c = new GenET_GenKT_Axes(delta, p, r0); c.copyPasses(this); return c; }
     }
 
-    /* ---- one-pass minimisation from the seeds above ---- */
+    /* ---- one-pass minimization from the seeds above ---- */
 
     public static class OnePass_HalfKT_Axes extends HalfKT_Axes {
         public OnePass_HalfKT_Axes() { setNPass(ONE_PASS); }
@@ -586,7 +586,7 @@ public abstract class AxesDefinition {
         @Override public AxesDefinition create() { final OnePass_Manual_Axes c = new OnePass_Manual_Axes(); c.copyPasses(this); return c; }
     }
 
-    /** Npass minimisations from jiggled kt seeds (randomised). */
+    /** Npass minimizations from jiggled kt seeds (randomized). */
     public static class MultiPass_Axes extends KT_Axes {
         public MultiPass_Axes(int npass) { setNPass(npass); }
         @Override public String shortDescription() { return "MultiPass"; }

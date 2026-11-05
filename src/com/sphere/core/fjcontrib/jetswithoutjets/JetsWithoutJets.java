@@ -26,7 +26,7 @@ import java.util.List;
  * T. Chan and J. Thaler, "Jet Observables Without Jet Algorithms", JHEP 1404
  * (2014) 013, arXiv:1310.7584): event shapes that reproduce jet observables
  * (jet multiplicity, H_T, missing H_T, summed jet masses, trimmed subjet
- * multiplicity...) from particle neighbourhoods instead of clustered jets,
+ * multiplicity...) from particle neighborhoods instead of clustered jets,
  * the trimming built on them (event-shape and jet-shape trimming), the same
  * shapes as functions of every pt cut or of every radius at once, and the
  * jet axes the jet-count density points to.
@@ -379,7 +379,7 @@ public final class JetsWithoutJets {
         }
     }
 
-    /** Event-shape trimming: keeps the particles whose neighbourhood passes the cut and the trimming. */
+    /** Event-shape trimming: keeps the particles whose neighborhood passes the cut and the trimming. */
     public static Selector selectorShapeTrimming(double rjet, double ptcut, double rsub, double fcut) {
         return new Selector(new ShapeTrimmingWorker(rjet, ptcut, rsub, fcut, true));
     }
@@ -588,7 +588,7 @@ public final class JetsWithoutJets {
     /**
      * The jet multiplicity for every R_jet at once,
      * fastjet::jwj::ShapeJetMultiplicity_MultipleRValues: the particle pairs
-     * are removed from the neighbourhoods by decreasing distance, which
+     * are removed from the neighborhoods by decreasing distance, which
      * steps the shape down from R = infinity.
      */
     public static final class ShapeJetMultiplicity_MultipleRValues {
@@ -759,7 +759,7 @@ public final class JetsWithoutJets {
     /**
      * The jet axes of the jet-count density, fastjet::jwj::EventShapeDensity_JetAxes:
      * each particle passing the cut points, through a winner-take-all
-     * clustering of its neighbourhood, to an axis particle; the axes are
+     * clustering of its neighborhood, to an axis particle; the axes are
      * weighted by the pt and jet-count weight pointing to them, and the
      * global consistency condition follows the pointers to stable axes.
      */

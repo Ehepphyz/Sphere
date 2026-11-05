@@ -27,6 +27,7 @@ public class SphereCoderFrame extends JFrame {
      */
     public SphereCoderFrame(File targetFile, boolean primary) {
         setTitle("SphereCoder - " + (targetFile != null ? targetFile.getName() : "Untitled"));
+        com.sphere.utils.IconManager.applyAppIcon(this);
         setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         // Room for the breadcrumbs, the minimap and the panels, without outgrowing the screen.
         Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
@@ -130,6 +131,10 @@ public class SphereCoderFrame extends JFrame {
         if (com.sphere.components.rootview.RootFile.isRootFile(file)) {
             com.sphere.ui.RootViewerFrame.show(file);
             return false;
+        }
+        // A PDF, however large, opens in a :spdf tab of this editor.
+        if (com.sphere.components.SphereCoder.isPdf(file)) {
+            return true;
         }
         if (file.length() > com.sphere.components.editor.EditorFileIO.MAX_OPEN_BYTES) {
             com.sphere.components.editor.LargeFileViewer.show(file);

@@ -33,11 +33,11 @@ import java.util.function.Supplier;
  * <li>several minima: starts chosen as in multi-level single linkage
  *     (Rinnooy Kan and Timmer): quasi-random points, Migrad only from those
  *     with no lower point near them, on several threads when allowed, and a
- *     catalogue of the minima with how many starts reached each.</li>
+ *     catalog of the minima with how many starts reached each.</li>
  * </ul>
  * The function goes through a {@link SmartFCN}: no point is computed twice.
  * Minos runs at any confidence level, the profile follows its valley from the
- * minimum outwards and finds where it crosses the level, and the result ends
+ * minimum outward and finds where it crosses the level, and the result ends
  * with a diagnosis and a verdict.
  */
 public final class Autopilot {
@@ -1196,7 +1196,7 @@ public final class Autopilot {
     }
 
     /**
-     * Profiles parameter par: from the minimum outwards on each side, each
+     * Profiles parameter par: from the minimum outward on each side, each
      * Migrad starting from the previous point's optimum of the others (it
      * follows the valley, and costs a few calls where a cold start costs
      * many); then each crossing of the level refined by regula falsi

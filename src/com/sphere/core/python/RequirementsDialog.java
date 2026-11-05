@@ -13,6 +13,7 @@ public class RequirementsDialog extends JDialog {
 
     public RequirementsDialog(PyEnvManagerDialog owner) {
         super(owner, "Install Requirements", true);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         setLayout(new BorderLayout(10, 10));
         
         PythonEnvService service = owner.getEnvService();

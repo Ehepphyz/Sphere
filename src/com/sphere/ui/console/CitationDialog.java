@@ -50,6 +50,7 @@ final class CitationDialog extends JDialog {
 
     private CitationDialog(Window owner, String title) {
         super(owner, title, ModalityType.MODELESS);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         final ThemePalette p = ThemeManager.getCurrentPalette();
 
         area.setEditable(false);

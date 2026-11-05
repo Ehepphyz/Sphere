@@ -61,6 +61,7 @@ final class ChangesDialog extends JDialog {
     private ChangesDialog(Window owner, String title, String question, List<Change> changes, String saveLabel,
                           String discardLabel) {
         super(owner, title, ModalityType.APPLICATION_MODAL);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         this.chosen = new boolean[changes.size()];
         java.util.Arrays.fill(chosen, true);
 
@@ -350,7 +351,7 @@ final class ChangesDialog extends JDialog {
         return c != null && (c.getRed() + c.getGreen() + c.getBlue()) / 3 < 110;
     }
 
-    /** The text colour against the dialog's own background, whatever the theme gives labels. */
+    /** The text color against the dialog's own background, whatever the theme gives labels. */
     private static Color foreground() {
         final Color bg = UIManager.getColor("Panel.background");
         final boolean darkBg = bg != null && (bg.getRed() + bg.getGreen() + bg.getBlue()) / 3 < 110;

@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * siscone_spherical::CSphstable_cones and sph_hash_cones: the stable-cone
- * search of {@link StableCones} on the sphere, cones being angular discs
+ * search of {@link StableCones} on the sphere, cones being angular disks
  * tested through the tangent of the angle.
  */
 class SphStableCones extends SphVicinity {

@@ -6,7 +6,7 @@ import java.util.Locale;
 
 /**
  * Comparison of two histograms the way stressHistogram's equals() and
- * compareStatistics() do it -- every cell's centre, content and error within a
+ * compareStatistics() do it -- every cell's center, content and error within a
  * relative tolerance, then Chi2Test("WW OF UF") both ways, mean and standard
  * deviation on each axis, sums of weights, entries and effective entries --
  * with, in addition, a list of what differed, so a failed comparison says
@@ -154,7 +154,7 @@ public final class HistCompare {
         return false;
     }
 
-    /** TMath::Nint: the nearest integer, a half going to the even neighbour. */
+    /** TMath::Nint: the nearest integer, a half going to the even neighbor. */
     public static int nint(double x) {
         int i;
         if (x >= 0) {

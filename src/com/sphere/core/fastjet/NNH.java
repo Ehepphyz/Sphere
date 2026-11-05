@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * Nearest-neighbour heuristics, fastjet::NNH: the closest pair of a set of
+ * Nearest-neighbor heuristics, fastjet::NNH: the closest pair of a set of
  * brief jets under any distance, in N^2 time for the first search and N per
  * merging on average after that (Anderberg's algorithm).
  *

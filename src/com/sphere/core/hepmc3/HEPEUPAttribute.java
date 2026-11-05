@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * An LHEF event (HEPEUP) as an event attribute, with the XML tags around it.
  * Parsed from its string, it is rebuilt against the HEPRUP attribute of the
- * run when initialised.
+ * run when initialized.
  */
 public final class HEPEUPAttribute extends Attribute {
 

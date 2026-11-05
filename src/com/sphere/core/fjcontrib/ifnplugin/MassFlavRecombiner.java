@@ -4,11 +4,11 @@ import com.sphere.core.fastjet.FastJetException;
 import com.sphere.core.fastjet.PseudoJet;
 
 /**
- * A flavour recombiner that carries the mass of each object alongside its
- * flavour, fastjet::contrib::MassFlavRecombiner (IFNPlugin's MassFlav.hh):
+ * A flavor recombiner that carries the mass of each object alongside its
+ * flavor, fastjet::contrib::MassFlavRecombiner (IFNPlugin's MassFlav.hh):
  * two objects far forward are recombined after a common rapidity shift, so
  * that the rapidity of the sum stays accurate at rapidities where E and pz
- * have cancelled all their digits. Meant for infrared and collinear safety
+ * have canceled all their digits. Meant for infrared and collinear safety
  * tests with extreme kinematics.
  */
 public class MassFlavRecombiner extends FlavRecombiner {

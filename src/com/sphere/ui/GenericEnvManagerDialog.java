@@ -35,6 +35,7 @@ public class GenericEnvManagerDialog extends JDialog {
      */
     public GenericEnvManagerDialog(Window parent, EnvBackend backend, SettingsManager settings) {
         super(parent, "Sphere Workspace - [" + backend.getDisplayName() + "]", ModalityType.MODELESS);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         this.backend = backend;
         this.settings = settings;
 

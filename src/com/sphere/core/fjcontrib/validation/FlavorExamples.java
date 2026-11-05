@@ -17,24 +17,24 @@ import java.io.BufferedReader;
 import java.util.List;
 
 /**
- * The example programs of the flavour contribs of fjcontrib 1.104:
+ * The example programs of the flavor contribs of fjcontrib 1.104:
  * IFNPlugin 1.0.4, CMPPlugin 1.0.0, GHSAlgo 1.0.0 and SDFPlugin 1.0.1,
  * each on pythia8_Zq_vshort.dat with the arguments make check gives them.
  */
-final class FlavourExamples {
+final class FlavorExamples {
 
     private static final String DATA = "pythia8_Zq_vshort.dat";
     private static final String RULE = "\n#---------------------------------------------------------------\n";
 
-    private FlavourExamples() {
+    private FlavorExamples() {
     }
 
     static List<Example> all() {
         return List.of(
-            Example.of("IFNPlugin", "example-IFN", DATA, FlavourExamples::ifn, "-1", "-1"),
-            Example.of("CMPPlugin", "example-CMP", DATA, FlavourExamples::cmp, "-1", "-1"),
-            Example.of("GHSAlgo", "example-GHS", DATA, FlavourExamples::ghs, "10", "2"),
-            Example.of("SDFPlugin", "example-SDF", DATA, FlavourExamples::sdf, "-1", "-1"));
+            Example.of("IFNPlugin", "example-IFN", DATA, FlavorExamples::ifn, "-1", "-1"),
+            Example.of("CMPPlugin", "example-CMP", DATA, FlavorExamples::cmp, "-1", "-1"),
+            Example.of("GHSAlgo", "example-GHS", DATA, FlavorExamples::ghs, "10", "2"),
+            Example.of("SDFPlugin", "example-SDF", DATA, FlavorExamples::sdf, "-1", "-1"));
     }
 
     /** "pt=... rap=... phi=..., flav = [..]" */
@@ -53,7 +53,7 @@ final class FlavourExamples {
         }
     }
 
-    /** Only b flavour, as the CMP and GHS examples keep. */
+    /** Only b flavor, as the CMP and GHS examples keep. */
     private static Object onlyB(int pdg) {
         return new FlavHistory(new FlavInfo(pdg).onlyFlav(5));
     }
@@ -69,7 +69,7 @@ final class FlavourExamples {
         o.p("base jet definition: ").p(base.description()).endl();
         o.p("IFN jet definition:  ").p(ifnDef.description()).endl();
         for (int iev = 0; iev < 10 && iev < nevmax; iev++) {
-            final List<PseudoJet> event = Events.readFlavourEvent(in, FlavHistory::new);
+            final List<PseudoJet> event = Events.readFlavorEvent(in, FlavHistory::new);
             o.p(RULE).p("# read event ").p(iev).p(" with ").p(event.size()).p(" particles").endl();
             final List<PseudoJet> baseJets = base.cluster(event);
             final List<PseudoJet> ifnJets = ifnDef.cluster(event);
@@ -99,7 +99,7 @@ final class FlavourExamples {
         o.p("base jet definition: ").p(base.description()).endl();
         o.p("CMP jet definition:  ").p(cmpDef.description()).endl();
         for (int iev = 0; iev < 10 && iev < nevmax; iev++) {
-            final List<PseudoJet> event = Events.readFlavourEvent(in, FlavourExamples::onlyB);
+            final List<PseudoJet> event = Events.readFlavorEvent(in, FlavorExamples::onlyB);
             o.p(RULE).p("# read event ").p(iev).p(" with ").p(event.size()).p(" particles").endl();
             final List<PseudoJet> baseJets = base.cluster(event);
             final List<PseudoJet> cmpJets = cmpDef.cluster(event);
@@ -134,7 +134,7 @@ final class FlavourExamples {
             .p(" omega = ").p(omega).endl()
             .p(" (ptcut = ").p(ptcut).p(" GeV)").endl();
         for (int iev = 0; iev < 10 && iev < nevmax; iev++) {
-            final List<PseudoJet> event = Events.readFlavourEvent(in, FlavourExamples::onlyB);
+            final List<PseudoJet> event = Events.readFlavorEvent(in, FlavorExamples::onlyB);
             o.p(RULE).p("# read event ").p(iev).p(" with ").p(event.size()).p(" particles").endl();
             final List<PseudoJet> baseJets = base.cluster(event);
             final List<PseudoJet> ghsJets = GHSAlgo.runGHS(baseJets, ptcut, alpha, omega, flavRecombiner);
@@ -159,7 +159,7 @@ final class FlavourExamples {
         final SDFlavourCalc calc = new SDFlavourCalc();
         for (int iev = 0; iev < 10 && iev < nevmax; iev++) {
             o.p(RULE).p("# read event ").p(iev);
-            final List<PseudoJet> event = Events.readFlavourEvent(in, FlavHistory::new);
+            final List<PseudoJet> event = Events.readFlavorEvent(in, FlavHistory::new);
             o.p(" with ").p(event.size()).p(" particles").endl();
             final List<PseudoJet> baseJets = base.cluster(event);
             o.p("now do the sd...").endl();

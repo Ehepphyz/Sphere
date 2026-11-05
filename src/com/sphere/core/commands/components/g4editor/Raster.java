@@ -52,8 +52,8 @@ final class Raster {
     private final List<LineItem> lines = new ArrayList<>();
     private final List<LineItem> overlayLines = new ArrayList<>();
     private final List<LineItem> backgroundLines = new ArrayList<>();
-    // Splats, volumes a few pixels wide drawn as a shaded square at their centre's depth: (x, y, depth,
-    // half size) and (colour, id), packed
+    // Splats, volumes a few pixels wide drawn as a shaded square at their center's depth: (x, y, depth,
+    // half size) and (color, id), packed
     private float[] splatF = new float[4 * 256];
     private int[] splatI = new int[2 * 256];
     private int splats;
@@ -69,7 +69,7 @@ final class Raster {
 
     private static final class TriItem {
         float[] sx, sy, sd, pd;   // screen x, y, depth key, section-plane distance
-        int[] col, colBack;       // lit colour, front and back
+        int[] col, colBack;       // lit color, front and back
         int[] tri;
         int nv, ntri;
         // What to prepare it from, until it is
@@ -261,7 +261,7 @@ final class Raster {
         clip = false;
     }
 
-    /** Queues a mesh placed in the world, coloured, with an id for picking. */
+    /** Queues a mesh placed in the world, colored, with an id for picking. */
     void mesh(Mesh m, Xform world, int argb, int id, int flags) {
         if (m == null || m.isEmpty()) {
             return;
@@ -722,7 +722,7 @@ final class Raster {
     }
 
     /**
-     * The depth a wireframe is sorted by among the translucent items: its placement's origin, the centre of
+     * The depth a wireframe is sorted by among the translucent items: its placement's origin, the center of
      * a Geant4 solid. Only its lines are drawn, so nearer or farther by a hair changes nothing that shows.
      */
     private double sortKeyOf(Mesh m, double[] r, Vec3 t) {
@@ -841,7 +841,7 @@ final class Raster {
         return 0xFF000000 | (ri << 16) | (gi << 8) | bi;
     }
 
-    /** The colour of a cut face: the material's own, hatched toward the cap colour and darkened. */
+    /** The color of a cut face: the material's own, hatched toward the cap color and darkened. */
     private int capOf(int base) {
         final int m = mix(base | 0xFF000000, capColor, 0.35);
         return mix(m, 0xFF000000, 0.18) | 0xFF000000;
@@ -897,7 +897,7 @@ final class Raster {
         final int bands = Math.max(1, Math.min(h, THREADS * 3));
         fs.clear();
         // Two passes: the silhouettes read the rows next to a band, which belong to its
-        // neighbour, so every band's surfaces must be finished before any outline is drawn.
+        // neighbor, so every band's surfaces must be finished before any outline is drawn.
         for (int bnd = 0; bnd < bands; bnd++) {
             final int y0 = bnd * h / bands, y1 = (bnd + 1) * h / bands;
             fs.add(POOL.submit(() -> surfaces(y0, y1)));
@@ -1063,7 +1063,7 @@ final class Raster {
                         }
                         continue;
                     }
-                    // pixel x has its centre at x + 0.5
+                    // pixel x has its center at x + 0.5
                     final double edge = (-1e-5 - ke) / se - 0.5;
                     if (se > 0) {
                         lo = Math.max(lo, Math.floor(edge) - 1);

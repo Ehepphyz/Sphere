@@ -24,7 +24,7 @@ import java.util.List;
  * The Plots tab of the main window: the last plot, and the ones before it.
  *
  * Two kinds of plot arrive here. The ones Sphere draws itself come in as
- * numbers, and can be restyled afterwards. The ones a script draws come in as
+ * numbers, and can be restyled afterward. The ones a script draws come in as
  * a file, whatever language wrote it, and are shown as the picture they are.
  */
 public final class RootPlotsPanel extends ViewSurface {

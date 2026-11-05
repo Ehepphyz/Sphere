@@ -643,7 +643,7 @@ final class RootMacro {
         return b.append('}').toString();
     }
 
-    /** A colour as ROOT knows it: its index when it is one of ROOT's, else TColor::GetColor. */
+    /** A color as ROOT knows it: its index when it is one of ROOT's, else TColor::GetColor. */
     static String color(Color c) {
         if (c == null) return "1";
         final int index = RootColors.index(c);

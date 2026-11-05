@@ -11,7 +11,7 @@ import com.sphere.core.fjcontrib.energycorrelator.EnergyCorrelator.Strategy;
 /**
  * The observables EnergyCorrelator builds from the ECFs and ECFGs, each
  * under its C++ name: ratios, C1, C2, D2 (A.J. Larkoski, I. Moult and
- * D. Neill, JHEP 12 (2014) 009), generalised D2, the N, M, U and C series
+ * D. Neill, JHEP 12 (2014) 009), generalized D2, the N, M, U and C series
  * and N2, N3, M2, U1, U2, U3 (I. Moult, L. Necib and J. Thaler, JHEP 12
  * (2016) 153). {@code import static ...EnergyCorrelators.*} gives them
  * their bare names.
@@ -153,7 +153,7 @@ public final class EnergyCorrelators {
         }
     }
 
-    /** Generalised D2 = ECFN(3, alpha)/ECFN(2, beta)^(3 alpha/beta). */
+    /** Generalized D2 = ECFN(3, alpha)/ECFN(2, beta)^(3 alpha/beta). */
     public static final class EnergyCorrelatorGeneralizedD2 extends Observable {
         private final double alpha;
 
@@ -285,7 +285,7 @@ public final class EnergyCorrelators {
         }
     }
 
-    /** C_N with normalised ECFs: ECFN(N-1) ECFN(N+1)/ECFN(N)^2. */
+    /** C_N with normalized ECFs: ECFN(N-1) ECFN(N+1)/ECFN(N)^2. */
     public static final class EnergyCorrelatorCseries extends Observable {
         private final int n;
 

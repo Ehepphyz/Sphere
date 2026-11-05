@@ -84,7 +84,7 @@ public final class XzBlock {
 
     /**
      * As much of the start of an .xz stream as the bytes given decode to, at
-     * most limit bytes: what recognising the format of a compressed file needs,
+     * most limit bytes: what recognizing the format of a compressed file needs,
      * from its first kilobytes, without its end.
      */
     public static byte[] decodePrefix(byte[] src, int offset, int length, int limit) {

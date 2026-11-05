@@ -42,7 +42,7 @@ public final class RootPdfGrid {
      *
      * LHAPDF averages the two one-sided slopes without weighting them, which is
      * second order only where the two spacings are equal. Real grids are log
-     * spaced at small x and linearly spaced towards one, so at the join the
+     * spaced at small x and linearly spaced toward one, so at the join the
      * spacings differ and the average loses an order, taking the cubic with it.
      * LHAPDF reproduces that exactly, which is what a result meant to be
      * checked against LHAPDF needs. WEIGHTED uses the three-point estimate for
@@ -650,7 +650,7 @@ public final class RootPdfGrid {
      * Below the smallest x the shape is carried on straight in the logarithms.
      * Below the smallest scale it is not: the rate at which the distribution
      * changes with the scale is measured at the edge, bounded from below, and
-     * then bent towards one as the scale falls, so the distribution goes to
+     * then bent toward one as the scale falls, so the distribution goes to
      * zero at zero scale instead of running away. Above the largest x it
      * refuses, because there is no sense in a momentum fraction above one.
      */
@@ -849,7 +849,7 @@ public final class RootPdfGrid {
         for (int i = 1; i < q2s.length; i++) {
             if (q2s[i] < q2s[i - 1]) {
                 found.add(new Finding(true, String.format(Locale.ROOT,
-                    "The Q knots go backwards: %.6g then %.6g GeV at index %d.",
+                    "The Q knots go backward: %.6g then %.6g GeV at index %d.",
                     Math.sqrt(q2s[i - 1]), Math.sqrt(q2s[i]), i)));
             }
         }

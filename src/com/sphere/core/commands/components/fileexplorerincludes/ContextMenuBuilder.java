@@ -618,6 +618,7 @@ public class ContextMenuBuilder {
         else if (fileNameLower.endsWith(".md")) {
             try {
                 JFrame frame = new JFrame("Editing: " + file.getName());
+                IconManager.applyAppIcon(frame);
                 frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
 
                 MdTexEditor mdEditor = new MdTexEditor();

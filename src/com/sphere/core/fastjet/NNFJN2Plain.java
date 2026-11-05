@@ -6,8 +6,8 @@ import java.util.function.Function;
 
 /**
  * fastjet::NNFJN2Plain: the closest pair under a distance of FastJet's
- * factorised form, d_ij = min(m_i, m_j) g_ij, d_iB = m_i g_iB, which lets the
- * nearest neighbours be found on g alone, as in the N2Plain strategy of the
+ * factorized form, d_ij = min(m_i, m_j) g_ij, d_iB = m_i g_iB, which lets the
+ * nearest neighbors be found on g alone, as in the N2Plain strategy of the
  * kt-type algorithms. Used like {@link NNH}.
  *
  * Under {@link Precision#DD} the d_iJ = g m products are made to 106 bits;

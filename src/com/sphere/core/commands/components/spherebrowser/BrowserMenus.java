@@ -64,7 +64,7 @@ final class BrowserMenus {
     }
 
     /**
-     * A menu bar in the theme's colours: the look and feel leaves the labels
+     * A menu bar in the theme's colors: the look and feel leaves the labels
      * of a bar's menus in a dark ink whatever the theme, unreadable on a dark
      * panel; each is given the ink that reads on the bar.
      */
@@ -426,13 +426,14 @@ final class BrowserMenus {
 
     private static void window(JComponent parent, String title, JComponent body) {
         final JDialog d = new JDialog(SwingUtilities.getWindowAncestor(parent), title, java.awt.Dialog.ModalityType.MODELESS);
+        com.sphere.utils.IconManager.applyAppIcon(d);
         d.getContentPane().add(body);
         d.pack();
         d.setLocationRelativeTo(parent);
         d.setVisible(true);
     }
 
-    /** ROOT's colour table: the basic colours, the wheel, with their indices and names. */
+    /** ROOT's color table: the basic colors, the wheel, with their indices and names. */
     static void colors(JComponent parent) {
         final List<Map.Entry<Integer, Color>> all = new ArrayList<>(RootColors.all().entrySet());
         final int cols = 20;
@@ -840,7 +841,7 @@ final class BrowserMenus {
 
     /**
      * TFile::DrawMap: the file as rows of bytes, each record a box of its
-     * class's colour where it sits; the legend names the classes and how
+     * class's color where it sits; the legend names the classes and how
      * much of the file each takes.
      */
     static RootScene drawMap(RootFile f) throws IOException {
@@ -864,11 +865,11 @@ final class BrowserMenus {
         p.uy1 = -0.08 * nrows / 0.84;
         p.uy2 = nrows + 0.08 * nrows / 0.84;
         final Map<String, Long> bytesByClass = new LinkedHashMap<>();
-        final Map<String, Color> colourOf = new LinkedHashMap<>();
+        final Map<String, Color> colorOf = new LinkedHashMap<>();
         for (RootKey k : keys) {
             final String cls = k.className;
-            colourOf.computeIfAbsent(cls, c -> RootColors.color(new int[]{2, 3, 4, 6, 7, 8, 9, 28, 30, 38, 41, 42, 46, 49}
-                [colourOf.size() % 14]));
+            colorOf.computeIfAbsent(cls, c -> RootColors.color(new int[]{2, 3, 4, 6, 7, 8, 9, 28, 30, 38, 41, 42, 46, 49}
+                [colorOf.size() % 14]));
             bytesByClass.merge(cls, (long) k.nbytes, Long::sum);
             long from = k.seekKey;
             final long to = k.seekKey + k.nbytes;
@@ -884,9 +885,9 @@ final class BrowserMenus {
                 box.x2 = end - r * row;
                 box.y1 = nrows - r - 0.9;
                 box.y2 = nrows - r - 0.1;
-                box.fill = colourOf.get(cls);
+                box.fill = colorOf.get(cls);
                 box.fillStyle = 1001;
-                box.line = colourOf.get(cls).darker();
+                box.line = colorOf.get(cls).darker();
                 p.items.add(box);
                 from = end;
             }
@@ -898,10 +899,10 @@ final class BrowserMenus {
         legend.x1 = 0.74;
         legend.x2 = 0.99;
         legend.y2 = 0.92;
-        legend.y1 = Math.max(0.08, 0.92 - 0.045 * (colourOf.size() + 1));
+        legend.y1 = Math.max(0.08, 0.92 - 0.045 * (colorOf.size() + 1));
         legend.header = "bytes by class";
         legend.border = 1;
-        for (Map.Entry<String, Color> c : colourOf.entrySet()) {
+        for (Map.Entry<String, Color> c : colorOf.entrySet()) {
             final RootScene.Entry e = new RootScene.Entry();
             e.text = String.format(Locale.ROOT, "%s  %.1f%%", c.getKey(), 100.0 * bytesByClass.get(c.getKey()) / size);
             e.option = "f";

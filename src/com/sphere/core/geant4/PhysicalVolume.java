@@ -206,7 +206,7 @@ public final class PhysicalVolume {
 
     /**
      * The daughter-to-mother transform of one copy. For a replica, as
-     * G4ReplicaNavigation::ComputeTransformation: Cartesian copies centred on
+     * G4ReplicaNavigation::ComputeTransformation: Cartesian copies centered on
      * the mother, phi copies rotated by -(offset + width (i + 1/2)).
      */
     public Xform copyTransform(int i) {

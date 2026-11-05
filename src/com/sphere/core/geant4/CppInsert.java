@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 
 /**
  * C++ for volumes drawn in 3D or brought from a G4editor design, written into code that already
- * exists: each volume with what was given to it (solid and its expressions, material, colour,
+ * exists: each volume with what was given to it (solid and its expressions, material, color,
  * visibility, wireframe, sensitivity, position, rotation, mirror, copy number, replicas) and the
  * volumes it holds. The design's variables become {@code const G4double}; every name is new to
  * the code it goes into, a variable already taken there renamed in the expressions that read it.
@@ -305,21 +305,21 @@ public final class CppInsert {
     }
 
     /**
-     * How a volume is drawn, as one expression: its colour, hidden or not, and its wireframe (set in an
+     * How a volume is drawn, as one expression: its color, hidden or not, and its wireframe (set in an
      * immediately called lambda, G4VisAttributes having no constructor for it).
      */
     public static String vis(LogicalVolume lv) {
         final int c = lv.color();
-        final String colour = "G4Colour(" + f(((c >> 16) & 0xFF) / 255.0) + ", " + f(((c >> 8) & 0xFF) / 255.0) + ", "
+        final String color = "G4Colour(" + f(((c >> 16) & 0xFF) / 255.0) + ", " + f(((c >> 8) & 0xFF) / 255.0) + ", "
             + f((c & 0xFF) / 255.0) + (((c >>> 24) & 0xFF) == 255 ? "" : ", " + f(((c >>> 24) & 0xFF) / 255.0)) + ")";
         if (!lv.wireframe()) {
-            return "new G4VisAttributes(" + (lv.visible() ? "" : "false, ") + colour + ")";
+            return "new G4VisAttributes(" + (lv.visible() ? "" : "false, ") + color + ")";
         }
-        return "[] { auto* va = new G4VisAttributes(" + (lv.visible() ? "" : "false, ") + colour
+        return "[] { auto* va = new G4VisAttributes(" + (lv.visible() ? "" : "false, ") + color
             + "); va->SetForceWireframe(true); return va; }()";
     }
 
-    /** Three decimals, enough for a colour read back to the same byte: 0.500 is 0.5, 1.000 is 1. */
+    /** Three decimals, enough for a color read back to the same byte: 0.500 is 0.5, 1.000 is 1. */
     private static String f(double v) {
         return String.format(Locale.ROOT, "%.3f", v).replaceAll("0+$", "");
     }

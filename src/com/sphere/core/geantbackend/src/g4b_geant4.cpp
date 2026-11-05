@@ -2,18 +2,22 @@
 //
 // The Geant4 side of geant4-bridge: reading a GDML design, Geant4's own
 // overlap check, NIST materials, navigation, geantino scans of the material
-// budget, and runs with a particle gun that report energy deposits per volume
-// and the trajectories of the first events.
+// budget, and runs with a particle gun, in a uniform magnetic field if asked,
+// that report energy deposits per volume and per copy of a volume, where the
+// steps were taken (by volume, by particle) and the trajectories of the first
+// events.
 //
 // Everything runs on the engine's main thread, with a serial run manager:
 // Geant4's kernel is driven by one thread here, the way an application's
 // main() drives it.
 
+#include "g4b_score.h"
 #include "g4b_service.h"
 
 #include "G4Event.hh"
 #include "G4EnvironmentUtils.hh"
 #include "G4Exception.hh"
+#include "G4FieldManager.hh"
 #include "G4GDMLParser.hh"
 #include "G4GeometryManager.hh"
 #include "G4LogicalVolume.hh"
@@ -21,6 +25,7 @@
 #include "G4Material.hh"
 #include "G4Navigator.hh"
 #include "G4NistManager.hh"
+#include "G4ParticleDefinition.hh"
 #include "G4ParticleGun.hh"
 #include "G4ParticleTable.hh"
 #include "G4PhysListFactory.hh"
@@ -34,7 +39,9 @@
 #include "G4SystemOfUnits.hh"
 #include "G4TouchableHistory.hh"
 #include "G4Track.hh"
+#include "G4TransportationManager.hh"
 #include "G4UImanager.hh"
+#include "G4UniformMagField.hh"
 #include "G4UIsession.hh"
 #include "G4UserEventAction.hh"
 #include "G4UserSteppingAction.hh"
@@ -173,9 +180,34 @@ struct RunData {
   bool truncated = false;
   int eventsDone = 0, eventsWanted = 0;
   Context *ctx = nullptr;
+  // where the steps go, and the energy of each copy of a volume (g4b_score.h)
+  StepProfile profile;
+  CopyEnergy copies;
+  std::chrono::steady_clock::time_point eventStart;
 };
 
 RunData g_run;
+
+/**
+ * A uniform magnetic field over the whole world, or none: set before each run as /globalField/setValue
+ * would, so that charged trajectories curve. The field a run left stays alive: the chord finder made for it
+ * keeps pointing at it until the next one replaces it.
+ */
+void setField(const G4ThreeVector &b) {
+  static std::unique_ptr<G4UniformMagField> field;
+  G4FieldManager *fm = G4TransportationManager::GetTransportationManager()->GetFieldManager();
+  if (b.mag2() == 0) {
+    fm->SetDetectorField(nullptr);
+    return;
+  }
+  if (field && fm->GetDetectorField() == field.get() && field->GetConstantFieldValue() == b) {
+    return;
+  }
+  auto next = std::make_unique<G4UniformMagField>(b);
+  fm->SetDetectorField(next.get());
+  fm->CreateChordFinder(next.get());
+  field = std::move(next);
+}
 
 class Gun : public G4VUserPrimaryGeneratorAction {
 public:
@@ -212,7 +244,8 @@ class Events : public G4UserEventAction {
 public:
   void BeginOfEventAction(const G4Event *) override {
     g_run.eventEdep.clear();
-    if (g_run.ctx != nullptr && g_run.ctx->cancelled()) {
+    g_run.eventStart = std::chrono::steady_clock::now();
+    if (g_run.ctx != nullptr && g_run.ctx->canceled()) {
       G4RunManager::GetRunManager()->AbortRun(true);
     }
   }
@@ -222,6 +255,9 @@ public:
       g_run.sum2[lv] += e * e;
       g_run.hits[lv] += 1;
     }
+    g_run.copies.endEvent();
+    g_run.profile.event(
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_run.eventStart).count());
     ++g_run.eventsDone;
     const int every = std::max(1, g_run.eventsWanted / 50);
     if (g_run.ctx != nullptr && g_run.eventsDone % every == 0) {
@@ -236,14 +272,22 @@ public:
   void UserSteppingAction(const G4Step *step) override {
     const G4StepPoint *pre = step->GetPreStepPoint();
     const G4VPhysicalVolume *pv = pre->GetPhysicalVolume();
+    const G4Track *t = step->GetTrack();
     const double edep = step->GetTotalEnergyDeposit();
-    if (pv != nullptr && edep > 0) {
-      g_run.eventEdep[pv->GetLogicalVolume()] += edep;
+    if (pv != nullptr) {
+      g_run.profile.step(pv->GetLogicalVolume(), t->GetDefinition(), step->GetStepLength());
+      if (edep > 0) {
+        g_run.eventEdep[pv->GetLogicalVolume()] += edep;
+        // the copy the step was in: a layer of a replica or a placement of a loop alike
+        g_run.copies.deposit(pv->GetLogicalVolume(), pre->GetTouchableHandle()->GetCopyNumber(), edep);
+      }
+    }
+    if (t->GetCurrentStepNumber() == 1) {
+      g_run.profile.track(t->GetDefinition());
     }
     if (g_run.eventsDone >= g_run.trackEvents || g_run.truncated) {
       return;
     }
-    const G4Track *t = step->GetTrack();
     auto it = g_run.trackIndex.find(t->GetTrackID());
     if (it == g_run.trackIndex.end()) {
       if (t->GetVertexKineticEnergy() < g_run.minTrackEnergy) {
@@ -385,7 +429,7 @@ Json cmdLoad(const Json &a, Context &) {
     throw Failure("load needs 'path' or 'text'");
   }
   if (g_runManager != nullptr && g_world != nullptr) {
-    // Geant4 cannot swap the world under an initialised kernel safely: the
+    // Geant4 cannot swap the world under an initialized kernel safely: the
     // client restarts the engine, which takes a second.
     throw Failure("restart: the geometry of an initialized run manager cannot be replaced; restart the bridge");
   }
@@ -446,7 +490,7 @@ Json cmdOverlaps(const Json &a, Context &ctx) {
     if (i % 20 == 0) {
       ctx.progress(static_cast<double>(i) / n, "checking " + pv->GetName());
     }
-    if (ctx.cancelled()) {
+    if (ctx.canceled()) {
       break;
     }
   }
@@ -551,7 +595,7 @@ Json cmdScan(const Json &a, Context &ctx) {
     paths.push(path);
     if (i % 200 == 0) {
       ctx.progress(static_cast<double>(i) / dirs.size(), "ray " + std::to_string(i));
-      if (ctx.cancelled()) {
+      if (ctx.canceled()) {
         break;
       }
     }
@@ -619,6 +663,8 @@ Json cmdRun(const Json &a, Context &ctx) {
   if (g_handler != nullptr) {
     g_handler->warnings.clear();
   }
+  const G4ThreeVector field = vec(a["field_T"], {0, 0, 0}) * tesla;
+  setField(field);
   const auto t0 = std::chrono::steady_clock::now();
   g_runManager->BeamOn(events);
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -667,6 +713,17 @@ Json cmdRun(const Json &a, Context &ctx) {
   }
   j.set("tracks", tracks);
   j.set("truncated", g_run.truncated);
+  Json b = Json::array();
+  for (int k = 0; k < 3; ++k) {
+    b.push(field[k] / tesla);
+  }
+  j.set("field_T", b);
+  const Namer volume = [](const void *v) { return std::string(static_cast<const G4LogicalVolume *>(v)->GetName()); };
+  const Namer particle = [](const void *p) {
+    return std::string(static_cast<const G4ParticleDefinition *>(p)->GetParticleName());
+  };
+  j.set("profile", g_run.profile.json(volume, particle));
+  j.set("copies", g_run.copies.json(volume, MeV));
   Json w = Json::array();
   if (g_handler != nullptr) {
     for (const auto &s : g_handler->warnings) {
@@ -729,7 +786,8 @@ void registerGeant4() {
   r.add("locate", "the volumes holding a point: {point:[x,y,z] mm}", cmdLocate);
   r.add("scan", "geantino material budget: {origin, directions} or {axis:eta|theta, min, max, n, nphi}", cmdScan);
   r.add("run", "beamOn with a particle gun: {events, particle, energy_MeV, position_mm, direction, spread_rad, spot_mm, "
-               "physics, trackEvents, maxPoints, seed}", cmdRun);
+               "physics, trackEvents, maxPoints, seed, field_T:[bx,by,bz]}; answers the energy per volume and per "
+               "copy, the steps by volume and by particle, the trajectories", cmdRun);
   r.add("ui", "a Geant4 UI command: {command}", cmdUi);
   r.add("mass", "G4LogicalVolume::GetMass: {volume}", cmdMass);
   r.add("export", "write the loaded world back as GDML: {path}", cmdExport);

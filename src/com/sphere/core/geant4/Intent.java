@@ -10,11 +10,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Reads a sentence, in French or English, into console commands. It knows
- * the words of detector building (layer, plate, wall, cylinder, sphere,
- * calorimeter, tracker...), materials by their common names (lead, plomb,
- * silicon, eau, scintillator...), dimensions by what they measure
- * (thickness, radius, length, diameter...) and positions ("at z = 10 cm").
+ * Reads an English sentence into console commands. It knows the words of
+ * detector building (layer, plate, wall, cylinder, sphere, calorimeter,
+ * tracker...), materials by their common names (lead, silicon, water,
+ * scintillator...), dimensions by what they measure (thickness, radius,
+ * length, diameter...) and positions ("at z = 10 cm").
  *
  * It is deliberately a reader, not a guesser: what it understood is printed
  * as the exact commands before they run, so the console teaches its own
@@ -35,47 +35,47 @@ public final class Intent {
     private static final Map<String, String> MATERIALS = new LinkedHashMap<>();
 
     static {
-        m("G4_Pb", "lead", "plomb", "pb");
-        m("G4_W", "tungsten", "tungstene", "wolfram");
-        m("G4_Fe", "iron", "fer");
-        m("G4_STAINLESS-STEEL", "steel", "acier", "inox", "stainless");
-        m("G4_Cu", "copper", "cuivre");
-        m("G4_Al", "aluminium", "aluminum", "alu");
-        m("G4_Si", "silicon", "silicium");
+        m("G4_Pb", "lead", "pb");
+        m("G4_W", "tungsten", "wolfram");
+        m("G4_Fe", "iron");
+        m("G4_STAINLESS-STEEL", "steel", "stainless", "stainless steel");
+        m("G4_Cu", "copper");
+        m("G4_Al", "aluminum");
+        m("G4_Si", "silicon");
         m("G4_Ge", "germanium");
         m("G4_Au", "gold");
-        m("G4_Ag", "silver", "argent");
-        m("G4_Ti", "titanium", "titane");
+        m("G4_Ag", "silver");
+        m("G4_Ti", "titanium");
         m("G4_Be", "beryllium");
-        m("G4_C", "carbon", "carbone");
+        m("G4_C", "carbon");
         m("G4_GRAPHITE", "graphite");
         m("G4_U", "uranium");
-        m("G4_WATER", "water", "eau");
+        m("G4_WATER", "water");
         m("G4_AIR", "air");
-        m("G4_Galactic", "vacuum", "vide", "galactic");
-        m("G4_PLASTIC_SC_VINYLTOLUENE", "scintillator", "scintillateur", "plastic scintillator", "scintillateur plastique");
-        m("G4_PbWO4", "pbwo4", "lead tungstate", "tungstate de plomb");
+        m("G4_Galactic", "vacuum", "galactic");
+        m("G4_PLASTIC_SC_VINYLTOLUENE", "scintillator", "plastic scintillator");
+        m("G4_PbWO4", "pbwo4", "lead tungstate");
         m("G4_BGO", "bgo");
-        m("G4_CESIUM_IODIDE", "csi", "cesium iodide", "iodure de cesium");
-        m("G4_SODIUM_IODIDE", "nai", "sodium iodide", "iodure de sodium");
-        m("G4_GLASS_LEAD", "lead glass", "verre au plomb");
-        m("G4_GLASS_PLATE", "glass", "verre");
-        m("G4_lAr", "liquid argon", "argon liquide", "lar");
-        m("G4_lXe", "liquid xenon", "xenon liquide", "lxe");
+        m("G4_CESIUM_IODIDE", "csi", "cesium iodide");
+        m("G4_SODIUM_IODIDE", "nai", "sodium iodide");
+        m("G4_GLASS_LEAD", "lead glass");
+        m("G4_GLASS_PLATE", "glass");
+        m("G4_lAr", "liquid argon", "lar");
+        m("G4_lXe", "liquid xenon", "lxe");
         m("G4_Ar", "argon");
         m("G4_Xe", "xenon");
         m("G4_He", "helium");
         m("G4_KAPTON", "kapton", "polyimide");
         m("G4_MYLAR", "mylar");
-        m("G4_POLYETHYLENE", "polyethylene", "polyethylene", "pe");
+        m("G4_POLYETHYLENE", "polyethylene", "pe");
         m("G4_PLEXIGLASS", "plexiglass", "pmma", "acrylic");
-        m("G4_CONCRETE", "concrete", "beton");
+        m("G4_CONCRETE", "concrete");
         m("G4_TEFLON", "teflon", "ptfe");
         m("G4_NYLON-6-6", "nylon");
-        m("G4_BONE_COMPACT_ICRU", "bone", "os");
-        m("G4_TISSUE_SOFT_ICRP", "tissue", "tissu", "soft tissue");
+        m("G4_BONE_COMPACT_ICRU", "bone");
+        m("G4_TISSUE_SOFT_ICRP", "tissue", "soft tissue");
         m("G4_MUSCLE_SKELETAL_ICRP", "muscle");
-        m("G4_LITHIUM_FLUORIDE", "lif");
+        m("G4_LITHIUM_FLUORIDE", "lif", "lithium fluoride");
     }
 
     private static void m(String nist, String... words) {
@@ -84,7 +84,7 @@ public final class Intent {
         }
     }
 
-    /** The NIST material for a common name ("lead", "plomb", "G4_Pb", "Pb"), or null. */
+    /** The NIST material for a common name ("lead", "G4_Pb", "Pb"), or null. */
     public static String material(String word) {
         if (word == null) {
             return null;
@@ -100,13 +100,15 @@ public final class Intent {
     }
 
     private static final String NUM = "([-+]?[0-9]+(?:[.,][0-9]+)?(?:[eE][-+]?[0-9]+)?)";
-    private static final String UNIT = "(mm|cm|dm|m|km|um|µm|μm|microns?|micrometres?|micrometers?|nm|deg|degres?|degrees?|rad|mrad)";
+    private static final String UNIT = "(mm|cm|dm|m|km|um|µm|μm|microns?|micrometers?|nm|deg|degrees?|rad|mrad)";
     private static final Pattern QUANTITY = Pattern.compile(NUM + "\\s*" + UNIT + "\\b");
     private static final Pattern DIMS = Pattern.compile(NUM + "\\s*" + UNIT + "?\\s*[x×*]\\s*" + NUM + "\\s*" + UNIT
         + "?\\s*(?:[x×*]\\s*" + NUM + "\\s*" + UNIT + "?)?");
     private static final Pattern COORD = Pattern.compile("\\b([xyz])\\s*=\\s*" + NUM + "\\s*" + UNIT + "?");
-    private static final Pattern COUNT = Pattern.compile("\\b([0-9]+)\\s+(couches?|layers?|plans?|planes?|plaques?|plates?|"
-        + "copies|exemplaires|cylindres?|cylinders?|tubes?|crystals?|cristaux|boites?|boxes?|modules?|disques?|disks?)");
+    /** "10 layers", "6 silicon planes", "3 thin lead plates": a count, up to two words (not units) before the noun. */
+    private static final Pattern COUNT = Pattern.compile("\\b([0-9]+)\\s+(?:(?!(?:mm|cm|dm|m|km|um|nm|microns?|"
+        + "micrometers?|deg|degrees?|rad|mrad|x)\\b)[a-z]+\\s+){0,2}?(layers?|planes?|plates?|copies|cylinders?|tubes?|"
+        + "crystals?|boxes?|modules?|disks?|slabs?|sheets?|foils?|blocks?|bricks?|walls?)\\b");
 
     static String fold(String s) {
         final String n = Normalizer.normalize(s, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
@@ -118,8 +120,8 @@ public final class Intent {
             return null;
         }
         return switch (u) {
-            case "µm", "μm", "micron", "microns", "micrometre", "micrometres", "micrometer", "micrometers" -> "um";
-            case "degre", "degres", "degree", "degrees" -> "deg";
+            case "µm", "μm", "micron", "microns", "micrometer", "micrometers" -> "um";
+            case "degree", "degrees" -> "deg";
             case "dm" -> "decimeter";
             default -> u;
         };
@@ -137,56 +139,57 @@ public final class Intent {
         final List<String> out = new ArrayList<>();
 
         // Actions on the document first
-        if (has(s, "chevauchement", "overlap", "verifie", "check")) {
+        if (has(s, "overlap", "check")) {
             out.add("check");
             return out;
         }
-        if (has(s, "budget", "x/x0", "radiation length", "longueur de radiation")) {
+        if (has(s, "budget", "x/x0", "radiation length")) {
             out.add("budget");
             return out;
         }
-        if (has(s, "masse", "mass", "poids", "weight")) {
+        if (has(s, "mass", "weight")) {
             out.add("mass");
             return out;
         }
-        if (has(s, "conseil", "advice", "advise", "analyse", "analyze", "analyse le", "que penses")) {
+        if (has(s, "advice", "advise", "analyze", "analysis", "review", "what do you think")) {
             out.add("advise");
             return out;
         }
-        if (has(s, "ajuste le monde", "fit the world", "world fit", "agrandis le monde", "resize the world", "adapte le monde")) {
+        if (has(s, "fit the world", "world fit", "resize the world", "adjust the world", "grow the world",
+            "shrink the world")) {
             out.add("world fit");
             return out;
         }
-        if (has(s, "annule", "undo")) {
+        if (has(s, "undo")) {
             out.add("undo");
             return out;
         }
         final String named = namedObject(s);
         if (named != null) {
-            if (has(s, "supprime", "efface", "enleve", "delete", "remove")) {
+            if (has(s, "delete", "remove", "erase")) {
                 out.add("delete " + named);
                 return out;
             }
-            if (has(s, "sensible", "sensitive", "detecteur actif")) {
+            if (has(s, "sensitive", "active detector")) {
                 out.add("sensitive " + named);
                 return out;
             }
-            if (has(s, "cache", "hide", "masque")) {
+            if (has(s, "hide")) {
                 out.add("hide " + named);
                 return out;
             }
-            if (has(s, "montre", "affiche", "show")) {
+            if (has(s, "show", "display")) {
                 out.add("show " + named);
                 return out;
             }
-            if (has(s, "deplace", "bouge", "move", "translate", "shift")) {
+            if (has(s, "move", "translate", "shift")) {
                 final String[] d = axisAmount(s, lengthUnit, "mm");
                 if (d != null) {
                     out.add("move " + named + " " + d[0] + " " + d[1] + " " + d[2]);
                     return out;
                 }
             }
-            if (has(s, "tourne", "pivote", "rotate", "turn")) {
+            if (has(s, "rotate", "turn")) {
                 final String[] d = axisAmount(s, "deg", "deg");
                 if (d != null) {
                     out.add("rotate " + named + " " + d[0] + " " + d[1] + " " + d[2]);
@@ -194,11 +197,11 @@ public final class Intent {
                 }
             }
             final String mat = findMaterial(s);
-            if (mat != null && has(s, "en ", "materiau", "material", "make", "change", "fais", "mets", "set")) {
+            if (mat != null && has(s, "material", "make", "change", "set", "made of", " into ", " to ", " in ")) {
                 out.add("set " + named + ".material = " + mat);
                 return out;
             }
-            if (has(s, "info", "decris", "describe", "c'est quoi", "what is")) {
+            if (has(s, "info", "describe", "what is")) {
                 out.add("info " + named);
                 return out;
             }
@@ -221,7 +224,7 @@ public final class Intent {
             if (mats.size() > 1) {
                 b.append(" active=").append(mats.get(1)[0]);
             }
-            // "plomb 2 mm scintillateur 5 mm": the quantity after each material
+            // "lead 2 mm, scintillator 5 mm": the quantity after each material
             if (mats.size() >= 1) {
                 final String a = quantityAfter(s, mats.get(0)[1], lengthUnit);
                 if (a != null) {
@@ -234,7 +237,7 @@ public final class Intent {
                     b.append(" act=").append(a);
                 }
             }
-            final String size = measured(s, lengthUnit, "taille", "size", "cote", "side", "largeur", "width");
+            final String size = measured(s, lengthUnit, "size", " side", "width");
             if (size != null) {
                 b.append(" size=").append(size);
             } else if (mats.isEmpty() && !qs.isEmpty()) {
@@ -244,23 +247,23 @@ public final class Intent {
             out.add(b.toString());
             return out;
         }
-        if (has(s, "trajectographe", "tracker", "barrel", "tonneau")) {
+        if (has(s, "tracker", "barrel")) {
             final StringBuilder b = new StringBuilder("template tracker");
             if (count != null) {
                 b.append(" layers=").append(count);
             }
             final List<String> qs = quantities(s, lengthUnit);
-            final Matcher range = Pattern.compile("(?:de|from)\\s+" + NUM + "\\s*" + UNIT + "?\\s+(?:a|to)\\s+" + NUM + "\\s*" + UNIT)
-                .matcher(s);
+            final Matcher range = Pattern.compile("(?:from|between)\\s+" + NUM + "\\s*" + UNIT + "?\\s+(?:to|and)\\s+" + NUM
+                + "\\s*" + UNIT).matcher(s);
             if (range.find()) {
                 b.append(" r0=").append(q(range.group(1), range.group(2) != null ? range.group(2) : range.group(4), lengthUnit));
                 b.append(" rmax=").append(q(range.group(3), range.group(4), lengthUnit));
             }
-            final String t = measured(s, lengthUnit, "epaisseur", "thickness", "epais", "thick");
+            final String t = measured(s, lengthUnit, "thickness", "thick");
             if (t != null) {
                 b.append(" thickness=").append(t);
             }
-            final String l = measured(s, lengthUnit, "longueur", "length", "long");
+            final String l = measured(s, lengthUnit, "length", " long");
             if (l != null) {
                 b.append(" length=").append(l);
             }
@@ -273,16 +276,16 @@ public final class Intent {
             out.add(b.toString());
             return out;
         }
-        if (has(s, "telescope") || (count != null && has(s, "plans", "planes") && material != null)) {
+        if (has(s, "telescope") || (count != null && has(s, "planes") && material != null)) {
             final StringBuilder b = new StringBuilder("template telescope");
             if (count != null) {
                 b.append(" planes=").append(count);
             }
-            final String p = measured(s, lengthUnit, "espaces de", "espacees de", "espaces", "spaced", "pitch", "pas de", "tous les", "every");
+            final String p = measured(s, lengthUnit, "spaced by", "spaced", "pitch", "every", "apart");
             if (p != null) {
                 b.append(" pitch=").append(p);
             }
-            final String t = measured(s, lengthUnit, "epaisseur", "thickness", "epais", "thick");
+            final String t = measured(s, lengthUnit, "thickness", "thick");
             if (t != null) {
                 b.append(" thickness=").append(t);
             }
@@ -292,9 +295,9 @@ public final class Intent {
             out.add(b.toString());
             return out;
         }
-        if (has(s, "blindage", "shield")) {
+        if (has(s, "shield")) {
             final StringBuilder b = new StringBuilder("template shield");
-            final String t = measured(s, lengthUnit, "epaisseur", "thickness", "epais", "thick");
+            final String t = measured(s, lengthUnit, "thickness", "thick");
             if (t != null) {
                 b.append(" thickness=").append(t);
             }
@@ -304,11 +307,11 @@ public final class Intent {
             out.add(b.toString());
             return out;
         }
-        if (has(s, "fantome", "phantom")) {
+        if (has(s, "phantom")) {
             out.add("template phantom");
             return out;
         }
-        if (has(s, " tpc", "chambre a projection", "time projection")) {
+        if (has(s, " tpc", "time projection")) {
             out.add("template tpc" + (material != null ? " gas=" + material : ""));
             return out;
         }
@@ -317,30 +320,32 @@ public final class Intent {
         final String mat = material != null ? material : defaultMaterial;
         final String at = position(s, lengthUnit);
         String shape = null;
-        if (has(s, "couche", "layer", "plaque", "plate", "slab", "mur ", "wall", "feuille", "foil", "boite", "box", "bloc",
-            "block", "cube", "brique", "brick", "pave", "tranche")) {
+        if (has(s, "layer", "plate", "slab", "wall", "foil", "sheet", "box", "block", "cube", "brick", "slice",
+            "absorber")) {
             shape = "box";
-        } else if (has(s, "cylindre", "cylinder", "tube", "tuyau", "pipe", "disque", "disk", "anneau", "ring", "barre ronde")) {
+        } else if (has(s, "cylinder", "tube", "pipe", "disk", " ring", " rod")) {
             shape = "tube";
-        } else if (has(s, "sphere", "boule", "ball", "bille", "orb")) {
+        } else if (has(s, "sphere", "ball", "bead", " orb")) {
             shape = "sphere";
-        } else if (has(s, "cone")) {
+        } else if (has(s, " cone")) {
             shape = "cone";
-        } else if (has(s, "tore", "torus", "donut")) {
+        } else if (has(s, "torus", "donut")) {
             shape = "torus";
         }
         if (shape == null) {
             return out;
         }
-        final String thick = measured(s, lengthUnit, "epaisseur", "thickness", "epaisse", "epais", "thick", "de profondeur");
-        final String radius = measured(s, lengthUnit, "rayon", "radius");
-        final String diameter = measured(s, lengthUnit, "diametre", "diameter");
-        final String length = measured(s, lengthUnit, "longueur", "length", "long", "longue", "hauteur", "height", "haut");
-        final String width = measured(s, lengthUnit, "largeur", "width", "large", "cote", "side");
-        final String inner = measured(s, lengthUnit, "rayon interieur", "inner radius", "rayon interne", "trou de", "hole");
+        final String thick = measured(s, lengthUnit, "thickness", "thick", "deep", "depth");
+        final String radius = measured(s, lengthUnit, "outer radius", "radius");
+        final String diameter = measured(s, lengthUnit, "diameter");
+        final String length = measured(s, lengthUnit, "length", " long", "height", " high", " tall");
+        final String width = measured(s, lengthUnit, "width", " wide", " side");
+        final String inner = measured(s, lengthUnit, "inner radius", " bore", " hole");
         final List<String> qs = quantities(s, lengthUnit);
         final Matcher dims = DIMS.matcher(s);
         final String name = nameFor(shape, s);
+        // the depth along z of one, which a stack of them is spaced by when no spacing is said
+        String depth = null;
         switch (shape) {
             case "box" -> {
                 String x, y, z;
@@ -355,11 +360,12 @@ public final class Intent {
                     final String side = width != null ? width : defaultSide(lengthUnit);
                     x = side;
                     y = side;
-                    // "une couche de plomb de 2 mm": the one length given is the thickness
+                    // "a 2 mm lead layer": the one length given is the thickness
                     z = thick != null ? thick : !qs.isEmpty() && width == null ? qs.get(0)
                         : qs.size() > 1 ? qs.get(1) : "1*cm";
                 }
                 out.add("box " + name + " " + x + " " + y + " " + z + " " + mat + at);
+                depth = z;
             }
             case "tube" -> {
                 String r = radius != null ? radius : diameter != null ? "(" + diameter + ")/2" : null;
@@ -372,6 +378,7 @@ public final class Intent {
                 }
                 out.add("tube " + name + " " + (r == null ? "5*cm" : r) + " " + (l == null ? "10*cm" : l)
                     + (inner != null ? " rmin=" + inner : "") + " " + mat + at);
+                depth = l == null ? "10*cm" : l;
             }
             case "sphere" -> {
                 String r = radius != null ? radius : diameter != null ? "(" + diameter + ")/2" : qs.isEmpty() ? "5*cm" : qs.get(0);
@@ -387,12 +394,13 @@ public final class Intent {
                 out.add("torus " + name + " " + rt + " " + rm + " " + mat + at);
             }
         }
-        // "5 couches ... espacees de 10 cm": a row of copies
+        // "5 layers ... spaced by 10 cm": a row of copies; "10 layers of 5 mm lead": a stack, each against the last
         if (count != null && count > 1) {
-            final String pitch = measured(s, lengthUnit, "espacees de", "espaces de", "espacement", "spaced by", "spaced",
-                "every", "tous les", "pitch", "pas de");
+            final String spacing = measured(s, lengthUnit, "spaced by", "spaced", "spacing", "every", "pitch", "apart");
+            final String pitch = spacing != null ? spacing : depth;
             if (pitch != null) {
-                final char ax = s.contains(" en x") || s.contains(" along x") ? 'x' : s.contains(" en y") || s.contains(" along y") ? 'y' : 'z';
+                final char ax = s.contains(" along x") || s.contains(" in x ") ? 'x'
+                    : s.contains(" along y") || s.contains(" in y ") ? 'y' : 'z';
                 out.add("copy " + name + " " + (count - 1) + " " + (ax == 'x' ? pitch : "0") + " " + (ax == 'y' ? pitch : "0")
                     + " " + (ax == 'z' ? pitch : "0"));
             }
@@ -401,15 +409,15 @@ public final class Intent {
     }
 
     private String nameFor(String shape, String s) {
-        final Matcher m = Pattern.compile("(?:nomme|appele|named|called)\\s+([a-z_][a-z0-9_]*)").matcher(s);
+        final Matcher m = Pattern.compile("(?:named|called)\\s+([a-z_][a-z0-9_]*)").matcher(s);
         if (m.find()) {
             final String n = m.group(1);
             return Character.toUpperCase(n.charAt(0)) + n.substring(1);
         }
         final String base = switch (shape) {
-            case "box" -> s.contains("couche") || s.contains("layer") ? "Layer" : s.contains("mur") || s.contains("wall") ? "Wall"
-                : s.contains("plaque") || s.contains("plate") ? "Plate" : "Block";
-            case "tube" -> s.contains("disque") || s.contains("disk") ? "Disk" : s.contains("pipe") || s.contains("tuyau") ? "Pipe" : "Cylinder";
+            case "box" -> s.contains("layer") ? "Layer" : s.contains("wall") ? "Wall" : s.contains("plate") ? "Plate"
+                : s.contains("absorber") ? "Absorber" : "Block";
+            case "tube" -> s.contains("disk") ? "Disk" : s.contains("pipe") ? "Pipe" : "Cylinder";
             case "sphere" -> "Sphere";
             case "cone" -> "Cone";
             default -> "Torus";
@@ -529,7 +537,7 @@ public final class Intent {
         if (m.find(from) && m.start() - from < 20) {
             return q(m.group(1), m.group(2), unit);
         }
-        // "2 mm de plomb": the quantity just before
+        // "2 mm of lead": the quantity just before
         final String before = s.substring(Math.max(0, from - 40), from);
         final Matcher b = QUANTITY.matcher(before);
         String last = null;
@@ -551,16 +559,18 @@ public final class Intent {
         return out;
     }
 
-    /** The quantity next to a keyword: "epaisseur de 2 mm", "2 mm d'epaisseur", "radius 5 cm". */
+    /**
+     * The quantity next to a keyword: "thickness of 2 mm", "2 mm thick", "radius 5 cm". With one on each
+     * side ("1 cm thick, 10 cm apart"), the nearer one.
+     */
     private static String measured(String s, String unit, String... keys) {
+        final int none = Integer.MAX_VALUE;
         for (String k : keys) {
             int i = s.indexOf(k);
             while (i >= 0) {
-                final String after = s.substring(i + k.length(), Math.min(s.length(), i + k.length() + 24));
-                final Matcher m = QUANTITY.matcher(after);
-                if (m.find() && m.start() < 10) {
-                    return q(m.group(1), m.group(2), unit);
-                }
+                final int from = i + k.length();
+                final Matcher m = QUANTITY.matcher(s.substring(from, Math.min(s.length(), from + 24)));
+                final int gapAfter = m.find() && m.start() < 10 ? m.start() : none;
                 final String before = s.substring(Math.max(0, i - 22), i);
                 final Matcher b = QUANTITY.matcher(before);
                 String last = null;
@@ -569,8 +579,9 @@ public final class Intent {
                     last = q(b.group(1), b.group(2), unit);
                     end = b.end();
                 }
-                if (last != null && before.length() - end < 8) {
-                    return last;
+                final int gapBefore = last != null && before.length() - end < 8 ? before.length() - end : none;
+                if (gapAfter != none || gapBefore != none) {
+                    return gapAfter <= gapBefore ? q(m.group(1), m.group(2), unit) : last;
                 }
                 i = s.indexOf(k, i + 1);
             }
@@ -600,7 +611,7 @@ public final class Intent {
         return any ? " at " + p[0] + " " + p[1] + " " + p[2] : "";
     }
 
-    /** A signed amount along an axis: "de 5 cm en z", "by 30 deg about y", "x+2cm". */
+    /** A signed amount along an axis: "by 5 cm in z", "by 30 deg about y", "x+2cm". */
     private static String[] axisAmount(String s, String unit, String angleOrLength) {
         final Matcher m = QUANTITY.matcher(s);
         if (!m.find()) {
@@ -608,9 +619,10 @@ public final class Intent {
         }
         final String amount = (s.contains("-" + m.group(1)) ? "-" : "") + q(m.group(1), m.group(2), unit);
         int axis = 2;
-        final Matcher ax = Pattern.compile("(?:en|selon|along|about|autour de|sur|axe|axis)\\s+(?:l'axe\\s+)?([xyz])\\b").matcher(s);
+        final Matcher ax = Pattern.compile("\\b(?:in|along|about|around|on|axis)\\s+(?:the\\s+)?([xyz])\\b"
+            + "|\\b([xyz])\\s*[-+]\\s*[0-9.]").matcher(s);
         if (ax.find()) {
-            axis = "xyz".indexOf(ax.group(1));
+            axis = "xyz".indexOf(ax.group(1) != null ? ax.group(1) : ax.group(2));
         }
         final String zero = "0";
         final String[] out = {zero, zero, zero};

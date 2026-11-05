@@ -61,7 +61,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * The Data side of the ROOT Lab: CERN data files opened -- from disk, from a
  * URL (CERN Open Data, root.cern), from inside a zip archive -- shown as what
- * they hold, with an inspector that reads, checks and summarises the selected
+ * they hold, with an inspector that reads, checks and summarizes the selected
  * thing in the background, so the window never waits on the disk or the network.
  */
 final class LabDataView extends LabSurface {

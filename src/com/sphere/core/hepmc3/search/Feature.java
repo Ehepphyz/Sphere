@@ -8,7 +8,7 @@ import java.util.function.ToLongFunction;
 
 /**
  * Something measured on a particle, from which filters are made by
- * comparison: HepMC3's Feature, with its two specialisations.
+ * comparison: HepMC3's Feature, with its two specializations.
  *
  * <p>An integral feature compared with an integer compares exactly; with a
  * double it compares as a double, equality meaning |a - b| &lt; DBL_EPSILON.

@@ -6,7 +6,7 @@ import java.util.List;
 
 /**
  * What the 3D space shows: meshes in data coordinates, the box of data they
- * fill, the axes' titles and the palette the colours were taken from.
+ * fill, the axes' titles and the palette the colors were taken from.
  *
  * The box is mapped onto a cube, each axis on its own as ROOT does for a
  * LEGO or a SURF, or all together when the shape itself matters (a detector
@@ -22,7 +22,7 @@ public final class Scene3D {
     /** x0 x1 y0 y1 z0 z1 in data coordinates. */
     public double[] box;
     public boolean keepAspect;
-    /** The palette the vertex colours were taken from, and the values at its ends; null when none. */
+    /** The palette the vertex colors were taken from, and the values at its ends; null when none. */
     public Color[] palette;
     public double valueLo;
     public double valueHi;

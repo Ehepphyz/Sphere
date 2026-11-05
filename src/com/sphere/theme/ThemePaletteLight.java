@@ -233,7 +233,7 @@ public final class ThemePaletteLight implements ThemePalette {
     @Override public Color getJupyPyImageBg()   { return JUPY_PY_IMAGE_BG; }
     @Override public Color getJupyPyAttribute() { return JUPY_PY_ATTRIBUTE; }
 
-    // ROOT canvas: ROOT's own colours, white paper and black ink
+    // ROOT canvas: ROOT's own colors, white paper and black ink
     private static final Color CANVAS_GROUND       = new Color(244, 244, 244);
     private static final Color CANVAS_PAPER        = Color.WHITE;
     private static final Color CANVAS_INK          = Color.BLACK;

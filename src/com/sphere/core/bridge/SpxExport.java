@@ -43,9 +43,9 @@ public final class SpxExport {
     /**
      * Writes every member the set holds open.
      *
-     * The values are laid out member, then x, then Q, then flavour, the last
+     * The values are laid out member, then x, then Q, then flavor, the last
      * running fastest: the order the Java grid keeps them in, and the one a
-     * column-major reader sees as an array (flavour, Q, x, member).
+     * column-major reader sees as an array (flavor, Q, x, member).
      */
     public static Path pdf(RootPdfSet set, Path file) throws IOException {
         final RootPdfGrid first = set.member(0);

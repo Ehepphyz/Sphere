@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Without this, an exception raised by a click, a repaint or a background thread
  * is written to the standard error stream and lost: Sphere started from a desktop
  * entry has no terminal, so the action simply does not happen and nothing is
- * said. Everything is funnelled to the console instead, where the user is
+ * said. Everything is funneled to the console instead, where the user is
  * already looking.
  */
 public final class JavaErrors {

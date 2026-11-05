@@ -8,7 +8,7 @@ import static com.sphere.core.clhep.CMath.sin;
 import static com.sphere.core.clhep.CMath.sqrt;
 
 /**
- * CLHEP's HepRotationZ (Vector/RotationZ.h, .icc, RotationZ.cc): a rotation about the z axis: x turns towards y.
+ * CLHEP's HepRotationZ (Vector/RotationZ.h, .icc, RotationZ.cc): a rotation about the z axis: x turns toward y.
  * Products of two such rotations stay of this kind; with others they are HepRotations.
  */
 public final class HepRotationZ extends HepAxialRotation implements Comparable<HepRotationZ> {

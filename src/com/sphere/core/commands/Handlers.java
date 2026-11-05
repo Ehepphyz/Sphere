@@ -193,7 +193,7 @@ public class Handlers {
         // The editor asks about unsaved files first, which takes the event thread.
         javax.swing.SwingUtilities.invokeLater(() -> {
             if (!com.sphere.Sphere.quit()) {
-                AppLogger.info("Quit cancelled.");
+                AppLogger.info("Quit canceled.");
             }
         });
     }
@@ -2058,7 +2058,7 @@ public class Handlers {
         }
     }
 
-    /** Runs a file in the session, so what it defines is still there afterwards. */
+    /** Runs a file in the session, so what it defines is still there afterward. */
     public static void juliaRun(String i, CommandExecutionContext c) {
         String a = args(i, ":julia run");
         if (a.isEmpty()) {

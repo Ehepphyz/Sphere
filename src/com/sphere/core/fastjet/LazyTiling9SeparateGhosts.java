@@ -4,7 +4,7 @@ import java.util.Arrays;
 
 /**
  * The N2MHTLazy9AntiKtSeparateGhosts strategy: for anti-kt with ghosts, the
- * ghosts are kept in lists of their own, only ever serve as neighbours of real
+ * ghosts are kept in lists of their own, only ever serve as neighbors of real
  * jets, and are left unclustered at the end, which is all an area needs.
  */
 final class LazyTiling9SeparateGhosts extends BriefJetEngine {

@@ -10,15 +10,15 @@ public enum JetAlgorithm {
     CAMBRIDGE(1, "Longitudinally invariant Cambridge/Aachen algorithm", 1),
     /** The anti-kt algorithm. */
     ANTIKT(2, "Longitudinally invariant anti-kt algorithm", 1),
-    /** The generalised kt algorithm, d_ij = min(kt_i^2p, kt_j^2p) dR^2/R^2. */
+    /** The generalized kt algorithm, d_ij = min(kt_i^2p, kt_j^2p) dR^2/R^2. */
     GENKT(3, "Longitudinally invariant generalised kt algorithm", 2),
     /** Cambridge with particles below a pt treated as passive ghosts, for passive areas. */
     CAMBRIDGE_FOR_PASSIVE(11, "Longitudinally invariant Cambridge/Aachen algorithm", 2),
-    /** Generalised kt for passive areas. */
+    /** Generalized kt for passive areas. */
     GENKT_FOR_PASSIVE(13, "Longitudinally invariant generalised kt algorithm", 2),
     /** The e+e- kt (Durham) algorithm. */
     EE_KT(50, "e+e- kt (Durham) algorithm (NB: no R)", 0),
-    /** The e+e- generalised kt algorithm. */
+    /** The e+e- generalized kt algorithm. */
     EE_GENKT(53, "e+e- generalised kt algorithm", 2),
     /** A plugin. */
     PLUGIN(99, "plugin algorithm", 1),
@@ -39,7 +39,7 @@ public enum JetAlgorithm {
         return description;
     }
 
-    /** How many parameters the algorithm takes: R, and p for the generalised ones. */
+    /** How many parameters the algorithm takes: R, and p for the generalized ones. */
     public int nParameters() {
         return nParameters;
     }

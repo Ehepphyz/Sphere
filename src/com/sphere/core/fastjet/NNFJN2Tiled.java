@@ -8,7 +8,7 @@ import java.util.function.Function;
 /**
  * fastjet::NNFJN2Tiled: {@link NNFJN2Plain} with the jets kept in tiles of
  * the (rapidity, phi) plane at least as large as the reach of the
- * geometrical distance, so that a jet's nearest neighbour is looked for in
+ * geometrical distance, so that a jet's nearest neighbor is looked for in
  * the 3x3 tiles around it only, as in the N2Tiled strategy.
  *
  * @param <B> the brief jet
@@ -39,7 +39,7 @@ public final class NNFJN2Tiled<B extends NNFJTiledBriefJet<B>> {
     private double[] diJL;
     private int[] diJJet;
 
-    // the tiles: each lists its neighbourhood, itself first, then the tiles
+    // the tiles: each lists its neighborhood, itself first, then the tiles
     // on its left, then from rhStart those on its right
     private int[][] neighbours;
     private int[] rhStart;
@@ -234,7 +234,7 @@ public final class NNFJN2Tiled<B extends NNFJTiledBriefJet<B>> {
         diJJet[posn] = last;
     }
 
-    /** The nearest neighbour of jet i among the tiles around tile t. */
+    /** The nearest neighbor of jet i among the tiles around tile t. */
     private void searchNN(int i, int t) {
         final B ji = jet(i);
         nnH[i] = ji.geometricalBeamDistance();

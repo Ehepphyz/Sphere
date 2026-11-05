@@ -1007,7 +1007,7 @@ public class CommandRouter {
         }
 
         // Julia keeps an interpreter of its own, so the file runs inside it and
-        // what it defines is still there afterwards.
+        // what it defines is still there afterward.
         if (pc.hasSnippet && isJuliaName(pc.languageOrApp)) {
             runJuliaSnippet(pc);
             return;

@@ -16,7 +16,7 @@ import com.sphere.core.fastjet.Precision;
  * (1 - cos theta_ij), always merging, so that its content is in the
  * exclusive jets (exclusive_jets_ycut with y_ij = d_ij / Q^2).
  *
- * The NNFJN2Plain strategy factorises d_ij = min(m_i, m_j) g_ij with
+ * The NNFJN2Plain strategy factorizes d_ij = min(m_i, m_j) g_ij with
  * m = sqrt2 E and g_ij = max(m_i, m_j)(1 - cos theta_ij); NNH uses d_ij
  * directly. Both give the same clustering.
  */

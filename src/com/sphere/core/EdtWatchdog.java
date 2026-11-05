@@ -73,7 +73,7 @@ public final class EdtWatchdog {
      * launch counts as finished.
      *
      * Showing the window is not the end of a launch: the backends start, the
-     * icons are parsed, the clipboard and the colours of the desktop are read,
+     * icons are parsed, the clipboard and the colors of the desktop are read,
      * and each of those still blocks the event thread. Waiting for the interface
      * to answer three times in a row is what tells that it has settled, and no
      * call site has to say so.

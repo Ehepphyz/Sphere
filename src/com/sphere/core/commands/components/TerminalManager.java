@@ -159,6 +159,7 @@ public class TerminalManager {
         tabbedPane.remove(panel);
 
         JFrame frame = new JFrame("Detached Terminal");
+        IconManager.applyAppIcon(frame);
         frame.setSize(900, 600);
         frame.setLocationRelativeTo(null);
         frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);

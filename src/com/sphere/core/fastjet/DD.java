@@ -79,7 +79,7 @@ public final class DD implements Comparable<DD> {
         return value == 0.0 ? ZERO : new DD(value, 0.0);
     }
 
-    /** A pair that may not be normalised yet. */
+    /** A pair that may not be normalized yet. */
     public static DD normalised(double hi, double lo) {
         final double s = hi + lo;
         return new DD(s, lo - (s - hi));

@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Mesh booleans through BSP trees (the algorithm of csg.js, E. Wallace, MIT),
- * which is how a boolean solid is drawn: Geant4's own visualisation goes
+ * which is how a boolean solid is drawn: Geant4's own visualization goes
  * through HepPolyhedron's BooleanProcessor the same way. Only the drawing
  * uses this; inside tests and distances of a boolean are exact, composed from
  * the operands.
@@ -344,7 +344,7 @@ final class Csg {
      * from outside: the polygons drawn are the operands' own, cut only by the
      * other operand's planes and only where its box is. Fed back the trees'
      * polygons, as csg.js does, a chain of booleans (a volume less forty
-     * neighbours, as overlapping ROOT placements become) splits the whole
+     * neighbors, as overlapping ROOT placements become) splits the whole
      * surface again at every step and runs out of memory.
      */
     private static Mesh run(Op op, Mesh ma, Mesh mb, double eps) {

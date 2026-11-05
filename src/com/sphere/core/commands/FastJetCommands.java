@@ -722,7 +722,7 @@ public final class FastJetCommands {
                 JetShapes.thrustLike(j, r), pull[0], pull[1]));
         }
         if (jets.size() >= 2) {
-            AppLogger.result(f("pull angle of jet 0 towards jet 1: %.4f rad", JetShapes.pullAngle(jets.get(0), jets.get(1))));
+            AppLogger.result(f("pull angle of jet 0 toward jet 1: %.4f rad", JetShapes.pullAngle(jets.get(0), jets.get(1))));
         }
     }
 
@@ -818,7 +818,7 @@ public final class FastJetCommands {
         }
         // Everything warmed up by the JIT first, then interleaved rounds keeping
         // each strategy's fastest pass, so that neither the order of measurement
-        // nor a pause of the machine favours one strategy.
+        // nor a pause of the machine favors one strategy.
         AppLogger.info(f("Timing %d events, %d rounds, with %s:", EVENTS.size(), repeat, def.description()));
         for (int w = 0; w < 2; w++) for (JetDefinition d : defs) passTime(d);
         final double[] us = new double[defs.size()];
@@ -862,7 +862,7 @@ public final class FastJetCommands {
             if (differing > 0) {
                 // Strategies differ only in the order they search; other jets come
                 // either from exact ties or from a defect of one of the two.
-                final int tied = equidistantNeighbours(EVENTS.get(firstDiffering));
+                final int tied = equidistantNeighbors(EVENTS.get(firstDiffering));
                 AppLogger.warn(f("%s would be faster but gives other jets on %d of %d events. Kept aside.",
                     d.strategy().label(), differing, EVENTS.size()));
                 AppLogger.raw(tied > 0
@@ -918,11 +918,11 @@ public final class FastJetCommands {
     }
 
     /**
-     * The particles whose nearest neighbour in (y, phi) is not unique: two
+     * The particles whose nearest neighbor in (y, phi) is not unique: two
      * or more at exactly the same distance, the ties that make strategies
      * diverge. Quadratic, so only the first 4000 particles are looked at.
      */
-    private static int equidistantNeighbours(List<PseudoJet> ev) {
+    private static int equidistantNeighbors(List<PseudoJet> ev) {
         final int n = Math.min(ev.size(), 4000);
         final double[] y = new double[n], phi = new double[n];
         for (int k = 0; k < n; k++) {
@@ -1205,7 +1205,7 @@ public final class FastJetCommands {
             if (!same) failures++;
         }
         // Particles at phi = 0 exactly with R = 0.25 (25 tiles in phi): the lazy
-        // tilings of FastJet 3.5.2 put them 2 pi away and miss neighbours there.
+        // tilings of FastJet 3.5.2 put them 2 pi away and miss neighbors there.
         {
             final List<PseudoJet> pz = phiZeroEvent();
             List<PseudoJet> refJets = null;

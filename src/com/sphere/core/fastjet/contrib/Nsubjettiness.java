@@ -16,10 +16,10 @@ import java.util.List;
 
 /**
  * N-subjettiness (J. Thaler, K. Van Tilburg, JHEP 03 (2011) 015; JHEP 02
- * (2012) 093): tau_N = sum_k pt_k min_a (Delta R_{k,a})^beta, normalised by
+ * (2012) 093): tau_N = sum_k pt_k min_a (Delta R_{k,a})^beta, normalized by
  * sum_k pt_k R0^beta, with N axes from an exclusive reclustering of the
- * constituents, optionally improved by a one-pass minimisation (each axis
- * moved to the weighted centre of the particles nearest to it, while tau
+ * constituents, optionally improved by a one-pass minimization (each axis
+ * moved to the weighted center of the particles nearest to it, while tau
  * decreases).
  *
  * Written for Sphere from the papers; sums are carried to 106 bits.
@@ -40,9 +40,9 @@ public class Nsubjettiness implements FunctionOfPseudoJet<Double> {
         CA,
         /** Exclusive C/A subjets, winner-take-all. */
         WTA_CA,
-        /** kt axes improved by the one-pass minimisation. */
+        /** kt axes improved by the one-pass minimization. */
         ONEPASS_KT,
-        /** WTA kt axes improved by the one-pass minimisation. */
+        /** WTA kt axes improved by the one-pass minimization. */
         ONEPASS_WTA_KT
     }
 
@@ -52,7 +52,7 @@ public class Nsubjettiness implements FunctionOfPseudoJet<Double> {
     private final Axes axes;
     private final boolean normalised;
 
-    /** tau_N with beta = 1, R0 = 1, WTA kt axes, normalised. */
+    /** tau_N with beta = 1, R0 = 1, WTA kt axes, normalized. */
     public Nsubjettiness(int n) {
         this(n, 1.0, 1.0, Axes.WTA_KT, true);
     }
@@ -109,7 +109,7 @@ public class Nsubjettiness implements FunctionOfPseudoJet<Double> {
         return normalised ? (den.isZero() ? 0.0 : num.div(den).doubleValue()) : num.doubleValue();
     }
 
-    /** The one-pass minimisation: Lloyd-like moves of the axes while tau decreases. */
+    /** The one-pass minimization: Lloyd-like moves of the axes while tau decreases. */
     private List<PseudoJet> onePass(List<PseudoJet> particles, List<PseudoJet> start) {
         List<PseudoJet> best = start;
         double bestTau = tau(particles, start);

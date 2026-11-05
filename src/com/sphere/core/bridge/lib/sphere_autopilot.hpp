@@ -15,7 +15,7 @@
 //   - a covariance Hesse had to force positive-definite: the curvature measured along every
 //     direction; a direction that goes down is a saddle point, left by a line search along it;
 //   - several minima: starts chosen by multi-level single linkage (Rinnooy Kan and Timmer) on
-//     quasi-random points, and a catalogue of the minima with how many starts reached each;
+//     quasi-random points, and a catalog of the minima with how many starts reached each;
 //   - Minos only where it is needed: a parabolicity test of two values per parameter along the
 //     linearized profile tells which intervals are not Hesse's; at any confidence level;
 //   - every value computed once (a cache on the 64 bits of the parameters);

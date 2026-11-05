@@ -303,7 +303,7 @@ public final class Renderer3D {
     }
 
     /**
-     * The palette whose Space3D keys colour the ground, the frame and the
+     * The palette whose Space3D keys color the ground, the frame and the
      * labels: the theme's, or, when the user turns the ground over, the
      * palette of the other darkness.
      */
@@ -321,7 +321,7 @@ public final class Renderer3D {
         return space().getSpace3DGroundBottom().getRGB() & 0xFFFFFF;
     }
 
-    /** The colour of the labels over the ground: the title's, or the axes'. */
+    /** The color of the labels over the ground: the title's, or the axes'. */
     private Color labelColor(boolean strong) {
         return strong ? space().getSpace3DTitle() : space().getSpace3DLabel();
     }
@@ -417,7 +417,7 @@ public final class Renderer3D {
         return new double[]{Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)};
     }
 
-    /** A colour lit along a normal of the view; both sides of a face are lit alike. */
+    /** A color lit along a normal of the view; both sides of a face are lit alike. */
     private int shade(int argb, double nx, double ny, double nz, double[] l, double[] hv) {
         final double len = Math.sqrt(nx * nx + ny * ny + nz * nz);
         if (len < 1e-20) return argb;
@@ -447,7 +447,7 @@ public final class Renderer3D {
     /* Triangles                                                           */
     /* ------------------------------------------------------------------ */
 
-    /** Triangles ready for the raster: screen corners, depths, lit colours, cube places. */
+    /** Triangles ready for the raster: screen corners, depths, lit colors, cube places. */
     private static final class Batch {
         float[] xy = new float[6 * 1024];
         float[] z = new float[3 * 1024];
@@ -526,7 +526,7 @@ public final class Renderer3D {
         hv[0] /= hl;
         hv[1] /= hl;
         hv[2] /= hl;
-        // Per-vertex lit colours for a smooth mesh.
+        // Per-vertex lit colors for a smooth mesh.
         int[] lit = null;
         if (mesh.lit && (mesh.smooth || mesh.normal != null)) {
             final float[] nrm = normals(mesh);
@@ -1059,7 +1059,7 @@ public final class Renderer3D {
             final double step = t.length > 1 ? t[1] - t[0] : Math.abs(hi - lo);
             final double[] e0 = toScreen(best0[0], best0[1], best0[2]);
             final double[] e1 = toScreen(best1[0], best1[1], best1[2]);
-            // Outward: from the box's centre toward the edge, on the screen.
+            // Outward: from the box's center toward the edge, on the screen.
             double ox = (e0[0] + e1[0]) / 2 - mid[0];
             double oy = (e0[1] + e1[1]) / 2 - mid[1];
             final double ol = Math.max(1e-6, Math.hypot(ox, oy));

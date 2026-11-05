@@ -20,7 +20,7 @@ import java.util.Set;
  * arithmetic and std:: functions on them, for, while and if, the calls to
  * the class's own methods (DefineMaterials, ConstructCalorimeter...), the
  * solids, G4LogicalVolume, G4PVPlacement with a rotation matrix or a
- * G4Transform3D, G4PVReplica, NIST and hand-made materials, colours, and a
+ * G4Transform3D, G4PVReplica, NIST and hand-made materials, colors, and a
  * G4GDMLParser reading a GDML file. What it cannot know -- a value set by a
  * messenger at run time, a class it does not model -- is carried as unknown:
  * the volumes that do not depend on it are still drawn, and the lines that
@@ -61,7 +61,8 @@ public final class CppGeometry {
      * number argument, and the group of the placements made by the same text.
      */
     public record PlacementText(Path file, boolean transform, int rotStart, int rotEnd, String rotText,
-                                int posStart, int posEnd, String posText, boolean shared, String copyText, int group) {
+                                int posStart, int posEnd, String posText, boolean shared, String copyText, int group,
+                                int copyStart, int copyEnd) {
     }
 
     /** A piece of the code as written, run once: what a change made in 3D or in the properties replaces. */
@@ -120,9 +121,34 @@ public final class CppGeometry {
         }
     }
 
+    /**
+     * A number written without a unit where Geant4 reads a length or an angle: an angle of 360 is 360 radians, a
+     * length of 10 is 10 mm. {@code kind} is 'L' or 'A', {@code where} what reads it ("G4Tubs deltaphi",
+     * "rotateX"); {@code value} the number as written.
+     */
+    public record Bare(Path file, int line, int start, int end, String text, char kind, String where, double value) {
+    }
+
+    /**
+     * What a declaration or an assignment computed, on the line its statement ends: a number, or the three
+     * coordinates of a G4ThreeVector, each time it ran ({@code runs}), the first {@link #MAX_VALUES} kept.
+     * {@code text} is the expression as written.
+     */
+    public record Computed(Path file, int line, String name, boolean integer, List<double[]> values, int runs,
+                           String text) {
+    }
+
+    /** What the reading saw beyond the geometry: the numbers written without units, the values the code computed. */
+    public record Insights(List<Bare> bare, List<Computed> computed) {
+
+        public static Insights none() {
+            return new Insights(List.of(), List.of());
+        }
+    }
+
     public record Result(Geometry geometry, List<Note> notes, Map<Object, Origin> origins,
                          Map<PhysicalVolume, PositionText> positions, Map<PhysicalVolume, PlacementText> placementTexts,
-                         String entry, int steps, long micros, Path gdml, Links links) {
+                         String entry, int steps, long micros, Path gdml, Links links, Insights insights) {
 
         public Origin origin(Object o) {
             return origins.get(o);
@@ -168,7 +194,34 @@ public final class CppGeometry {
      * @param baseDir where relative file names (a GDML file) are looked for
      */
     public static Result read(List<Source> sources, Path baseDir) {
-        return new CppGeometry(sources, baseDir).run();
+        return new CppGeometry(sources, baseDir, false).run();
+    }
+
+    /**
+     * The dimension of each value a reading computed: the code is read again in the probe's units
+     * ({@link Units#probeSymbols()}) and each value compared with its own. A value the probe computed a different
+     * number of times (a loop whose bound depends on a length compared with a bare number) gets none.
+     */
+    public static Map<Computed, Dimensions.Dim> dimensions(Result read, List<Source> sources, Path baseDir) {
+        final Map<Computed, Dimensions.Dim> out = new IdentityHashMap<>();
+        if (read.insights().computed().isEmpty()) {
+            return out;
+        }
+        final Result probe = new CppGeometry(sources, baseDir, true).run();
+        final Map<String, Computed> byPlace = new HashMap<>();
+        for (Computed c : probe.insights().computed()) {
+            byPlace.put(c.file() + ":" + c.line() + ":" + c.name(), c);
+        }
+        for (Computed c : read.insights().computed()) {
+            final Computed p = byPlace.get(c.file() + ":" + c.line() + ":" + c.name());
+            if (p != null && p.runs() == c.runs()) {
+                final Dimensions.Dim d = Dimensions.of(c.values(), p.values());
+                if (d != null) {
+                    out.put(c, d);
+                }
+            }
+        }
+        return out;
     }
 
     /** Reads every .cc/.hh/.cpp/.h of a folder (src/ and include/ included), as files on disk. */
@@ -251,7 +304,7 @@ public final class CppGeometry {
     private final java.util.ArrayDeque<Integer> bodyDepths = new java.util.ArrayDeque<>();
     private int blockDepth;
     private Node statement;
-    private final List<Parameterised> parameterised = new ArrayList<>();
+    private final List<Parameterized> parameterized = new ArrayList<>();
     private final List<Division> divisions = new ArrayList<>();
     private Env globalEnv;
     private final Geometry g = new Geometry();
@@ -262,10 +315,37 @@ public final class CppGeometry {
     private int steps;
     private int placements;
     private String entry = "";
+    /** Read in the probe's units: CLHEP's names take the probe's values (see {@link #dimensions}). */
+    private final boolean probe;
+    /** The numbers written without units, by file and offset: one for a literal however often it runs. */
+    private final Map<String, Bare> bare = new LinkedHashMap<>();
+    /** What declarations and assignments computed, by file, line and name, in reading order. */
+    private final Map<String, Tally> computed = new LinkedHashMap<>();
+    /** Values kept per declaration: a loop of a million runs keeps the first of them. */
+    public static final int MAX_VALUES = 4096;
 
-    private CppGeometry(List<Source> sources, Path baseDir) {
+    /** A declaration's values as they come. */
+    private static final class Tally {
+        final Path file;
+        final int line;
+        final String name, text;
+        final boolean integer;
+        final List<double[]> values = new ArrayList<>();
+        int runs;
+
+        Tally(Path file, int line, String name, boolean integer, String text) {
+            this.file = file;
+            this.line = line;
+            this.name = name;
+            this.integer = integer;
+            this.text = text;
+        }
+    }
+
+    private CppGeometry(List<Source> sources, Path baseDir, boolean probe) {
         this.sources = sources;
         this.baseDir = baseDir;
+        this.probe = probe;
     }
 
     private Result run() {
@@ -301,7 +381,7 @@ public final class CppGeometry {
                     call(ctor, List.of(), fields, null);
                 }
                 world = call(construct, List.of(), fields, null);
-                for (Parameterised j : parameterised) {
+                for (Parameterized j : parameterized) {
                     expand(j);
                 }
                 for (Division d : divisions) {
@@ -356,9 +436,14 @@ public final class CppGeometry {
             // run in a loop or by a method called twice: one text, many placements, told by their copy numbers
             final boolean shared = pn.call().evaluations != 1;
             String copyText = null;
+            int copyStart = -1, copyEnd = -1;
             if (pn.copy() != null) {
                 final int cs = spanStart(pn.copy()), ce = pn.copy().end;
                 copyText = cs >= 0 && ce <= text.length() && cs < ce ? text.substring(cs, ce) : null;
+                if (copyText != null) {
+                    copyStart = cs;
+                    copyEnd = ce;
+                }
             }
             final int group = groups.computeIfAbsent(pn.call(), k -> groups.size());
             final int rs = spanStart(pn.rot()), re = pn.rot().end;
@@ -371,11 +456,16 @@ public final class CppGeometry {
             }
             if (rs >= 0 && re <= text.length() && rs < re && (pn.pos() == null || pt != null)) {
                 texts.put(e.getKey(), new PlacementText(sources.get(pn.rot().file).path(), pn.transform(), rs, re,
-                    text.substring(rs, re), ps, pe, pt, shared, copyText, group));
+                    text.substring(rs, re), ps, pe, pt, shared, copyText, group, copyStart, copyEnd));
             }
         }
+        final List<Computed> values = new ArrayList<>();
+        for (Tally t : computed.values()) {
+            values.add(new Computed(t.file, t.line, t.name, t.integer, List.copyOf(t.values), t.runs, t.text));
+        }
         return new Result(out, List.copyOf(notes), origins, positions, texts, entry, steps,
-            (System.nanoTime() - t0) / 1000, gdmlFile, links(construct));
+            (System.nanoTime() - t0) / 1000, gdmlFile, links(construct),
+            new Insights(List.copyOf(bare.values()), List.copyOf(values)));
     }
 
     /** The texts and places gathered while reading, kept for the ones run once. */
@@ -717,6 +807,87 @@ public final class CppGeometry {
                 }
             }
             origins.put(o, new Origin(sources.get(at.file).path(), at.line, last, at.start, at.end));
+        }
+    }
+
+    /** The line a node's text ends on. */
+    private int lastLine(Node at) {
+        final String text = sources.get(at.file).text();
+        int last = at.line;
+        for (int i = Math.max(0, at.start); i < Math.min(at.end, text.length()); i++) {
+            if (text.charAt(i) == '\n') {
+                last++;
+            }
+        }
+        return last;
+    }
+
+    /**
+     * An argument read as a length ('L') or an angle ('A'), written as a number alone: kept when it says what
+     * the author surely did not mean, a non-zero length in Geant4's millimeters or an angle beyond a full turn
+     * of radians (360 for 360 degrees). A sign before the number goes with it.
+     */
+    private void bare(Node arg, char kind, String where) {
+        if (quiet || probe || arg == null || arg.file < 0) {
+            return;
+        }
+        final Node n = arg instanceof Unary u && !u.postfix && (u.op.equals("-") || u.op.equals("+")) ? u.e : arg;
+        if (!(n instanceof Literal l) || !(l.value instanceof Number num) || n.file < 0) {
+            return;
+        }
+        final double v = num.doubleValue();
+        if (v == 0 || (kind == 'A' && Math.abs(v) <= 2 * Math.PI + 1e-9)) {
+            return;
+        }
+        final String text = sources.get(n.file).text();
+        if (n.start < 0 || n.end > text.length() || n.start >= n.end) {
+            return;
+        }
+        bare.putIfAbsent(n.file + "@" + n.start, new Bare(sources.get(n.file).path(), n.line, n.start, n.end,
+            text.substring(n.start, n.end), kind, where, v));
+    }
+
+    /** A G4ThreeVector(x, y, z) written where a position goes: its numbers without units. */
+    private void bareVector(Node vector, String where) {
+        final Node at = vector instanceof SpannedCall sc ? sc.call : vector;
+        final List<Node> args = at instanceof Construct c && c.type.endsWith("ThreeVector") ? c.args
+            : at instanceof Call c && c.callee instanceof Ident id && id.name.endsWith("ThreeVector") ? c.args : null;
+        if (args != null) {
+            for (Node a : args) {
+                bare(a, 'L', where);
+            }
+        }
+    }
+
+    /** What a statement gave a variable, a number or a G4ThreeVector: kept for the line it ends on. */
+    private void computed(Node st, String name, Object value, Node expression) {
+        if (quiet || st == null || st.file < 0) {
+            return;
+        }
+        final Object x = deref(value);
+        final double[] v;
+        if (x instanceof Long l) {
+            v = new double[] {l};
+        } else if (x instanceof Double d) {
+            v = new double[] {d};
+        } else if (x instanceof V3 p) {
+            v = new double[] {p.x, p.y, p.z};
+        } else {
+            return;
+        }
+        final int line = lastLine(st);
+        final Tally t = computed.computeIfAbsent(st.file + ":" + line + ":" + name, k -> {
+            String text = null;
+            if (expression != null && expression.file >= 0) {
+                final String src = sources.get(expression.file).text();
+                final int a = spanStart(expression), b = expression.end;
+                text = a >= 0 && b <= src.length() && a < b ? src.substring(a, b) : null;
+            }
+            return new Tally(sources.get(st.file).path(), line, name, x instanceof Long, text);
+        });
+        t.runs++;
+        if (t.values.size() < MAX_VALUES) {
+            t.values.add(v);
         }
     }
 
@@ -1224,7 +1395,7 @@ public final class CppGeometry {
     }
 
     /**
-     * A class body: its members, run as declarations before the constructor (initialised as written, the
+     * A class body: its members, run as declarations before the constructor (initialized as written, the
      * others made as C++ default-makes them), the defaults its method declarations give, and the methods
      * it defines inline.
      */
@@ -1252,7 +1423,7 @@ public final class CppGeometry {
                 continue;
             }
             if (t.is("{")) {
-                k = match(ts, k, "{", "}") + 1;   // a nested type, an enum, a brace-initialised member
+                k = match(ts, k, "{", "}") + 1;   // a nested type, an enum, a brace-initialized member
                 continue;
             }
             if (t.is(":") && k == start + 1 && (ts.get(start).is("public") || ts.get(start).is("private")
@@ -1335,11 +1506,11 @@ public final class CppGeometry {
             return;
         }
         if (first.is("static")) {
-            boolean initialised = false;
+            boolean initialized = false;
             for (int q = start; q < end; q++) {
-                initialised |= ts.get(q).is("=") || ts.get(q).is("{");
+                initialized |= ts.get(q).is("=") || ts.get(q).is("{");
             }
-            if (!initialised) {
+            if (!initialized) {
                 return;
             }
         }
@@ -2352,7 +2523,7 @@ public final class CppGeometry {
 
         /**
          * At '(': the index of the ')' closing a cast to a type (a builtin, a Geant4 class, std::, with const,
-         * '*' and '&'), when an operand follows it; -1 for a parenthesised expression.
+         * '*' and '&'), when an operand follows it; -1 for a parenthesized expression.
          */
         private int cStyleCast() {
             if (!at("(")) {
@@ -2762,7 +2933,7 @@ public final class CppGeometry {
         }
     }
 
-    /** An object of a class of the sources (a parameterisation, a helper): its fields, its methods run. */
+    /** An object of a class of the sources (a parameterization, a helper): its fields, its methods run. */
     static final class Instance {
         final String cls;
         final Env fields;
@@ -2773,7 +2944,7 @@ public final class CppGeometry {
         }
     }
 
-    /** The physical volume a parameterisation is handed: it keeps what ComputeTransformation sets. */
+    /** The physical volume a parameterization is handed: it keeps what ComputeTransformation sets. */
     static final class PvStub {
         final int copy;
         V3 t = new V3(0, 0, 0);
@@ -3042,9 +3213,17 @@ public final class CppGeometry {
         } else if (n instanceof ExprStmt s) {
             statement = s;
             eval(s.e, env);
+            if (s.e instanceof Assign a) {
+                assigned(s, a, env);
+            }
         } else if (n instanceof Decl d) {
             statement = d;
             declare(d, env);
+            if (d != loopHeader) {
+                for (Declarator v : d.vars) {
+                    computed(d, v.name, env.vars.get(v.name), v.init);
+                }
+            }
         } else if (n instanceof If i) {
             final Env inner = new Env(env);
             final Object c = i.c instanceof Decl d ? declare(d, inner) : eval(i.c, inner);
@@ -3064,7 +3243,13 @@ public final class CppGeometry {
         } else if (n instanceof For f) {
             final Env inner = new Env(env);
             if (f.init != null) {
-                exec(f.init, inner);
+                // the loop's counter is the loop's: its first value says nothing worth showing
+                loopHeader = f.init;
+                try {
+                    exec(f.init, inner);
+                } finally {
+                    loopHeader = null;
+                }
             }
             while (true) {
                 if (f.cond != null) {
@@ -3142,6 +3327,20 @@ public final class CppGeometry {
         }
     }
 
+    /** The initialization of the for loop being entered. */
+    private Node loopHeader;
+
+    /** The value an assignment left in a variable or a member of the class: kept for its line. */
+    private void assigned(ExprStmt s, Assign a, Env env) {
+        final Node t = a.target instanceof Group gr ? gr.inner : a.target;
+        if (t instanceof Ident id) {
+            final Env e = env.find(id.name);
+            computed(s, id.name, (e != null ? e : env.fields()).vars.get(id.name), a.value);
+        } else if (t instanceof Member m && m.obj instanceof Ident th && th.name.equals("this")) {
+            computed(s, m.name, env.fields().vars.get(m.name), a.value);
+        }
+    }
+
     private Object declare(Decl d, Env env) {
         Object last = null;
         for (Declarator v : d.vars) {
@@ -3161,10 +3360,10 @@ public final class CppGeometry {
             } else if (!v.pointer) {
                 value = construct(d.type, List.of(), false, d);
                 if (value instanceof Unknown) {
-                    value = new Unknown(v.name + ", not initialised");
+                    value = new Unknown(v.name + ", not initialized");
                 }
             } else {
-                value = new Unknown(v.name + ", not initialised");
+                value = new Unknown(v.name + ", not initialized");
             }
             value = convert(d.type, v.pointer, value);
             env.vars.put(v.name, value);
@@ -3356,7 +3555,7 @@ public final class CppGeometry {
         } else if (name.startsWith("std::")) {
             name = name.substring(5);
         }
-        final Double c = constant(name);
+        final Double c = probe ? probeConstant(name) : constant(name);
         if (c != null) {
             return c;
         }
@@ -3423,6 +3622,35 @@ public final class CppGeometry {
             return null;
         }
         return Units.symbol(name);
+    }
+
+    /** CLHEP's constants with a dimension, in the probe's units; the pure numbers stay. */
+    private static final Map<String, Double> PROBE_CLHEP = new HashMap<>();
+
+    static {
+        final Map<String, Double> u = Units.probeSymbols();
+        PROBE_CLHEP.putAll(CLHEP);
+        final double density = u.get("g") / u.get("cm3"), pascal = u.get("pascal");
+        PROBE_CLHEP.put("universe_mean_density", 1.e-25 * density);
+        PROBE_CLHEP.put("STP_Pressure", 101325. * pascal);
+        PROBE_CLHEP.put("kGasThreshold", 10. * density / 1000);
+        PROBE_CLHEP.put("hep_pascal", pascal);
+        PROBE_CLHEP.put("electron_mass_c2", 0.510998950 * u.get("MeV"));
+        PROBE_CLHEP.put("proton_mass_c2", 938.27208816 * u.get("MeV"));
+        PROBE_CLHEP.put("c_light", 299.792458 * u.get("mm") / u.get("ns"));
+        PROBE_CLHEP.put("pc", 3.0856775807e+16 * u.get("m"));
+        PROBE_CLHEP.put("kInfinity", 9.0E99 * u.get("mm"));
+    }
+
+    private static Double probeConstant(String name) {
+        final Double c = PROBE_CLHEP.get(name);
+        if (c != null) {
+            return c;
+        }
+        if (name.length() == 1 && !name.equals("m") && !name.equals("s") && !name.equals("g") && !name.equals("L")) {
+            return null;
+        }
+        return Units.probeSymbols().get(name);
     }
 
     private Object unary(Unary u, Env env) {
@@ -3935,12 +4163,12 @@ public final class CppGeometry {
                 break;
         }
         if (name.startsWith("G4Colour::") || name.startsWith("G4Color::")) {
-            return colour(name.substring(name.indexOf("::") + 2));
+            return color(name.substring(name.indexOf("::") + 2));
         }
         return null;
     }
 
-    private static int[] colour(String name) {
+    private static int[] color(String name) {
         return switch (name) {
             case "White" -> new int[] {255, 255, 255, 255};
             case "Gray", "Grey" -> new int[] {128, 128, 128, 255};
@@ -3979,6 +4207,9 @@ public final class CppGeometry {
                         note(at, Geometry.Severity.WARNING, "rotation angle not known while reading");
                         r.m = null;
                         return r;
+                    }
+                    if (at instanceof Call c && c.args.size() == 1) {
+                        bare(c.args.get(0), 'A', name);
                     }
                     if (r.m != null) {
                         r.pre(axisRotation(name.charAt(6), a));
@@ -4052,7 +4283,7 @@ public final class CppGeometry {
                     if (a0 instanceof int[] c) {
                         v.color = argb(c);
                     } else if (args.size() >= 3) {
-                        final int[] c = colourOf(args);
+                        final int[] c = colorOf(args);
                         if (c != null) {
                             v.color = argb(c);
                         }
@@ -4768,7 +4999,7 @@ public final class CppGeometry {
                     : new ZSection(z, off[0], off[1], scale);
             }
             case "G4PVParameterised" -> {
-                return parameterised(args, at);
+                return parameterized(args, at);
             }
             case "G4Transform3D", "HepGeom::Transform3D" -> {
                 final Tr tr = new Tr();
@@ -4874,7 +5105,7 @@ public final class CppGeometry {
                 return tr;
             }
             case "G4Colour", "G4Color" -> {
-                final int[] c = colourOf(args);
+                final int[] c = colorOf(args);
                 return c == null ? new int[] {154, 167, 184, 255} : c;
             }
             case "G4VisAttributes" -> {
@@ -4982,7 +5213,7 @@ public final class CppGeometry {
         }
         if (base.startsWith("G4") && base.endsWith("Solid") || base.equals("G4TwistedTubs") || base.equals("G4TwistedBox")) {
             note(at, Geometry.Severity.WARNING, base + " is not drawn by the code reading");
-            return new Unknown(base + ", not modelled");
+            return new Unknown(base + ", not modeled");
         }
         final Object made = isUserClass(base) && globalEnv != null ? instantiate(base, args, at) : new Opaque(base);
         if (a0 instanceof String n && (base.equals("G4MultiFunctionalDetector") || derives(base, "G4VSensitiveDetector", 0)
@@ -5056,7 +5287,7 @@ public final class CppGeometry {
         return new Unknown(what + " not known");
     }
 
-    private static int[] colourOf(List<Object> args) {
+    private static int[] colorOf(List<Object> args) {
         if (args.size() < 3) {
             return null;
         }
@@ -5310,6 +5541,9 @@ public final class CppGeometry {
                 // the parameter is this argument, as written: a change made to it is written there
                 paramNodes.computeIfAbsent(s, k2 -> new LinkedHashMap<>()).put(key,
                     new Object[] {solidArgs.get(i + 1), factor, kind});
+                if (kind != 'N') {
+                    bare(solidArgs.get(i + 1), kind, s.g4Class() + " " + key);
+                }
             }
         }
     }
@@ -5746,6 +5980,7 @@ public final class CppGeometry {
             }
             pos = p;
             posNode = p.origin;
+            bareVector(posNode, "G4PVPlacement position");
             k = 2;
         }
         if (args.size() < k + 3) {
@@ -5820,7 +6055,7 @@ public final class CppGeometry {
     }
 
     // ==================================================================
-    // G4PVDivision: the copies Geant4's division parameterisations make
+    // G4PVDivision: the copies Geant4's division parameterizations make
     // ==================================================================
 
     private record Division(String name, LogicalVolume lv, LogicalVolume mother, String axis, int n, double width,
@@ -5895,15 +6130,15 @@ public final class CppGeometry {
     }
 
     // ==================================================================
-    // G4PVParameterised: the parameterisation run for every copy
+    // G4PVParameterised: the parameterization run for every copy
     // ==================================================================
 
-    private record Parameterised(String name, LogicalVolume lv, LogicalVolume mother, int count, Instance param,
+    private record Parameterized(String name, LogicalVolume lv, LogicalVolume mother, int count, Instance param,
                                  Node at) {
     }
 
-    private Object parameterised(List<Object> args, Node at) {
-        // (name, logical, mother (logical or physical), axis, n, parameterisation, check = false)
+    private Object parameterized(List<Object> args, Node at) {
+        // (name, logical, mother (logical or physical), axis, n, parameterization, check = false)
         if (args.size() < 6) {
             return UNKNOWN;
         }
@@ -5911,27 +6146,27 @@ public final class CppGeometry {
         final Double count = num(args.get(4));
         final LogicalVolume mother = m instanceof LogicalVolume ml ? ml : m instanceof PhysicalVolume pm ? pm.logical()
             : m instanceof WorldPv w ? w.lv : null;
-        final String name = n instanceof String str ? str : "parameterised";
+        final String name = n instanceof String str ? str : "parameterized";
         if (!(l instanceof LogicalVolume lv) || mother == null || count == null) {
             note(at, Geometry.Severity.WARNING, "G4PVParameterised \"" + name + "\": a parameter not known while reading: not drawn");
             return UNKNOWN;
         }
         if (!(p instanceof Instance inst)) {
-            note(at, Geometry.Severity.WARNING, "G4PVParameterised \"" + name + "\": its parameterisation ("
+            note(at, Geometry.Severity.WARNING, "G4PVParameterised \"" + name + "\": its parameterization ("
                 + (p instanceof Unknown u ? u.why : p instanceof Opaque o ? o.type + ", not in the sources read" : "?")
                 + ") is not read: not drawn");
             return UNKNOWN;
         }
-        parameterised.add(new Parameterised(name, lv, mother, count.intValue(), inst, at));
+        parameterized.add(new Parameterized(name, lv, mother, count.intValue(), inst, at));
         return new Opaque("G4PVParameterised");
     }
 
     /**
      * The copies of a G4PVParameterised, as Geant4 makes them when it navigates: for each copy number the
-     * parameterisation's ComputeTransformation, ComputeSolid and the ComputeDimensions overload of the solid,
+     * parameterization's ComputeTransformation, ComputeSolid and the ComputeDimensions overload of the solid,
      * ComputeMaterial. Copies whose solid or material differ get a volume of their own, daughters included.
      */
-    private void expand(Parameterised j) {
+    private void expand(Parameterized j) {
         final String cls = j.param().cls;
         final Function transform = resolve(cls, "ComputeTransformation", 2, null, 0);
         if (transform == null) {
@@ -5960,7 +6195,7 @@ public final class CppGeometry {
                 try {
                     sized = solid.copy(solid.name());
                 } catch (RuntimeException e) {
-                    sized = null;   // a solid the catalogue cannot copy (a boolean): drawn as it is
+                    sized = null;   // a solid the catalog cannot copy (a boolean): drawn as it is
                 }
                 if (sized != null) {
                     call(dims, List.of(sized, (long) i, stub), j.param().fields, j.at());
@@ -6006,7 +6241,7 @@ public final class CppGeometry {
         return b.toString();
     }
 
-    /** A copy of a parameterised or divided volume with its own solid or material: its daughters are placed in it too. */
+    /** A copy of a parameterized or divided volume with its own solid or material: its daughters are placed in it too. */
     private LogicalVolume variant(LogicalVolume lv, Node at, Solid s, String material, int copy) {
         Solid solid = s;
         if (g.solid(s.name()) == null) {

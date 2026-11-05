@@ -31,7 +31,7 @@ import java.util.Map;
 /**
  * One framework's place in a project that already exists.
  *
- * The creation window settles this once; here it is changed afterwards, read
+ * The creation window settles this once; here it is changed afterward, read
  * from and written back to the project's own .workflow file.
  */
 public final class ModuleSettingsPanel extends JPanel {

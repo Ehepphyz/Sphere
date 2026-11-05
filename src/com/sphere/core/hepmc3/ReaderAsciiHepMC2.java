@@ -17,7 +17,7 @@ import java.util.TreeMap;
  * Reads HepMC2's IO_GenEvent text format into HepMC3 events, as HepMC3 does:
  * barcodes dropped, the event-level values of HepMC2 (mpi, scale, couplings,
  * signal process, random states) turned into attributes, particle flows and
- * polarisations and vertex weights kept as attributes, the vertices with
+ * polarizations and vertex weights kept as attributes, the vertices with
  * nothing entering or leaving removed, and the tree added in topological
  * order.
  */

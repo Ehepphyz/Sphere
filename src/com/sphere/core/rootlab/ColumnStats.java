@@ -221,12 +221,12 @@ public final class ColumnStats {
      * statistics then describe its first entries, and say so).
      */
     public static ColumnStats of(RTree.RBranch branch, long maxEntries, DoubleConsumer progress,
-                                 BooleanSupplier cancelled) throws IOException {
+                                 BooleanSupplier canceled) throws IOException {
         final long t0 = System.nanoTime();
         final ColumnStats s = new ColumnStats(branch.name());
         final long n = Math.min(branch.entries(), maxEntries);
         for (long i = 0; i < n; i++) {
-            if (cancelled != null && cancelled.getAsBoolean()) {
+            if (canceled != null && canceled.getAsBoolean()) {
                 break;
             }
             final double[] v = branch.numbers(i);

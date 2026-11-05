@@ -10,7 +10,7 @@ import com.sphere.core.fjcontrib.nsubjettiness.MeasureDefinition.XConeMeasure;
  * The XCone jet algorithm, XConePlugin (I.W. Stewart, F.J. Tackmann,
  * J. Thaler, C.K. Vermilion and T.F. Wilkason, JHEP 11 (2015) 072): exactly
  * N jets of radius about R0, the N-jettiness plugin with one-pass
- * generalised-kt axes matched to beta and the XCone measure. beta = 2 gives
+ * generalized-kt axes matched to beta and the XCone measure. beta = 2 gives
  * "mean" jets, beta = 1 recoil-free "median" ones.
  */
 public class XConePlugin extends NjettinessPlugin {
@@ -52,7 +52,7 @@ public class XConePlugin extends NjettinessPlugin {
         return r0;
     }
 
-    /** XCone without the minimisation, for tests, PseudoXConePlugin. */
+    /** XCone without the minimization, for tests, PseudoXConePlugin. */
     public static class PseudoXConePlugin extends NjettinessPlugin {
         private final int n;
         private final double r0;

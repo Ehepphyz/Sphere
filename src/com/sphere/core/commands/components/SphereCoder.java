@@ -499,6 +499,14 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
 
     private void selectionChanged(EditorGroup g) {
         CodeTab active = g.selected();
+        if (g.tabs.getSelectedComponent() instanceof CoderPanel pdf) {
+            // a PDF shown takes the keyboard, so Ctrl+S and the other keys reach it
+            SwingUtilities.invokeLater(pdf::focusView);
+            Window w = SwingUtilities.getWindowAncestor(this);
+            if (w instanceof JFrame frame) {
+                frame.setTitle(pdf.title() + " — SphereCoder");
+            }
+        }
         if (g == activeGroup) {
             currentFile = active == null ? null : active.getFile();
             updateStatusBar();
@@ -558,7 +566,7 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
 
     /**
      * The group beside this one for "to the side": the one on its right, else
-     * any neighbour, else a new group on the right (when {@code create}).
+     * any neighbor, else a new group on the right (when {@code create}).
      */
     private EditorGroup sideGroup(EditorGroup from, boolean create) {
         for (EditorGrid.Side s : new EditorGrid.Side[] { EditorGrid.Side.RIGHT, EditorGrid.Side.LEFT,
@@ -794,6 +802,8 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
                 drop.add(t);
             }
         }
+        // PDF tabs come along: their unsaved edits live in them
+        List<CoderPanel> pdfs = detachPdfTabs();
         for (EditorGroup g : groups()) {
             g.tabs.removeAll();
         }
@@ -823,6 +833,9 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
             } else {
                 addNewTab(fresh.get(g), null);
             }
+        }
+        for (CoderPanel p : pdfs) {
+            addPdfTab(fresh.get(0), p, -1, false);
         }
         if (fresh.get(0).tabs.getTabCount() == 0) {
             addNewTab(fresh.get(0), null);
@@ -1056,6 +1069,7 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
     private SphereCoder openWindow(Rectangle bounds) {
         SphereCoder window = new SphereCoder(this);
         JFrame frame = new JFrame("SphereCoder");
+        IconManager.applyAppIcon(frame);
         // Closing it docks its editors back (handleExit), it never just goes.
         frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         frame.setLayout(new BorderLayout());
@@ -1197,6 +1211,9 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
             Component c = tabPane.getComponentAt(index);
             if (c instanceof CodeTab t) {
                 return EditorTheme.languageColor(t.getLanguage());
+            }
+            if (c instanceof CoderPanel cp) {
+                return cp.badgeColor();
             }
             return EditorTheme.textMuted();
         }
@@ -2287,11 +2304,26 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
      * editor window does. Sphere calls it before it quits: ":quit", the main
      * window's close box and a restart asked by the settings editor used to
      * end the program at once and lose whatever had not been saved.
-     * Runs on the event thread. False when the user cancelled.
+     * Runs on the event thread. False when the user canceled.
      */
     public boolean prepareToQuit() {
         if (main != null) {
             return root().prepareToQuit();
+        }
+        // Unsaved PDF and picture edits are asked about too, each in its own tab: the pictures first,
+        // since putting one back into its PDF gives that PDF changes to ask about in turn.
+        List<CoderPanel> panels = new ArrayList<>(pdfPanels());
+        panels.sort(java.util.Comparator.comparingInt(p -> p instanceof com.sphere.components.spdf.SpdfPanel ? 1 : 0));
+        for (CoderPanel pdf : panels) {
+            if (pdf.isDirty()) {
+                EditorGroup g = (EditorGroup) SwingUtilities.getAncestorOfClass(EditorGroup.class, (Component) pdf);
+                if (g != null) {
+                    g.tabs.setSelectedComponent((Component) pdf);
+                }
+                if (!pdf.confirmDiscard()) {
+                    return false;
+                }
+            }
         }
         for (CodeTab tab : familyDistinctTabs()) {
             if (tab.isModified()) {
@@ -2361,6 +2393,11 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         if (file == null || !file.exists()) {
             return;
         }
+        // A PDF opens in :spdf, the PDF editor, in a tab of its own.
+        if (isPdf(file)) {
+            openPdf(file);
+            return;
+        }
         if (tooLargeToEdit(file)) {
             return;
         }
@@ -2401,6 +2438,229 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         addToRecentFiles(file);
     }
 
+    // =======================================================================
+    // PDF tabs (:spdf)
+    // =======================================================================
+
+    /** True for the files SphereCoder opens in its PDF editor rather than as text. */
+    public static boolean isPdf(File file) {
+        return file != null && file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".pdf");
+    }
+
+    /**
+     * Opens a PDF in a tab of the active group, in :spdf, Sphere's PDF reader
+     * and editor; a PDF already open is brought forward. With no file, an
+     * empty :spdf tab waits for one (Ctrl+O, or a file dropped on it).
+     */
+    public com.sphere.components.spdf.SpdfPanel openPdf(File file) {
+        for (EditorGroup g : groups()) {
+            for (int i = 0; i < g.tabs.getTabCount(); i++) {
+                if (g.tabs.getComponentAt(i) instanceof com.sphere.components.spdf.SpdfPanel p && file != null
+                    && p.file() != null && p.file().toFile().getAbsoluteFile().equals(file.getAbsoluteFile())) {
+                    setActiveGroup(g);
+                    g.tabs.setSelectedIndex(i);
+                    return p;
+                }
+            }
+        }
+        EditorGroup g = activeGroup;
+        CodeTab pristine = g.selected();
+        boolean replace = pristine != null && !pristine.isModified() && pristine.getFile() == null
+                          && !pristine.getBuffer().isShared() && pristine.getEditorArea().getDocument().getLength() == 0
+                          && g.tabs.getTabCount() == 1;
+        com.sphere.components.spdf.SpdfPanel p = new com.sphere.components.spdf.SpdfPanel();
+        addPdfTab(g, p, g.tabs.getSelectedIndex() + 1, true);
+        if (replace) {
+            // the empty untitled tab of a fresh window gives its place
+            closeTab(pristine);
+        }
+        if (file != null) {
+            p.open(file.toPath());
+            addToRecentFiles(file);
+        }
+        refreshTabHeaders(g);
+        return p;
+    }
+
+    /**
+     * Puts an editor other than text (a PDF, a picture) in a group's strip, with its header, keeping the
+     * tab title in step with the document.
+     */
+    private void addPdfTab(EditorGroup g, CoderPanel p, int index, boolean select) {
+        int at = index < 0 || index > g.tabs.getTabCount() ? g.tabs.getTabCount() : index;
+        java.nio.file.Path f = p.file();
+        Component c = (Component) p;
+        g.tabs.insertTab(f == null ? p.badge() : f.getFileName().toString(), null, c, f == null ? null : f.toString(), at);
+        PdfTabHeader header = new PdfTabHeader(p);
+        g.tabs.setTabComponentAt(at, header);
+        if (p instanceof com.sphere.components.spdf.SpdfPanel pdf) {
+            // a picture of the PDF edited in Sphere Image opens in a tab beside it
+            pdf.setImageEditorHost(this::openLinkedImage);
+        }
+        p.setTitleListener(() -> {
+            header.refresh();
+            EditorGroup now = (EditorGroup) SwingUtilities.getAncestorOfClass(EditorGroup.class, c);
+            Window w = SwingUtilities.getWindowAncestor(this);
+            if (w instanceof JFrame frame && now != null && now.tabs.getSelectedComponent() == c) {
+                frame.setTitle(p.title() + " — SphereCoder");
+            }
+        });
+        if (select) {
+            g.tabs.setSelectedComponent(c);
+        }
+    }
+
+    /**
+     * Opens a picture in Sphere Image, in a tab of the group beside the active
+     * one (the PDF stays in view): saving it there puts it back where it came
+     * from, and the PDF shows the edits while they are made.
+     */
+    public void openLinkedImage(java.awt.image.BufferedImage image, String name,
+                                com.sphere.components.imaging.ImageEditorPanel.Link link) {
+        for (CoderPanel p : pdfPanels()) {
+            if (p instanceof com.sphere.components.imaging.ImageTab t && t.linkedTo(link)) {
+                EditorGroup g = (EditorGroup) SwingUtilities.getAncestorOfClass(EditorGroup.class, t);
+                if (g != null) {
+                    setActiveGroup(g);
+                    g.tabs.setSelectedComponent(t);
+                }
+                return;
+            }
+        }
+        com.sphere.components.imaging.ImageTab tab = new com.sphere.components.imaging.ImageTab();
+        tab.openLinked(image, name, link);
+        EditorGroup side = sideGroup(activeGroup, true);
+        addPdfTab(side, tab, side.tabs.getTabCount(), true);
+        setActiveGroup(side);
+        refreshTabHeaders(side);
+        SwingUtilities.invokeLater(tab::focusView);
+    }
+
+    /** The PDF editors of the groups, taken out of their strips (a layout is rebuilt around them). */
+    private List<CoderPanel> detachPdfTabs() {
+        List<CoderPanel> out = new ArrayList<>();
+        for (EditorGroup g : groups()) {
+            for (int i = g.tabs.getTabCount() - 1; i >= 0; i--) {
+                if (g.tabs.getComponentAt(i) instanceof CoderPanel p) {
+                    g.tabs.removeTabAt(i);
+                    out.add(0, p);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Closes a PDF tab, asking first about unsaved changes. */
+    private void closePdf(CoderPanel p) {
+        if (!p.confirmDiscard()) {
+            return;
+        }
+        EditorGroup group = (EditorGroup) SwingUtilities.getAncestorOfClass(EditorGroup.class, (Component) p);
+        if (group != null) {
+            int i = group.tabs.indexOfComponent((Component) p);
+            if (i >= 0) {
+                group.tabs.removeTabAt(i);
+            }
+        }
+        p.dispose();
+        if (group != null && group.tabs.getTabCount() == 0) {
+            if (grid.groupCount() > 1) {
+                closeGroupNow(group);
+            } else if (main != null) {
+                closeWindow();
+                return;
+            } else {
+                addNewTab(group, null);
+            }
+        }
+        refreshTabHeaders();
+        updateStatusBar();
+    }
+
+    /** The header of a PDF or picture tab: a colored badge (PDF, IMG), the name (marked while unsaved), a close button. */
+    private final class PdfTabHeader extends JPanel {
+        private final CoderPanel pdf;
+        private final JLabel title = new JLabel();
+
+        PdfTabHeader(CoderPanel pdf) {
+            this.pdf = pdf;
+            setOpaque(false);
+            setLayout(new BorderLayout(7, 0));
+            setBorder(BorderFactory.createEmptyBorder(3, 10, 0, 6));
+            JLabel badge = new JLabel(pdf.badge()) {
+                @Override
+                protected void paintComponent(Graphics g0) {
+                    Graphics2D g = (Graphics2D) g0.create();
+                    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g.setColor(pdf.badgeColor());
+                    g.fillRoundRect(0, 2, getWidth(), getHeight() - 4, 6, 6);
+                    g.dispose();
+                    super.paintComponent(g0);
+                }
+            };
+            badge.setFont(FontLoader.getGlobalFont(Font.BOLD, 9));
+            badge.setForeground(Color.WHITE);
+            badge.setBorder(BorderFactory.createEmptyBorder(1, 4, 1, 4));
+            title.setFont(FontLoader.getGlobalFont(Font.PLAIN, 13));
+            JLabel close = new JLabel(com.sphere.components.spdf.SpdfTheme.icon("close", 12, EditorTheme.textMuted()));
+            close.setBorder(BorderFactory.createEmptyBorder(0, 4, 0, 2));
+            close.setToolTipText("Close");
+            close.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            close.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    closePdf(pdf);
+                }
+
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    close.setIcon(com.sphere.components.spdf.SpdfTheme.icon("close", 12, EditorTheme.foreground()));
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    close.setIcon(com.sphere.components.spdf.SpdfTheme.icon("close", 12, EditorTheme.textMuted()));
+                }
+            });
+            add(badge, BorderLayout.WEST);
+            add(title, BorderLayout.CENTER);
+            add(close, BorderLayout.EAST);
+            addMouseListener(new MouseAdapter() {
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    EditorGroup g = (EditorGroup) SwingUtilities.getAncestorOfClass(EditorGroup.class, (Component) pdf);
+                    if (g != null && SwingUtilities.isLeftMouseButton(e)) {
+                        setActiveGroup(g);
+                        g.tabs.setSelectedComponent((Component) pdf);
+                    }
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    if (SwingUtilities.isMiddleMouseButton(e)) {
+                        closePdf(pdf);
+                    }
+                }
+            });
+            refresh();
+        }
+
+        void refresh() {
+            title.setText(pdf.title());
+            title.setForeground(EditorTheme.foreground());
+            java.nio.file.Path f = pdf.file();
+            setToolTipText(f == null ? (pdf instanceof com.sphere.components.spdf.SpdfPanel ? ":spdf" : pdf.title())
+                : f.toString());
+            revalidate();
+            repaint();
+            Container parent = getParent();
+            if (parent != null) {
+                parent.revalidate();
+                parent.repaint();
+            }
+        }
+    }
+
     /**
      * A file over the editor's limit goes to the read-only viewer, which reads
      * it as it scrolls. A tab was opened for it before, left empty with the
@@ -2421,6 +2681,10 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
      * A file already open elsewhere gets a second view sharing its buffer.
      */
     public void openFileToSide(File file) {
+        if (file != null && file.isFile() && isPdf(file)) {
+            openPdf(file);
+            return;
+        }
         if (file == null || !file.isFile() || tooLargeToEdit(file)) {
             return;
         }
@@ -2466,6 +2730,12 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
 
     /* Saves the active tab's file. */
     public void saveFile() {
+        CoderPanel pdf = activePdf();
+        if (pdf != null) {
+            // File > Save (Ctrl+S) on a PDF tab: the PDF editor writes the PDF
+            pdf.save();
+            return;
+        }
         CodeTab tab = getActiveTab();
         if (tab == null) return;
 
@@ -2487,10 +2757,47 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
                 saved++;
             }
         }
+        for (CoderPanel p : pdfPanels()) {
+            if (p.isDirty() && p.save()) {
+                saved++;
+            }
+        }
         toast(saved == 0 ? "Nothing to save" : "Saved " + saved + " file" + (saved == 1 ? "" : "s"));
     }
 
+    /** The PDF shown in the active group, or null when a text tab is shown. */
+    private CoderPanel activePdf() {
+        return activeGroup != null && activeGroup.tabs.getSelectedComponent() instanceof CoderPanel p
+            ? p : null;
+    }
+
+    /** Every PDF tab of this editor and of its windows. */
+    private List<CoderPanel> pdfPanels() {
+        List<CoderPanel> out = new ArrayList<>();
+        List<SphereCoder> coders = new ArrayList<>();
+        coders.add(this);
+        if (main == null) {
+            coders.addAll(windows);
+        }
+        for (SphereCoder c : coders) {
+            for (EditorGroup g : c.groups()) {
+                for (int i = 0; i < g.tabs.getTabCount(); i++) {
+                    if (g.tabs.getComponentAt(i) instanceof CoderPanel p) {
+                        out.add(p);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
     private void saveFileAs() {
+        CoderPanel pdf = activePdf();
+        if (pdf != null) {
+            // File > Save As on a PDF tab: the PDF editor writes the PDF
+            pdf.saveAs();
+            return;
+        }
         CodeTab tab = getActiveTab();
         if (tab == null) return;
 
@@ -2524,7 +2831,7 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
     /**
      * Closes a tab. Only the last view of a file asks about unsaved changes: a
      * second view closing leaves the text open in the other group. Returns
-     * false when the user cancelled.
+     * false when the user canceled.
      */
     private boolean closeTab(CodeTab tab) {
         if (tab.isDisposed()) {
@@ -2802,6 +3109,8 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         CodeTab wasActive = getActiveTab();
         Map<String, CodeTab> current = new LinkedHashMap<>();
         List<CodeTab> unsaved = new ArrayList<>();
+        // a PDF opened before the window showed joins the restored layout
+        List<CoderPanel> pdfs = detachPdfTabs();
         for (EditorGroup g : groups()) {
             for (CodeTab t : g.views()) {
                 g.tabs.remove(t);
@@ -2865,6 +3174,10 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         }
         for (CodeTab t : unsaved) {
             addTab(activeGroup, t, -1, false);
+        }
+        for (int i = 0; i < pdfs.size(); i++) {
+            // the last PDF opened is the one shown
+            addPdfTab(activeGroup, pdfs.get(i), -1, i == pdfs.size() - 1);
         }
         if (wasActive != null && !wasActive.isDisposed() && groupOf(wasActive) != null) {
             EditorGroup g = groupOf(wasActive);
@@ -3096,8 +3409,22 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         cmd("file.quit", "File", "Close Window", key(KeyEvent.VK_Q, ctrl), this::handleExit);
 
         // ---- Edit
-        cmd("edit.undo", "Edit", "Undo", key(KeyEvent.VK_Z, ctrl), () -> withTab(CodeTab::undo));
-        cmd("edit.redo", "Edit", "Redo", key(KeyEvent.VK_Y, ctrl), () -> withTab(CodeTab::redo));
+        cmd("edit.undo", "Edit", "Undo", key(KeyEvent.VK_Z, ctrl), () -> {
+            CoderPanel pdf = activePdf();
+            if (pdf != null) {
+                pdf.undo();
+            } else {
+                withTab(CodeTab::undo);
+            }
+        });
+        cmd("edit.redo", "Edit", "Redo", key(KeyEvent.VK_Y, ctrl), () -> {
+            CoderPanel pdf = activePdf();
+            if (pdf != null) {
+                pdf.redo();
+            } else {
+                withTab(CodeTab::redo);
+            }
+        });
         cmd("edit.cut", "Edit", "Cut", key(KeyEvent.VK_X, ctrl), () -> withTab(t -> t.getEditorArea().cut()));
         cmd("edit.copy", "Edit", "Copy", key(KeyEvent.VK_C, ctrl), () -> withTab(t -> t.getEditorArea().copy()));
         cmd("edit.paste", "Edit", "Paste", key(KeyEvent.VK_V, ctrl), () -> withTab(t -> t.getEditorArea().paste()));

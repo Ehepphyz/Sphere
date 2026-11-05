@@ -599,6 +599,7 @@ public class ConsoleUI extends JPanel {
     public static final class FormatReportDialog extends JDialog {
         public FormatReportDialog(Frame owner, String fileName, CppFormatterEngine.FormatResult result) {
             super(owner, "Format Check: " + fileName, true);
+            com.sphere.utils.IconManager.applyAppIcon(this);
             setSize(600, 400);
             setLocationRelativeTo(owner);
             setLayout(new BorderLayout(10, 10));

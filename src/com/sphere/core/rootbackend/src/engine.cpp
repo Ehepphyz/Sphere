@@ -39,7 +39,7 @@ constexpr std::size_t WORK_STEAL_THRESHOLD = 4;
 constexpr std::size_t PRIORITY_QUEUE_POW2 = 10;
 constexpr auto TASK_DEADLINE = std::chrono::milliseconds(500);
 
-/// Detects the NUMA node count, honouring a NUMA_NODES override.
+/// Detects the NUMA node count, honoring a NUMA_NODES override.
 int detect_numa_nodes() noexcept {
   if (const char *env = std::getenv("NUMA_NODES"); env != nullptr) {
     const int value = std::atoi(env);

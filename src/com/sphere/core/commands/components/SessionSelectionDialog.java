@@ -17,6 +17,7 @@ public class SessionSelectionDialog extends JDialog {
 
     public SessionSelectionDialog(Frame parent) {
         super(parent, "Select Session to Edit", true);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         setLayout(new BorderLayout(10, 10));
 
         // 1. Initialize List Model using our smart SessionManager

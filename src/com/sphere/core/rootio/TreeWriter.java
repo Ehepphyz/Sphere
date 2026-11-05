@@ -20,7 +20,7 @@ import java.util.Map;
  *   <li>{@link #fill} is TTree::Fill: each branch writes its entry into its
  *       basket (TBranch::FillImpl, TBasket::Update), a full basket is written
  *       to the file (WriteBasketImpl, TBasket::WriteBuffer) and reused
- *       (WriteReset); then the tree flushes, optimises its basket sizes and
+ *       (WriteReset); then the tree flushes, optimizes its basket sizes and
  *       saves itself as ROOT does once 30 MB and 300 MB are compressed;</li>
  *   <li>{@link #write} is WriteTObject: the tree with its branches, leaves and
  *       the baskets still in memory, under the next cycle of its key.</li>

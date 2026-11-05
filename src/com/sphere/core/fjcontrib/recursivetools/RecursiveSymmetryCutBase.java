@@ -180,7 +180,7 @@ public abstract class RecursiveSymmetryCutBase implements Transformer {
 
     /**
      * The cut on the symmetry for the pair (p1, p2); {@code r0sqr} is the
-     * normalisation a recursive variant passes (NaN for the default).
+     * normalization a recursive variant passes (NaN for the default).
      */
     protected abstract double symmetryCutFn(PseudoJet p1, PseudoJet p2, double r0sqr);
 
@@ -283,7 +283,7 @@ public abstract class RecursiveSymmetryCutBase implements Transformer {
      * parents piece1 is the subjet itself; on an issue piece2 is an empty jet
      * and piece1 what should be returned (empty if the issue was critical).
      *
-     * @param r0sqr the normalisation passed to the symmetry cut (NaN: the tool's own)
+     * @param r0sqr the normalization passed to the symmetry cut (NaN: the tool's own)
      */
     protected RecursionStatus recurseOneStep(PseudoJet subjet, Step s, double r0sqr) {
         final PseudoJet[] parents = subjet.parents();

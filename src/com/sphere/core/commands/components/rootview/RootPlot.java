@@ -85,7 +85,7 @@ public final class RootPlot extends JComponent {
         repaint();
     }
 
-    /** Points carrying a third value, drawn with that value as their colour. */
+    /** Points carrying a third value, drawn with that value as their color. */
     public void showGraph2D(RootGraph2D g) {
         this.scatter = g;
         this.graph = null;
@@ -315,14 +315,14 @@ public final class RootPlot extends JComponent {
         paintProbeLine(g, box);
     }
 
-    /** The width the colour scale takes on the right of a two dimensional plot. */
+    /** The width the color scale takes on the right of a two dimensional plot. */
     private static final int SCALE = 58;
 
     /**
-     * Draws a two dimensional histogram as a map of coloured cells.
+     * Draws a two dimensional histogram as a map of colored cells.
      *
      * Drawing it along a single axis would show a sum that nobody asked for, so
-     * the second axis gets its own direction and the contents a colour.
+     * the second axis gets its own direction and the contents a color.
      */
     private void paintHistogram2D(Graphics2D g, RootHistogram h) {
         final int nx = h.xAxis.bins;
@@ -371,7 +371,7 @@ public final class RootPlot extends JComponent {
         paintTitle(g, h.title.isEmpty() ? h.name : h.title, box);
     }
 
-    /** The bar on the right that says which colour means what. */
+    /** The bar on the right that says which color means what. */
     private void paintColorScale(Graphics2D g, Rectangle box,
                                  double bottom, double top) {
         final int x = (int) box.getMaxX() + 16;
@@ -409,7 +409,7 @@ public final class RootPlot extends JComponent {
         return new Color(r, g, b);
     }
 
-    /** A TGraph2D: the points where they belong, the third value as colour. */
+    /** A TGraph2D: the points where they belong, the third value as color. */
     private void paintScatter(Graphics2D g, RootGraph2D gr) {
         final int n = gr.size();
         if (n == 0) {

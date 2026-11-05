@@ -82,7 +82,7 @@ final class WorkPlane {
         return origin.add(u.mul(a)).add(v.mul(b)).add(n.mul(h));
     }
 
-    /** The transform taking a solid's local (x, y, z) onto (u, v, n), centred at a point. */
+    /** The transform taking a solid's local (x, y, z) onto (u, v, n), centered at a point. */
     Xform frame(Vec3 center) {
         final double[] m = {u.x(), v.x(), n.x(), u.y(), v.y(), n.y(), u.z(), v.z(), n.z()};
         return new Xform(m, center.x(), center.y(), center.z());

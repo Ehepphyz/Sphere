@@ -522,7 +522,7 @@ public final class RootFormula {
         return x >= 0 ? y : -y;
     }
 
-    /** TMath::Landau, by CERNLIB's DENLAN rational approximations; normalised when asked. */
+    /** TMath::Landau, by CERNLIB's DENLAN rational approximations; normalized when asked. */
     static double landau(double x, double mpv, double sigma, boolean norm) {
         if (sigma <= 0) return 0;
         final double v = (x - mpv) / sigma;

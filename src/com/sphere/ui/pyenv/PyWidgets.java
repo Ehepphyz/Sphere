@@ -28,8 +28,8 @@ import java.awt.geom.Arc2D;
 import java.awt.geom.RoundRectangle2D;
 
 /**
- * The drawn pieces of the Python manager, all in the theme's colours
- * (ThemePalette's Py keys): the coloured badges of an update or a problem,
+ * The drawn pieces of the Python manager, all in the theme's colors
+ * (ThemePalette's Py keys): the colored badges of an update or a problem,
  * the health gauge, the filter chips, and the table's renderers.
  */
 public final class PyWidgets {
@@ -41,7 +41,7 @@ public final class PyWidgets {
         return ThemeManager.getCurrentPalette();
     }
 
-    /** The colour of an update by how far it goes. */
+    /** The color of an update by how far it goes. */
     public static Color jumpColor(Pep440.Jump j) {
         final ThemePalette p = palette();
         return switch (j) {
@@ -111,7 +111,7 @@ public final class PyWidgets {
         }
     }
 
-    /** The health score as a ring that fills, its colour by the score. */
+    /** The health score as a ring that fills, its color by the score. */
     public static final class Gauge extends JComponent {
         private int score = -1;
 
@@ -218,7 +218,7 @@ public final class PyWidgets {
         }
     }
 
-    /** A cell with a coloured badge drawn in it, the text on it. */
+    /** A cell with a colored badge drawn in it, the text on it. */
     public static final class BadgeCell extends Cell {
         private Color badge;
 
@@ -251,7 +251,7 @@ public final class PyWidgets {
         }
     }
 
-    /** A dot of colour before the text: the state of a package at a glance. */
+    /** A dot of color before the text: the state of a package at a glance. */
     public static final class DotCell extends Cell {
         private Color dot;
 
@@ -272,7 +272,7 @@ public final class PyWidgets {
         }
     }
 
-    /** The state of a package: red for a vulnerability, a conflict or a yanked version; colour of its update; green. */
+    /** The state of a package: red for a vulnerability, a conflict or a yanked version; color of its update; green. */
     public static Color stateColor(PyEnv env, PyEnv.Pkg p) {
         final ThemePalette pal = palette();
         if (p.vulnerabilities() > 0 || p.yanked() || conflicted(env, p)) return pal.getPyDanger();

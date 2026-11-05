@@ -152,7 +152,7 @@ public class PresetPythonUpdaterPanel extends JPanel {
                             "Export Phase Finalized", JOptionPane.INFORMATION_MESSAGE);
 
                 } catch (Exception processFaultException) {
-                    // A cancelled worker carries no cause of its own.
+                    // A canceled worker carries no cause of its own.
                     Throwable reason = processFaultException.getCause() != null
                         ? processFaultException.getCause() : processFaultException;
                     AppLogger.error("Failed compiling template automation script: " + reason.getMessage());

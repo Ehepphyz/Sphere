@@ -23,8 +23,8 @@ import java.util.List;
  * (1000000 x object id + pdg) cluster only through a Standard-Model 2 -&gt; 1
  * vertex: q g -&gt; q, g g -&gt; g, q qbar -&gt; g, q gamma -&gt; q, l gamma -&gt;
  * l, l+ l- -&gt; gamma. Other pairs are infinitely far apart. The result
- * carries the flavour of its history in its user index, a physically
- * consistent label. Couplings and colour factors can weight the distances.
+ * carries the flavor of its history in its user index, a physically
+ * consistent label. Couplings and color factors can weight the distances.
  *
  * <p>As in the C++, the pairs are kept in a binary heap popped in
  * libstdc++'s order, so ties go the same way; and the one-loop QED running
@@ -68,7 +68,7 @@ public class QCDAwarePlugin implements JetDefinition.Plugin {
         this.alphaEM = alphaEM;
     }
 
-    /** Without coupling factors, the historical behaviour. */
+    /** Without coupling factors, the historical behavior. */
     public QCDAwarePlugin(DistanceMeasure dm) {
         this(dm, false, -2.0, 0, 0.1181, 0, 1.0 / 128.92);
     }
@@ -93,7 +93,7 @@ public class QCDAwarePlugin implements JetDefinition.Plugin {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Flavour labels                                                      */
+    /* Flavor labels                                                      */
     /* ------------------------------------------------------------------ */
 
     /** The PDG code of a user index 1000000 x id + pdg. */
@@ -149,7 +149,7 @@ public class QCDAwarePlugin implements JetDefinition.Plugin {
         return mb * CRMath.exp(-l4 / 2.0);
     }
 
-    /** alpha_s at Q^2, fixed (order 0) or one loop with flavour thresholds (order 1). */
+    /** alpha_s at Q^2, fixed (order 0) or one loop with flavor thresholds (order 1). */
     public static double alphaS(double q2, int order, double alphaS) {
         if (order == 0) return alphaS;
         if (order == 1) {
@@ -174,7 +174,7 @@ public class QCDAwarePlugin implements JetDefinition.Plugin {
         throw new FastJetException("alphaEM: only orders 0 (fixed) and 1 (one-loop) are supported");
     }
 
-    /** The label two objects combine into (0 when they cannot) and the coupling-colour factor. */
+    /** The label two objects combine into (0 when they cannot) and the coupling-color factor. */
     public double[] flavourSum(PseudoJet p, PseudoJet q) {
         final double q2 = p.perp() * q.perp();
         final double as = alphaS(q2, runningOrderAlphaS, alphaS);

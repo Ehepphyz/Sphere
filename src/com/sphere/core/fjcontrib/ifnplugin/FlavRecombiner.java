@@ -7,8 +7,8 @@ import com.sphere.core.fastjet.RecombinationScheme;
 
 /**
  * The E-scheme (or any default scheme) recombination that also adds
- * flavours, fastjet::contrib::FlavRecombiner: each input gets a FlavHistory,
- * and each merged jet the sum of its parents' current flavours, summed as
+ * flavors, fastjet::contrib::FlavRecombiner: each input gets a FlavHistory,
+ * and each merged jet the sum of its parents' current flavors, summed as
  * the chosen {@link FlavSummation} says.
  *
  * <p>As in the C++, preprocessing replaces the default scheme's own (which
@@ -16,7 +16,7 @@ import com.sphere.core.fastjet.RecombinationScheme;
  */
 public class FlavRecombiner extends DefaultRecombiner {
 
-    /** How flavours add up. */
+    /** How flavors add up. */
     public enum FlavSummation {
         /** b = +1, bbar = -1, b + bbar = 0, b + b = +2. */
         NET("net_flav"),
@@ -59,7 +59,7 @@ public class FlavRecombiner extends DefaultRecombiner {
     }
 
     /**
-     * Inputs that carry no flavour information take that of the PDG code in
+     * Inputs that carry no flavor information take that of the PDG code in
      * their user index, instead of being refused (Sphere's addition, for
      * events read from LHE or HepMC files).
      */
@@ -92,7 +92,7 @@ public class FlavRecombiner extends DefaultRecombiner {
         pab.setUserInfo(new FlavHistory(applySummationChoice(flav), pab.clusterHistIndex()));
     }
 
-    /** The flavour made consistent with the summation choice. */
+    /** The flavor made consistent with the summation choice. */
     public FlavInfo applySummationChoice(FlavInfo flav) {
         return switch (flavSummation) {
             case MODULO_2 -> flav.modulo2();

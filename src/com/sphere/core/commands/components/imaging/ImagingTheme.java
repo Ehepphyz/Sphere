@@ -81,11 +81,11 @@ public final class ImagingTheme {
      * A picture drawn for white paper, re-inked for the theme, in place: the
      * paper takes the theme's canvas paper (ThemePalette.getCanvasPaper) and
      * black ink its canvas ink (getCanvasInk).
-     * Only what is near grey is re-inked (the paper, the axes, the text, the
+     * Only what is near gray is re-inked (the paper, the axes, the text, the
      * frame): lightness turned over (each channel shifted by 255 - max - min)
-     * and spread between the surface and the text. A saturated colour is data
-     * (a colour scale, a curve, a fill) and keeps its exact value, so a COLZ
-     * map still reads on its colour bar; between the two, a blend.
+     * and spread between the surface and the text. A saturated color is data
+     * (a color scale, a curve, a fill) and keeps its exact value, so a COLZ
+     * map still reads on its color bar; between the two, a blend.
      */
     public static void onThemePaper(int[] argb) {
         final Color ground = palette().getCanvasPaper();
@@ -147,7 +147,7 @@ public final class ImagingTheme {
      * A panel that fills its own background.
      *
      * Nimbus derives its painters from the look and feel's own defaults at the
-     * moment it is installed, so a color set afterwards reaches setBackground but
+     * moment it is installed, so a color set afterward reaches setBackground but
      * never the painter. Filling here is what makes the editor follow the theme.
      */
     public static final class Surface extends JPanel {
@@ -263,7 +263,7 @@ public final class ImagingTheme {
      * A tab strip that paints itself, with one card shown at a time.
      *
      * The look and feel's own tabs derive their colors when it is installed, so a
-     * theme applied afterwards never reaches them; drawing the strip here is what
+     * theme applied afterward never reaches them; drawing the strip here is what
      * keeps the panel consistent with the rest of the editor.
      */
     public static final class Tabs extends JPanel {

@@ -10,7 +10,7 @@ import java.awt.LayoutManager;
 /**
  * A panel of the ROOT Lab that fills its own background from the theme, as
  * ImagingTheme.Surface does (that one is final): Nimbus never repaints a
- * colour set after it was installed, so the panel paints it itself.
+ * color set after it was installed, so the panel paints it itself.
  */
 class LabSurface extends JPanel {
 

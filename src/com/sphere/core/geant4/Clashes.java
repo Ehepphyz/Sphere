@@ -157,7 +157,7 @@ public final class Clashes {
     /**
      * Points on a solid's surface placed by t: random ones by area, as Overlaps samples, and its mesh's
      * vertices, which hold its corners. A box's corner is where it goes deepest into a sphere, and random
-     * points miss it: the remedy then fell short by a fraction of a millimetre.
+     * points miss it: the remedy then fell short by a fraction of a millimeter.
      */
     private static Vec3[] surface(Solid s, Xform t, int random, long seed) {
         final float[] v = s.mesh(2).pos;

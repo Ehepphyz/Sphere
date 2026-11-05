@@ -463,7 +463,7 @@ public class TMinuit {
         return err[0];
     }
 
-    /** The minimisation function: the FCN set by SetFCN, if any. */
+    /** The minimization function: the FCN set by SetFCN, if any. */
     public int Eval(int npar, double[] grad, double[] fval, double[] par, int flag) {
         if (fFCN != null) fFCN.fcn(new int[] {npar}, grad, fval, par, flag);
         return 0;
@@ -2106,7 +2106,7 @@ public class TMinuit {
         gcc[0] = fGlobcc[iin - 1];
     }
 
-    /** The function analysed by MNCROS: the minimum of FCN over the other parameters at U(KE1CR) = XMIDCR + ANEXT*XDIRCR... */
+    /** The function analyzed by MNCROS: the minimum of FCN over the other parameters at U(KE1CR) = XMIDCR + ANEXT*XDIRCR... */
     public void mneval(double anext, double[] fnext, int[] ierev) {
         int nparx;
 
@@ -3544,7 +3544,7 @@ public class TMinuit {
 
     /**
      * Attempts to improve on a good local minimum by finding a better one: the quadratic part of FCN removed by
-     * MNCALF, the rest minimised by the simplex method from several random starting points (Goldstein and Price).
+     * MNCALF, the rest minimized by the simplex method from several random starting points (Goldstein and Price).
      */
     public void mnimpr() {
         final double[] rnum = {0};
@@ -5795,7 +5795,7 @@ public class TMinuit {
     }
 
     /**
-     * Plots the points (xpt, ypt) with the characters chpt on one page with labelled axes (the arrays are
+     * Plots the points (xpt, ypt) with the characters chpt on one page with labeled axes (the arrays are
      * destroyed); in graphics mode (the default) a TMinuitGraph of the points but the first two instead, for GetPlot().
      */
     public void mnplot(double[] xpt, double[] ypt, char[] chpt, int nxypt, int npagwd, int npagln) {

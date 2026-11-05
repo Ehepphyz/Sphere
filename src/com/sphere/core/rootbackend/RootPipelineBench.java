@@ -89,7 +89,7 @@ public final class RootPipelineBench {
     /**
      * Builds and times the pipeline once per set of flags.
      *
-     * Everything is written into a folder of its own and removed afterwards, so
+     * Everything is written into a folder of its own and removed afterward, so
      * a measurement leaves nothing behind in the user's includes/.
      */
     public static List<Timing> compare(RootUserCompiler compiler,

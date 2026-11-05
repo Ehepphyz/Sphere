@@ -270,7 +270,7 @@ final class VaultFiles {
 
     // ---- fixes --------------------------------------------------------------------------
 
-    /** Applies one fix the analysis offered. Returns the file as it is afterwards. */
+    /** Applies one fix the analysis offered. Returns the file as it is afterward. */
     static Path apply(VaultItem item, VaultAnalysis.Fix fix) throws IOException {
         return switch (fix.action()) {
             case RENAME -> rename(item, fix.value());

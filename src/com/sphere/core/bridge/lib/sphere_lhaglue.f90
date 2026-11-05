@@ -42,7 +42,7 @@ contains
     usable = nset >= 1 .and. nset <= max_sets
     if (usable) usable = sets(nset)%loaded
     if (.not. usable) write(*, '(a,i0,a)') 'sphere_lhaglue: set ', nset, &
-      ' is not initialised; call InitPDFsetByName first.'
+      ' is not initialized; call InitPDFsetByName first.'
   end function usable
 end module sphere_lhaglue_state
 

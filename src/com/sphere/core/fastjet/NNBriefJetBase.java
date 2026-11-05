@@ -1,7 +1,7 @@
 package com.sphere.core.fastjet;
 
 /**
- * What the brief jets of the generic nearest-neighbour helpers ({@link NNH},
+ * What the brief jets of the generic nearest-neighbor helpers ({@link NNH},
  * {@link NNFJN2Plain}, {@link NNFJN2Tiled}) have in common.
  *
  * A brief jet working in plain double has nothing to add. One working in

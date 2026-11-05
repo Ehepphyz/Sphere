@@ -74,7 +74,7 @@ final class Revolve {
             if (ra == rb && za == zb) {
                 continue;
             }
-            // Vertex normals at both ends: the edge's own, or averaged with the neighbour's
+            // Vertex normals at both ends: the edge's own, or averaged with the neighbor's
             double nar = en[i * 2], naz = en[i * 2 + 1], nbr = nar, nbz = naz;
             if (sides == 0 && smooth != null) {
                 final int p = (i + n - 1) % n;

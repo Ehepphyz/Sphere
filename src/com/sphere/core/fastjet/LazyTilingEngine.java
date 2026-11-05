@@ -4,16 +4,16 @@ import java.util.Arrays;
 
 /**
  * The lazy tilings of FastJet 3.1, LazyTiling9 (tiles of size R, 3x3
- * neighbourhood) and LazyTiling25 (tiles of size R/2, 5x5 neighbourhood).
+ * neighborhood) and LazyTiling25 (tiles of size R/2, 5x5 neighborhood).
  *
- * Each tile remembers the largest nearest-neighbour distance of the jets it
- * holds, and a neighbouring tile is only searched when its edge is closer
+ * Each tile remembers the largest nearest-neighbor distance of the jets it
+ * holds, and a neighboring tile is only searched when its edge is closer
  * than that, which is what makes these strategies fast at large N.
  *
  * The tile geometry is judged in doubles. Under {@link Precision#DD} each
  * distance to a tile is lowered by a margin far above the rounding of the
  * doubles, so a tile is only ever searched more often than strictly needed,
- * never less, and the neighbours found are the exact 106-bit ones.
+ * never less, and the neighbors found are the exact 106-bit ones.
  */
 class LazyTilingEngine extends BriefJetEngine {
 
@@ -311,7 +311,7 @@ class LazyTilingEngine extends BriefJetEngine {
             tjSetJetInfo(i, i);
         }
 
-        // neighbours within each tile
+        // neighbors within each tile
         for (int t = 0; t < tileHead.length; t++) {
             for (int a = tileHead[t]; a >= 0; a = next[a]) {
                 for (int b = tileHead[t]; b != a; b = next[b]) {

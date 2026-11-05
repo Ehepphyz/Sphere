@@ -12,7 +12,7 @@ import java.util.function.ToDoubleFunction;
 /**
  * Minuit2 behind ROOT's generic minimizer interface (ROOT::Math::Minimizer),
  * as ROOT's fitting uses it: variables set by index and name, Minimize (with
- * Hesse afterwards when errors are to be validated), the status codes,
+ * Hesse afterward when errors are to be validated), the status codes,
  * Minos, Scan, Contour, covariance and correlations.
  *
  * <p>Status after Minimize: 0 fine, 1 covariance made positive-definite, 2

@@ -26,7 +26,7 @@ import java.util.function.Supplier;
 /**
  * The layout of the editor groups: a binary tree of split panes whose leaves
  * are the groups. Splitting a group puts a new one beside or below it, closing
- * one hands its room to its neighbour. Each split keeps its share as a
+ * one hands its room to its neighbor. Each split keeps its share as a
  * fraction, so the grid survives a resize, evens out, maximizes one group and
  * comes back, and is written to a line of text and rebuilt from it.
  */

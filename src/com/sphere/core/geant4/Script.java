@@ -92,6 +92,7 @@ public final class Script {
         HELP.put("material", "material <name> <density> atoms|fractions <El:n> ... [state=gas] [T=300K] [P=1atm]");
         HELP.put("world", "world <x> <y> <z> [material] | world fit [margin] | world material <name>");
         HELP.put("sensitive", "sensitive <volume> [detector name]   marks a sensitive detector (GDML SensDet)");
+        HELP.put("renumber", "renumber <volume>   its placements in each mother get copy numbers 0, 1, 2..., for its hits");
         HELP.put("color", "color <volume> <#rrggbb[aa]|red|...>");
         HELP.put("hide", "hide <volume> ...  /  show <volume> ...");
         HELP.put("template", "template calorimeter|tracker|telescope|shield|phantom|tpc key=value ...   parametric detectors");
@@ -216,7 +217,8 @@ public final class Script {
             case "material", "mat" -> material(a);
             case "world" -> world(a);
             case "sensitive", "sd" -> sensitive(a);
-            case "color", "colour" -> color(a);
+            case "renumber" -> renumber(a);
+            case "color" -> color(a);
             case "hide" -> visibility(a, false);
             case "show" -> visibility(a, true);
             case "template" -> template(a);
@@ -587,7 +589,7 @@ public final class Script {
                     }
                     return;
                 }
-                case "color", "colour" -> {
+                case "color" -> {
                     lv.setColor(Gdml.parseColor(value.trim(), lv.color()));
                     return;
                 }
@@ -632,7 +634,7 @@ public final class Script {
     }
 
     private static boolean truth(String v) {
-        return List.of("true", "yes", "on", "1", "oui").contains(v.trim().toLowerCase(Locale.ROOT));
+        return List.of("true", "yes", "on", "1").contains(v.trim().toLowerCase(Locale.ROOT));
     }
 
     // ------------------------------------------------------------------
@@ -1068,7 +1070,7 @@ public final class Script {
             return;
         }
         final double m = margin >= 0 ? margin : 0.1 * b.diagonal();
-        // A world centred on the origin, as Geant4 expects primaries from there
+        // A world centered on the origin, as Geant4 expects primaries from there
         final double hx = Math.max(Math.abs(b.minX()), Math.abs(b.maxX())) + m;
         final double hy = Math.max(Math.abs(b.minY()), Math.abs(b.maxY())) + m;
         final double hz = Math.max(Math.abs(b.minZ()), Math.abs(b.maxZ())) + m;
@@ -1090,6 +1092,25 @@ public final class Script {
         final String sd = a.size() > 1 ? a.get(1) : lv.name() + "SD";
         host.edit("Sensitive " + lv.name(), () -> lv.setSensitive(sd.equalsIgnoreCase("none") ? null : sd));
         host.print(lv.name() + (lv.sensitive() == null ? " is no longer sensitive" : " is the sensitive detector " + lv.sensitive()));
+    }
+
+    /** The placements of a volume in each of its mothers numbered 0, 1, 2... in the order they were placed. */
+    private void renumber(List<String> a) throws GeometryException {
+        need(a, 1, HELP.get("renumber"));
+        final LogicalVolume lv = volume(a.get(0));
+        final int[] n = {0};
+        host.edit("Renumber " + lv.name(), () -> {
+            for (LogicalVolume m : g.volumes()) {
+                int copy = 0;
+                for (PhysicalVolume pv : m.daughters()) {
+                    if (pv.logical() == lv && !pv.isReplica()) {
+                        pv.setCopyNumber(copy++);
+                        n[0]++;
+                    }
+                }
+            }
+        });
+        host.print("numbered " + n[0] + " placements of " + lv.name() + " in each mother from 0");
     }
 
     private void color(List<String> a) throws GeometryException {

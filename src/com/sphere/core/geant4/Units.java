@@ -11,7 +11,7 @@ import java.util.Map;
  * Geant4's GDML reader calls Evaluator::setStdMath() and
  * Evaluator::setSystemOfUnits(meter, kilogram, second, ampere, kelvin, mole,
  * candela) with CLHEP's own base values, so "10*cm" in a GDML attribute is 100
- * (millimetres) and "45*deg" is 0.785 (radians). The table below is built the
+ * (millimeters) and "45*deg" is 0.785 (radians). The table below is built the
  * same way, from the same base values, so an expression evaluates here to the
  * double Geant4 computes.
  */
@@ -55,10 +55,36 @@ public final class Units {
     private static final Map<String, Double> SYMBOLS;
 
     static {
+        SYMBOLS = table(METER, KILOGRAM, SECOND, AMPERE, KELVIN, MOLE, CANDELA);
+        ATMOSPHERE = SYMBOLS.get("atmosphere");
+    }
+
+    /**
+     * The probe's base units: in its system the millimeter is 2, the MeV 3 and the nanosecond 5, so a value of
+     * length^a energy^b time^c computed there is 2^a 3^b 5^c times the one computed in CLHEP's, whatever
+     * arithmetic made it. The code read twice tells the dimension of everything it computes ({@link Dimensions}).
+     */
+    public static final double PROBE_LENGTH = 2, PROBE_ENERGY = 3, PROBE_TIME = 5;
+
+    private static volatile Map<String, Double> probe;
+
+    /** The table again, built from the probe's millimeter, MeV and nanosecond as CLHEP builds it from its own. */
+    public static Map<String, Double> probeSymbols() {
+        Map<String, Double> p = probe;
+        if (p == null) {
+            final double m = 1000.0 * PROBE_LENGTH, s = 1.e+9 * PROBE_TIME;
+            final double joule = 1.e-6 * PROBE_ENERGY / E_SI;
+            p = table(m, joule * s * s / (m * m), s, EPLUS / E_SI / s, KELVIN, MOLE, CANDELA);
+            probe = p;
+        }
+        return p;
+    }
+
+    /** The GDML evaluator's names, from CLHEP's seven base units (Evaluator::setSystemOfUnits). */
+    private static Map<String, Double> table(double m, double kg, double s, double A, double K, double mol, double cd) {
         final Map<String, Double> t = new LinkedHashMap<>();
         final double kilo = 1e3, mega = 1e6, giga = 1e9, tera = 1e12, peta = 1e15;
         final double deci = 1e-1, centi = 1e-2, milli = 1e-3, micro = 1e-6, nano = 1e-9, pico = 1e-12;
-        final double m = METER, kg = KILOGRAM, s = SECOND, A = AMPERE, K = KELVIN, mol = MOLE, cd = CANDELA;
 
         // setStdMath
         t.put("pi", PI);
@@ -192,8 +218,7 @@ public final class Units {
         put(t, nano * (C / V), "nanofarad", "nF");
         put(t, pico * (C / V), "picofarad", "pF");
         put(t, 1.e-1 * T, "kilogauss", "kGs");
-        SYMBOLS = Collections.unmodifiableMap(t);
-        ATMOSPHERE = t.get("atmosphere");
+        return Collections.unmodifiableMap(t);
     }
 
     private static void put(Map<String, Double> t, double value, String... names) {

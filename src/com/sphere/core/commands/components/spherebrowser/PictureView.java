@@ -35,10 +35,10 @@ import java.util.function.DoubleFunction;
 
 /**
  * A picture looked at closely: zoom on the point under the mouse up to the
- * single pixel, with its grid and its colour; turned to any angle; mirrored;
+ * single pixel, with its grid and its color; turned to any angle; mirrored;
  * a loupe that follows the mouse; in a dark theme, the picture re-inked on
  * the theme's paper (white paper the theme's surface, black ink its text,
- * hues kept), and back to its own colours with a click
+ * hues kept), and back to its own colors with a click
  * read on a dark screen. A vector picture (SVG) is drawn again at the scale
  * it is looked at, so it stays sharp however close.
  *

@@ -26,9 +26,9 @@ void registerCommon() {
   r.add("sleep", "waits {ms} milliseconds, reporting progress: a transport and cancel test", [](const Json &a, Context &ctx) {
     const int ms = static_cast<int>(a.num("ms", 100));
     for (int i = 0; i < 10; ++i) {
-      if (ctx.cancelled()) {
+      if (ctx.canceled()) {
         Json j = Json::object();
-        j.set("cancelled", true);
+        j.set("canceled", true);
         return j;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(ms / 10));

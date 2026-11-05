@@ -32,7 +32,7 @@ public final class HepAnalysis {
     /* Data                                                                */
     /* ================================================================== */
 
-    /** The bins of a 1D histogram inside a range: centres, widths, contents, errors. */
+    /** The bins of a 1D histogram inside a range: centers, widths, contents, errors. */
     public static final class Data {
         public final double[] x;
         public final double[] w;
@@ -473,7 +473,7 @@ public final class HepAnalysis {
         public double hi;
         public String message = "";
 
-        /** The statistic the fit minimised: χ² or the Poisson deviance (Baker-Cousins). */
+        /** The statistic the fit minimized: χ² or the Poisson deviance (Baker-Cousins). */
         public double statistic() {
             return poisson ? deviance : chi2;
         }
@@ -1624,7 +1624,7 @@ public final class HepAnalysis {
         return new Data(g.x.clone(), w, g.y.clone(), e, lo, hi);
     }
 
-    /** The regularised incomplete beta function I_x(a, b), by its continued fraction. */
+    /** The regularized incomplete beta function I_x(a, b), by its continued fraction. */
     static double betaI(double x, double a, double b) {
         if (x <= 0) return 0;
         if (x >= 1) return 1;
@@ -1688,7 +1688,7 @@ public final class HepAnalysis {
         return -tmp + Math.log(2.5066282746310005 * ser / x);
     }
 
-    /** The regularised upper incomplete gamma Q(a, x): the p-value of a χ² of 2x with 2a degrees. */
+    /** The regularized upper incomplete gamma Q(a, x): the p-value of a χ² of 2x with 2a degrees. */
     public static double gammaQ(double a, double x) {
         if (!(a > 0) || !(x >= 0)) return Double.NaN;
         if (x == 0) return 1;

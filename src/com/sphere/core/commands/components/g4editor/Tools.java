@@ -285,7 +285,7 @@ final class Tools {
     }
 
     // ==================================================================
-    // Cylinder (G4Tubs): centre, radius (and inner radius), height
+    // Cylinder (G4Tubs): center, radius (and inner radius), height
     // ==================================================================
 
     static final class TubeTool extends Tool {
@@ -386,7 +386,7 @@ final class Tools {
     }
 
     // ==================================================================
-    // Sphere (G4Orb, or G4Sphere when hollow): centre, radius
+    // Sphere (G4Orb, or G4Sphere when hollow): center, radius
     // ==================================================================
 
     static final class SphereTool extends Tool {
@@ -466,7 +466,7 @@ final class Tools {
     }
 
     // ==================================================================
-    // Cone (G4Cons): centre, bottom radius, height, top radius
+    // Cone (G4Cons): center, bottom radius, height, top radius
     // ==================================================================
 
     static final class ConeTool extends Tool {
@@ -578,7 +578,7 @@ final class Tools {
     }
 
     // ==================================================================
-    // Torus: centre, swept radius, tube radius
+    // Torus: center, swept radius, tube radius
     // ==================================================================
 
     static final class TorusTool extends Tool {

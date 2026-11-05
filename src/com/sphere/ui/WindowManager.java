@@ -86,6 +86,16 @@ public class WindowManager {
             com.sphere.ui.RootViewerFrame.show(file);
             return null;
         }
+        // A PDF goes to :spdf, in a tab of the main SphereCoder window.
+        if (com.sphere.components.SphereCoder.isPdf(file)) {
+            SphereCoderFrame main = com.sphere.Sphere.editorWindow();
+            if (main != null) {
+                main.setVisible(true);
+                main.toFront();
+                main.getEditor().openPdf(file);
+                return main;
+            }
+        }
         if (file.length() > com.sphere.components.editor.EditorFileIO.MAX_OPEN_BYTES) {
             com.sphere.components.editor.LargeFileViewer.show(file);
             return null;

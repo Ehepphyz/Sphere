@@ -27,7 +27,7 @@ import java.util.Set;
  * The editor's documents are GDML files. Expressions are written as they were
  * typed, with CLHEP's unit names, so the file stays parametric for Geant4 too:
  * G4GDMLEvaluator evaluates "2*halfX" or "10*cm" exactly as the editor does.
- * Colours, sensitive detectors and editor settings travel as auxiliary tags,
+ * Colors, sensitive detectors and editor settings travel as auxiliary tags,
  * which Geant4 keeps and hands to the application.
  */
 public final class Gdml {
@@ -772,7 +772,7 @@ public final class Gdml {
                         }
                     }
                     case "extension" -> {
-                        // the colours of Geant4's extension example, which its volumes name by colorref
+                        // the colors of Geant4's extension example, which its volumes name by colorref
                         for (Node c : children(n)) {
                             if (c.getNodeName().equals("color") && attr(c, "name") != null) {
                                 colors.put(attr(c, "name"), rgba(c));
@@ -1409,7 +1409,7 @@ public final class Gdml {
 
         final Map<String, Integer> colors = new HashMap<>();
 
-        /** An extension colour's R G B A (0 to 1) as ARGB. */
+        /** An extension color's R G B A (0 to 1) as ARGB. */
         int rgba(Node c) {
             final double[] v = new double[4];
             final String[] keys = {"R", "G", "B", "A"};

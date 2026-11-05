@@ -593,7 +593,7 @@ public final class LhapdfCommands {
         return new ArrayList<>(HANDLES.keySet());
     }
 
-    /** The PDG code of an incoming parton as a PDF flavour (21 for a gluon given as 0 or 9). */
+    /** The PDG code of an incoming parton as a PDF flavor (21 for a gluon given as 0 or 9). */
     static int pdg(int id) {
         return (id == 0 || id == 9) ? 21 : id;
     }

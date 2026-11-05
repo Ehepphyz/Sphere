@@ -1052,7 +1052,7 @@ public class PseudoJet {
             }
         }
         // As in FastJet, the indices are those the recombination left (or the
-        // single piece's), so a recombiner that tracks flavour in the user
+        // single piece's), so a recombiner that tracks flavor in the user
         // index keeps it through a join.
         result.structure = new CompositeJetStructure(pieces, recombiner);
         return result;

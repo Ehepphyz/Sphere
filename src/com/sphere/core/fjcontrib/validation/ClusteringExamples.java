@@ -139,7 +139,7 @@ final class ClusteringExamples {
     /* QCDAwarePlugin                                                      */
     /* ------------------------------------------------------------------ */
 
-    private static int flavourLabel(int idx) {
+    private static int flavorLabel(int idx) {
         final int l = (idx % 10) - 3;
         return Math.abs(l) <= 3 && l != 0 ? l : 21;
     }
@@ -153,7 +153,7 @@ final class ClusteringExamples {
             if (line.startsWith("#")) continue;
             final double[] v = Events.numbers(line, 4);
             final PseudoJet p = Events.particle(v[0], v[1], v[2], v[3]);
-            p.setUserIndex(flavourLabel(idx));
+            p.setUserIndex(flavorLabel(idx));
             event.add(p);
             idx++;
         }

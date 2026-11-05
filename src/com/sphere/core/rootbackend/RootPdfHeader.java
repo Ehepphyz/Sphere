@@ -39,7 +39,7 @@ public final class RootPdfHeader {
 
     private static final String PART_1 = """
         // Parton distributions without LHAPDF: the grids, the strong coupling, the four
-        // interpolators, the extrapolators and the catalogue.
+        // interpolators, the extrapolators and the catalog.
         //
         // The grid files are plain text and the interpolation is arithmetic, so a
         // pipeline that needs a PDF does not need the library: it needs this header
@@ -1139,7 +1139,7 @@ public final class RootPdfHeader {
 
             // LHAPDF's own continuation, as the MSTW standalone code wrote it. Below
             // the smallest scale the rate of change is measured at the edge, bounded
-            // below, and bent towards one so the distribution goes to zero at zero
+            // below, and bent toward one so the distribution goes to zero at zero
             // scale instead of running away.
             double continuation(int f, double x, double q2) const {
                 const std::size_t nx = xs_.size(), nq = q2s_.size();

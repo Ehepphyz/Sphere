@@ -41,7 +41,7 @@ public final class RootAclic {
     /**
      * A C or C++ file followed by ACLiC's suffix: "+" compiles when the source
      * changed, "++" always, then any of ROOT's option letters (k keep, f force,
-     * g debug, O optimise, c compile only, s silent, v verbose, d debug ACLiC).
+     * g debug, O optimize, c compile only, s silent, v verbose, d debug ACLiC).
      */
     private static final Pattern SUFFIX = Pattern.compile(
         "^(.+?\\.(?:C|c|cc|cxx|cpp|h|hh|hxx|hpp))(\\+\\+?[kfgOcsvd-]*)$");

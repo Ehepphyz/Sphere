@@ -27,7 +27,7 @@ import java.util.TreeSet;
 /**
  * Variable-R jets, fastjet::contrib::VariableRPlugin (VariableR 1.2.1;
  * D. Krohn, J. Thaler and L.-T. Wang, JHEP 0906 (2009) 059,
- * arXiv:0903.0392): a generalised-kt clustering whose jet radius
+ * arXiv:0903.0392): a generalized-kt clustering whose jet radius
  * R_eff = rho / pt shrinks as the jet hardens, clamped to [min_r, max_r],
  * with d_ij = min(pt_i^2p, pt_j^2p) DeltaR_ij^2 and d_iB = pt_i^2p R_eff^2.
  *
@@ -157,11 +157,11 @@ public class VariableRPlugin implements JetDefinition.Plugin {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Nearest-neighbour strategies                                        */
+    /* Nearest-neighbor strategies                                        */
     /* ------------------------------------------------------------------ */
 
     /**
-     * The brief jet of all three nearest-neighbour helpers,
+     * The brief jet of all three nearest-neighbor helpers,
      * VariableRBriefJet: g_ij = DeltaR^2, g_iB = R_eff^2 and m_i = pt^2p.
      */
     static final class BriefJet implements NNFJTiledBriefJet<BriefJet>, NNBriefJet<BriefJet> {

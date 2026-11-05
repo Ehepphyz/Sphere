@@ -11,7 +11,7 @@ import java.util.List;
 
 /**
  * Energy correlation functions (A. Larkoski, G. Salam, J. Thaler, JHEP 06
- * (2013) 108) and their generalisations (I. Moult, L. Necib, J. Thaler,
+ * (2013) 108) and their generalizations (I. Moult, L. Necib, J. Thaler,
  * JHEP 12 (2016) 153):
  * <pre>
  *   e2       = sum_{i<j}   z_i z_j Delta_ij^beta

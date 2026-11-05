@@ -24,7 +24,7 @@ import com.sphere.core.fjcontrib.variabler.VariableRPlugin;
  * working on the active definition (jets, areas, hist, display, export, the
  * bridge) works on them too. Registered once, when the :fjco commands are.
  *
- * <p>The flavour algorithms (ifn, cmp) take the flavour of each particle
+ * <p>The flavor algorithms (ifn, cmp) take the flavor of each particle
  * from the PDG code Sphere's event readers put in its user index.
  */
 public final class ContribSpecs {
@@ -93,7 +93,7 @@ public final class ContribSpecs {
                 final DistanceMeasure dm = switch (s.s("dm", "akt")) {
                     case "kt" -> DistanceMeasure.kt(r);
                     case "ca", "cambridge" -> DistanceMeasure.cambridge(r);
-                    case "flavkt", "flavourkt" -> DistanceMeasure.flavourKt(r, s.d("alpha", 2.0));
+                    case "flavkt", "flavorkt" -> DistanceMeasure.flavourKt(r, s.d("alpha", 2.0));
                     default -> DistanceMeasure.antikt(r);
                 };
                 final QCDAwarePlugin p = new QCDAwarePlugin(dm);

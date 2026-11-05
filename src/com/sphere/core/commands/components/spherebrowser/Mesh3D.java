@@ -4,7 +4,7 @@ import java.util.Arrays;
 
 /**
  * Triangles, segments and points in data coordinates, each vertex with its
- * colour and the value it stands for: what Sphere's 3D space draws.
+ * color and the value it stands for: what Sphere's 3D space draws.
  *
  * The arrays grow as a builder adds to them; nothing here knows about a
  * camera. A vertex carries the data value it was made from so that the mouse,
@@ -16,7 +16,7 @@ public final class Mesh3D {
     /** 1 opaque; below, the faces are blended back to front. */
     public float opacity = 1f;
     public boolean visible = true;
-    /** Lit by the lamps; off for a floor map or labels that keep their colour. */
+    /** Lit by the lamps; off for a floor map or labels that keep their color. */
     public boolean lit = true;
     /** Normals averaged over the faces around a vertex: a surface, not facets. */
     public boolean smooth;
@@ -194,7 +194,7 @@ public final class Mesh3D {
     /* Writing it out                                                      */
     /* ------------------------------------------------------------------ */
 
-    /** Wavefront OBJ with vertex colours (the common x y z r g b extension). */
+    /** Wavefront OBJ with vertex colors (the common x y z r g b extension). */
     public void writeObj(StringBuilder out, int offset) {
         out.append("o ").append(name == null ? "mesh" : name.replaceAll("\\s+", "_")).append('\n');
         for (int i = 0; i < nv; i++) {

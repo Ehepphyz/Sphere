@@ -335,7 +335,7 @@ public final class G4EditorFrame extends JFrame {
                     }
                 }
                 case "fit" -> vp.fitAll(true);
-                case "colorby", "colourby", "color-by" -> {
+                case "colorby", "color-by" -> {
                     final ColorScheme.Mode m = a.isEmpty() ? null : ColorScheme.Mode.of(a.get(0));
                     if (m == null) {
                         console.error("colorby document|material|density|x0|depth|sensitive");
@@ -701,7 +701,7 @@ public final class G4EditorFrame extends JFrame {
         export.add(item("Geant4 C++ project...", "control E", this::exportCppDialog));
         export.add(item("Into G4code's C++...", "control shift I", this::insertIntoG4code,
             "The selection (else the whole detector) written into the code open in G4code, in the volume selected"
-                + " there: solids, materials, colours, rotations and what they hold"));
+                + " there: solids, materials, colors, rotations and what they hold"));
         export.add(item("Image (PNG)...", null, this::exportImage));
         file.add(export);
         file.add(item("Convert files...", null, this::convertDialog,
@@ -869,8 +869,8 @@ public final class G4EditorFrame extends JFrame {
         help.add(item("Mouse and keyboard", null, this::showKeys));
         help.add(item("Files: GDML and ROOT", null, this::showFormats));
         bar.add(help);
-        // Sphere's dark theme leaves Nimbus's MenuBar:Menu text colour all but the bar's background, and
-        // Nimbus overrides a colour that comes from the theme (a UIResource): the theme's text colour, as a
+        // Sphere's dark theme leaves Nimbus's MenuBar:Menu text color all but the bar's background, and
+        // Nimbus overrides a color that comes from the theme (a UIResource): the theme's text color, as a
         // plain Color, as Sphere's own window sets its menus'
         final Color text = UIManager.getColor("Label.foreground");
         if (text != null) {
@@ -904,10 +904,10 @@ public final class G4EditorFrame extends JFrame {
 
     private void showFormats() {
         JOptionPane.showMessageDialog(this, """
-            G4editor reads and writes three kinds of files; File > Open recognises them by their content.
+            G4editor reads and writes three kinds of files; File > Open recognizes them by their content.
 
             GDML for Geant4 (.gdml)
-              The design as it is: expressions with units, variables, NIST materials by name, colours,
+              The design as it is: expressions with units, variables, NIST materials by name, colors,
               sensitive detectors. What Geant4's G4GDMLParser reads, and what undo keeps.
 
             GDML for ROOT and Geant4 (Export)
@@ -945,7 +945,7 @@ public final class G4EditorFrame extends JFrame {
             Keys
               B box  T tube  S sphere  C cone  P extrude  V revolve  M move  R rotate  D measure
               0-8 views   F fit   O perspective   X section   G grid snap   H hide   Delete
-              I isolate the selection (again: show all)    K colour by material, density, X0, depth...
+              I isolate the selection (again: show all)    K color by material, density, X0, depth...
               Space: console    Ctrl+Z / Ctrl+Y undo / redo    Ctrl+D duplicate   Ctrl+S save
               Ctrl+Shift+P: every command by name    files (GDML, ROOT) can be dropped on the window
             """, "G4editor - mouse and keyboard", JOptionPane.INFORMATION_MESSAGE);

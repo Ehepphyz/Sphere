@@ -129,6 +129,7 @@ final class RootAttEditor {
     static void edit(Component parent, String title, Kind kind, Att start, Consumer<Att> apply) {
         final JDialog d = new JDialog(SwingUtilities.getWindowAncestor(parent), title,
             java.awt.Dialog.ModalityType.APPLICATION_MODAL);
+        com.sphere.utils.IconManager.applyAppIcon(d);
         final Att a = new Att();
         a.color = start.color;
         a.width = start.width;

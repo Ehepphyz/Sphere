@@ -106,7 +106,7 @@ final class RootDataActions {
         return a;
     }
 
-    /** A new histogram of one dimension, in the canvas's own colours. */
+    /** A new histogram of one dimension, in the canvas's own colors. */
     static Hist newHist(String className, String name, String title, Axis x, double[] v, double[] err) {
         final Hist h = new Hist();
         h.kind = "h1";
@@ -665,7 +665,7 @@ final class RootDataActions {
 
     /**
      * TH2::ShowPeaks: the local maxima of the smoothed histogram above the
-     * threshold, a neighbourhood of sigma bins apart, as TSpectrum2::Search marks them.
+     * threshold, a neighborhood of sigma bins apart, as TSpectrum2::Search marks them.
      */
     static String showPeaks2D(RootTarget t, Hist h, double sigma, String option, double threshold) {
         final int nx = h.nx();

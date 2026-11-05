@@ -5,9 +5,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Colour scales for values: ROOT's kBird, which a canvas uses unless told
+ * Color scales for values: ROOT's kBird, which a canvas uses unless told
  * otherwise, the perceptually even ones of matplotlib, and a few of Sphere's
- * own. Each is a list of stops, interpolated into 256 colours.
+ * own. Each is a list of stops, interpolated into 256 colors.
  */
 public final class Palettes {
 
@@ -74,7 +74,7 @@ public final class Palettes {
         return out;
     }
 
-    /** The colour of a fraction 0..1 of the scale, as an opaque ARGB int. */
+    /** The color of a fraction 0..1 of the scale, as an opaque ARGB int. */
     public static int at(Color[] palette, double fraction) {
         if (!Double.isFinite(fraction)) fraction = 0;
         final int i = (int) Math.round(Math.max(0, Math.min(1, fraction)) * (palette.length - 1));

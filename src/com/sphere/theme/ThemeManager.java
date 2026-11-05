@@ -119,7 +119,7 @@ public final class ThemeManager {
                 });
 
             } else if (comp instanceof Container) {
-                // Recursively pass container downwards to sweep deep nested subpanels
+                // Recursively pass container downward to sweep deep nested subpanels
                 enforceButtonStyles((Container) comp, palette);
             }
         }

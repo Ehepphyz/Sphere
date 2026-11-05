@@ -25,6 +25,7 @@ public class FindReplaceDialog extends JDialog {
 
     public FindReplaceDialog(Frame parent, JTextComponent editor) { // Accepts any JTextComponent
         super(parent, "Find and Replace", false);
+        com.sphere.utils.IconManager.applyAppIcon(this);
         this.editor = editor;
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
 

@@ -11,7 +11,7 @@ public final class Solids {
     private Solids() {
     }
 
-    /** One entry of the catalogue. */
+    /** One entry of the catalog. */
     public record Type(String tag, String g4Class, String label, String group,
                        Function<String, Solid> maker) {
     }
