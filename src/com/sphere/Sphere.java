@@ -47,7 +47,7 @@ public class Sphere extends JFrame {
      */
 
     /** Sphere itself (:version). */
-    public static final String VERSION = "v2026.2.2.0";
+    public static final String VERSION = "v2026.2.3.0";
 
     // ---- FastJet, SISCone and fjcontrib, ported to Java ----------------------------
     /** The FastJet release the Java port follows. */
@@ -138,7 +138,7 @@ public class Sphere extends JFrame {
     /** The kernel's shared-memory module; bumped whenever its source changes. */
     public static final int JUPYTER_SHM_MODULE_VERSION = 2;
     /** The debugger script Sphere writes; bumped whenever its source changes. */
-    public static final int DEBUG_SCRIPT_VERSION = 1;
+    public static final int DEBUG_SCRIPT_VERSION = 2;
 
     // UI components
     private ConsoleUI console;

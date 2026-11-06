@@ -1424,6 +1424,9 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
             return;
         }
         tab.putClientProperty("sphere.wired", Boolean.TRUE);
+        // SphereCoder's tabs read physical quantities and offer an edit to similar lines.
+        tab.setSmartLens(EditorState.flag(EditorState.UNITS_LENS, true));
+        tab.setEditEcho(EditorState.flag(EditorState.EDIT_ECHO, true));
         tab.getEditorArea().addFocusListener(new FocusAdapter() {
             @Override
             public void focusGained(FocusEvent e) {
@@ -3473,6 +3476,21 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
             }
         }));
 
+        // ---- Intelligence: rename by scope, an edit repeated where it fits
+        cmd("edit.rename", "Edit", "Rename Symbol", key(KeyEvent.VK_F2, 0), () -> withTab(CodeTab::startRename));
+        cmd("edit.echoApply", "Edit", "Edit Echo: Apply the Last Edit Where It Fits", key(KeyEvent.VK_ENTER, alt),
+            () -> withTab(t -> {
+                if (t.getEcho().hasSuggestions()) {
+                    t.applyEcho();
+                } else {
+                    toast("No edit to repeat: change a line, then Alt+Enter makes the same change where it fits");
+                }
+            }));
+        cmd("edit.echoNext", "Edit", "Edit Echo: Next Line Offered the Edit", key(KeyEvent.VK_CLOSE_BRACKET, alt),
+            () -> withTab(t -> t.echoGo(1)));
+        cmd("edit.echoPrev", "Edit", "Edit Echo: Previous Line Offered the Edit", key(KeyEvent.VK_OPEN_BRACKET, alt),
+            () -> withTab(t -> t.echoGo(-1)));
+
         // ---- Selection
         cmd("sel.expand", "Selection", "Expand Selection", key(KeyEvent.VK_RIGHT, shift | alt),
             () -> withTab(t -> EditorActions.expandSelection(t.getEditorArea())));
@@ -3637,12 +3655,54 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         cmd("go.prevTab", "Go", "Previous Editor", key(KeyEvent.VK_TAB, ctrl | shift), () -> cycleTab(-1));
 
         // ---- Run
-        cmd("run.file", "Run", "Run File in Sphere Console", key(KeyEvent.VK_F5, 0), () -> withTab(this::runFile));
+        // F5 runs the file in the console; with the debug panel open, or a session live,
+        // it starts debugging, continues a paused program or pauses a running one.
+        cmd("run.file", "Run", "Run File (Continue when Debugging)", key(KeyEvent.VK_F5, 0), () -> {
+            DebugPanel p = root().debugPanel;
+            if (p != null && (p.isSessionLive() || "debug".equals(root().bottomShown))) {
+                root().showBottom("debug");
+                p.continueOrPause();
+            } else {
+                withTab(this::runFile);
+            }
+        });
+        cmd("run.console", "Run", "Run File in Sphere Console", null, () -> withTab(this::runFile));
         cmd("run.breakpoint", "Run", "Toggle Breakpoint", key(KeyEvent.VK_F9, 0), () -> withTab(t -> {
             int line = t.getEditorArea().lineAt(t.getEditorArea().getCaretPosition()) + 1;
             t.getBreakpoints().toggle(line);
         }));
+        cmd("run.conditionalBreakpoint", "Run", "Add Conditional Breakpoint...", key(KeyEvent.VK_F9, shift),
+            () -> withTab(t -> t.editBreakpointAtCaret(false)));
+        cmd("run.logpoint", "Run", "Add Logpoint...", null, () -> withTab(t -> t.editBreakpointAtCaret(true)));
         cmd("run.debug", "Run", "Toggle Debug Panel", key(KeyEvent.VK_D, ctrl | shift), () -> toggleBottom("debug"));
+        cmd("debug.start", "Debug", "Start Debugging", null, () -> debug(p -> {
+            root().showBottom("debug");
+            if (p.isSessionLive()) {
+                toast("A session is already running: Ctrl+Shift+F5 restarts it");
+            } else {
+                p.startSession();
+            }
+        }, false));
+        cmd("debug.continue", "Debug", "Continue / Pause", null, () -> debug(DebugPanel::continueOrPause, false));
+        cmd("debug.stepOver", "Debug", "Step Over", key(KeyEvent.VK_F10, 0), () -> debug(DebugPanel::stepOver, true));
+        cmd("debug.stepInto", "Debug", "Step Into", key(KeyEvent.VK_F11, 0), () -> debug(DebugPanel::stepInto, true));
+        cmd("debug.stepOut", "Debug", "Step Out", key(KeyEvent.VK_F11, shift), () -> debug(DebugPanel::stepOut, true));
+        cmd("debug.runToCursor", "Debug", "Run to Cursor", key(KeyEvent.VK_F10, ctrl),
+            () -> debug(DebugPanel::runToCursor, true));
+        cmd("debug.restart", "Debug", "Restart Debugging", key(KeyEvent.VK_F5, ctrl | shift),
+            () -> debug(p -> {
+                root().showBottom("debug");
+                p.restart();
+            }, false));
+        cmd("debug.stop", "Debug", "Stop Debugging", key(KeyEvent.VK_F5, shift), () -> debug(DebugPanel::stop, false));
+        cmd("debug.addWatch", "Debug", "Add Selection to Watch", null, () -> withTab(t -> debug(p -> {
+            p.addWatch(selectionOrWord(t));
+            root().showBottom("debug");
+        }, false)));
+        cmd("debug.evaluate", "Debug", "Evaluate Selection in Debug Console", null, () -> withTab(t -> debug(p -> {
+            root().showBottom("debug");
+            p.evaluateInConsole(selectionOrWord(t));
+        }, true)));
 
         // ---- Preferences and language
         toggle("pref.autoSave", "Preferences", "Auto Save", null, () -> EditorState.flag(EditorState.AUTO_SAVE, false),
@@ -3677,11 +3737,76 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         toggle("pref.restoreSession", "Preferences", "Restore Open Editors and Layout at Startup", null,
                () -> EditorState.flag(EditorState.RESTORE_SESSION, true),
                () -> EditorState.setFlag(EditorState.RESTORE_SESSION, !EditorState.flag(EditorState.RESTORE_SESSION, true)));
+        toggle("pref.editEcho", "Preferences", "Edit Echo (Offer an Edit to the Lines It Fits)", null,
+               () -> EditorState.flag(EditorState.EDIT_ECHO, true), () -> {
+            boolean on = !EditorState.flag(EditorState.EDIT_ECHO, true);
+            EditorState.setFlag(EditorState.EDIT_ECHO, on);
+            for (CodeTab t : familyTabs()) {
+                t.setEditEcho(on);
+            }
+            toast(on ? "Edit Echo on: an edit is offered to the lines it fits" : "Edit Echo off");
+        });
+        toggle("pref.unitsLens", "Preferences", "Units Lens (Values of Physical Quantities)", null,
+               () -> EditorState.flag(EditorState.UNITS_LENS, true), () -> {
+            boolean on = !EditorState.flag(EditorState.UNITS_LENS, true);
+            EditorState.setFlag(EditorState.UNITS_LENS, on);
+            for (CodeTab t : familyTabs()) {
+                t.setSmartLens(on);
+            }
+            toast(on ? "Units Lens on: CLHEP and hepunits quantities show their value" : "Units Lens off");
+        });
         cmd("lang.change", "Preferences", "Change Language Mode...", null, this::pickLanguage);
         cmd("lang.eol", "Preferences", "Change End of Line Sequence...", null, this::pickLineEnding);
         cmd("lang.encoding", "Preferences", "Change File Encoding...", null, this::pickEncoding);
         cmd("lang.indent", "Preferences", "Change Indentation...", null, this::pickIndentation);
         cmd("help.keys", "Help", "Keyboard Shortcuts", null, () -> showPalette(">"));
+    }
+
+    /** Runs a debugger action in the main editor's panel; one that steps needs a paused program. */
+    private void debug(Consumer<DebugPanel> action, boolean needsPause) {
+        DebugPanel p = root().debugPanel;
+        if (p == null) {
+            return;
+        }
+        if (needsPause && !p.isPaused()) {
+            toast(p.isSessionLive() ? "The program is running: F5 pauses it"
+                                    : "No debug session: open the Debug panel (Ctrl+Shift+D) and press F5");
+            return;
+        }
+        action.accept(p);
+    }
+
+    /** The selected text, else the name at the caret: what Watch and Evaluate take. */
+    private static String selectionOrWord(CodeTab t) {
+        com.sphere.components.editor.CodeTextPane a = t.getEditorArea();
+        String s = a.getSelectedText();
+        if (s != null && !s.isBlank()) {
+            return s.strip();
+        }
+        int[] w = a.wordAt(a.getCaretPosition());
+        try {
+            return w == null ? "" : a.getDocument().getText(w[0], w[1] - w[0]);
+        } catch (javax.swing.text.BadLocationException ex) {
+            return "";
+        }
+    }
+
+    private static boolean sameFile(File a, File b) {
+        return a != null && b != null && a.getAbsoluteFile().equals(b.getAbsoluteFile());
+    }
+
+    @Override
+    public boolean canRunToLine(CodeTab tab) {
+        DebugPanel p = root().debugPanel;
+        return p != null && p.isPaused() && sameFile(tab.getFile(), p.sessionFile());
+    }
+
+    @Override
+    public void runToLine(CodeTab tab, int line) {
+        DebugPanel p = root().debugPanel;
+        if (p != null) {
+            p.runToLine(tab.getFile(), line);
+        }
     }
 
     /** Every command with a key is bound on the editor itself, so it works with or without menus. */
@@ -4581,7 +4706,8 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
 
         JMenu editMenu = menu("Edit", "edit.undo", "edit.redo", "-", "edit.cut", "edit.copy", "edit.paste",
                               "-", "edit.find", "edit.replace", "edit.findNext", "edit.findPrev",
-                              "-", "edit.comment", "edit.blockComment", "-", "edit.suggest");
+                              "-", "edit.comment", "edit.blockComment", "-", "edit.suggest",
+                              "-", "edit.rename", "edit.echoApply", "edit.echoNext", "edit.echoPrev");
         editMenu.addSeparator();
         JMenu modeSubMenu = new JMenu("Text Mode");
         modeSubMenu.setForeground(theme().getTextPrimary());
@@ -4650,10 +4776,13 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
                             "view.focusGroup1", "view.focusGroup2", "view.focusGroup3", "view.focusNextGroup",
                             "view.focusPrevGroup", "view.focusLeft", "view.focusRight", "view.focusUp", "view.focusDown",
                             "-", "view.moveRight", "view.moveLeft");
-        JMenu runMenu = menu("Run", "run.file", "run.breakpoint", "run.debug");
+        JMenu runMenu = menu("Run", "run.file", "run.console", "-", "debug.start", "debug.continue",
+                             "debug.stepOver", "debug.stepInto", "debug.stepOut", "debug.runToCursor",
+                             "debug.restart", "debug.stop", "-", "run.breakpoint", "run.conditionalBreakpoint",
+                             "run.logpoint", "-", "debug.addWatch", "debug.evaluate", "-", "run.debug");
         JMenu prefMenu = menu("Preferences", "pref.autoComplete", "pref.autoClose", "pref.trimOnSave",
-                              "pref.liveLint", "pref.restoreSession", "-", "lang.change", "lang.indent",
-                              "lang.encoding", "lang.eol");
+                              "pref.liveLint", "pref.editEcho", "pref.unitsLens", "pref.restoreSession", "-",
+                              "lang.change", "lang.indent", "lang.encoding", "lang.eol");
 
         menuBar.add(fileMenu);
         menuBar.add(editMenu);
@@ -4850,11 +4979,11 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
         if (tab == null || debugPanel == null || !watchedBuffers.add(tab.getBuffer())) {
             return;
         }
+        // The whole model goes to the session, which works out what changed: re-sending every
+        // line one by one doubled the breakpoints in gdb and never removed the ones taken away.
         tab.getBreakpoints().addListener(model -> {
             if (debugPanel.isSessionLive()) {
-                for (int line : model.lines()) {
-                    debugPanel.breakpointChanged(line, model.isEnabled(line));
-                }
+                debugPanel.breakpointsChanged(model);
             }
         });
     }
@@ -4893,6 +5022,47 @@ public class SphereCoder extends JPanel implements CodeTab.Host, CodeTab.ZoomHos
                     g.tabs.setSelectedComponent(forward);
                 }
             }
+        }
+
+        @Override
+        public void showInlineValues(File file, int line, Map<String, String> variables) {
+            for (CodeTab tab : familyTabs()) {
+                if (sameFile(tab.getFile(), file)) {
+                    tab.setDebugValues(line, variables);
+                } else {
+                    tab.clearDebugValues();
+                }
+            }
+        }
+
+        @Override
+        public void clearInlineValues() {
+            for (CodeTab tab : familyTabs()) {
+                tab.clearDebugValues();
+            }
+        }
+
+        @Override
+        public int cursorLine(File file) {
+            CodeTab active = getActiveTab();
+            if (active != null && sameFile(active.getFile(), file)) {
+                return active.getEditorArea().lineAt(active.getEditorArea().getCaretPosition()) + 1;
+            }
+            for (CodeTab tab : familyTabs()) {
+                if (sameFile(tab.getFile(), file)) {
+                    return tab.getEditorArea().lineAt(tab.getEditorArea().getCaretPosition()) + 1;
+                }
+            }
+            return -1;
+        }
+
+        @Override
+        public void revealFrame(File file, int line) {
+            // A frame in a file not open yet (a header, a module): it opens where the user looks.
+            if (file != null && file.isFile() && line > 0 && viewAnywhere(file) == null) {
+                openFile(file);
+            }
+            showExecutionLine(file, line);
         }
     }
 }

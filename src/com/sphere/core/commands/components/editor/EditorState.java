@@ -111,6 +111,10 @@ public final class EditorState {
     public static final String AUTO_CLOSE = "edit.autoClosePairs";
     public static final String TRIM_ON_SAVE = "edit.trimOnSave";
     public static final String LIVE_LINT = "insight.liveLint";
+    /** Offer an edit made on one line to the other lines it fits. */
+    public static final String EDIT_ECHO = "insight.editEcho";
+    /** Show the values of physical quantities past the lines that define them. */
+    public static final String UNITS_LENS = "insight.unitsLens";
     public static final String FONT_SIZE = "view.fontSize";
 
     public static int fontSize() {

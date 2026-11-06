@@ -70,6 +70,17 @@ public final class CodeTextPane extends JTextArea {
     private Function<MouseEvent, String> tooltipProvider;
     private Consumer<Runnable> atomicRunner = Runnable::run;
 
+    /**
+     * A change offered to a line (Edit Echo): [start, end) is the text it replaces,
+     * preview the line as it would read.
+     */
+    public record Ghost(int start, int end, String preview) {
+    }
+
+    private List<Ghost> ghosts = List.of();
+    /** Where each ghost's preview was last painted, by 0-based line: what a click on it hits. */
+    private final Map<Integer, Rectangle> ghostPills = new java.util.HashMap<>();
+
     public CodeTextPane() {
         super();
         setOpaque(true);
@@ -263,6 +274,32 @@ public final class CodeTextPane extends JTextArea {
         this.tooltipProvider = provider;
     }
 
+    /** The changes offered to other lines, painted over them; an empty list takes them away. */
+    public void setGhosts(List<Ghost> list) {
+        List<Ghost> now = list == null ? List.of() : List.copyOf(list);
+        if (!now.equals(ghosts)) {
+            ghosts = now;
+            if (now.isEmpty()) {
+                ghostPills.clear();
+            }
+            repaint();
+        }
+    }
+
+    public boolean hasGhosts() {
+        return !ghosts.isEmpty();
+    }
+
+    /** The 0-based line whose preview is under a point, or -1. */
+    public int ghostLineAt(java.awt.Point p) {
+        for (Map.Entry<Integer, Rectangle> e : ghostPills.entrySet()) {
+            if (e.getValue().contains(p)) {
+                return e.getKey();
+            }
+        }
+        return -1;
+    }
+
     /** VS Code lets the last line scroll up to the top; so does this. */
     @Override
     public Dimension getPreferredSize() {
@@ -426,6 +463,7 @@ public final class CodeTextPane extends JTextArea {
             paintBracketBoxes(g3);
             paintSquiggles(g3, lines);
             paintInlays(g3, lines);
+            paintGhosts(g3, lines);
             paintLink(g3);
             paintWatermark(g3);
         } finally {
@@ -916,7 +954,7 @@ public final class CodeTextPane extends JTextArea {
         g2.setFont(f);
         for (int line = lines[0]; line <= lines[1] && line < lineCountTotal(); line++) {
             final String t = inlays.get(line + 1);
-            if (t == null || t.isEmpty()) {
+            if (t == null || t.isEmpty() || hasGhostOn(line)) {
                 continue;
             }
             final Rectangle2D end = view(lineEndOffset(line));
@@ -929,6 +967,78 @@ public final class CodeTextPane extends JTextArea {
             g2.fill(new RoundRectangle2D.Float(x - 5, top, fm.stringWidth(t) + 10, h, 7, 7));
             g2.setColor(EditorTheme.watermark());
             g2.drawString(t, x, (float) (end.getY() + (end.getHeight() + fm.getAscent() - fm.getDescent()) / 2));
+        }
+    }
+
+    /** The arrow the font has: not every coding font draws the dashed one. */
+    private static String arrow(Font f) {
+        for (String a : new String[] { "⇢", "→", "»" }) {
+            if (f.canDisplay(a.charAt(0))) {
+                return a;
+            }
+        }
+        return ">";
+    }
+
+    private boolean hasGhostOn(int line) {
+        for (Ghost g : ghosts) {
+            if (lineAt(g.start()) == line) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Edit Echo's previews: the text a change replaces is tinted (a bar where it only
+     * inserts), and past the end of the line a pill shows the line as it would read.
+     */
+    private void paintGhosts(Graphics2D g2, int[] lines) {
+        ghostPills.clear();
+        if (ghosts.isEmpty()) {
+            return;
+        }
+        Color accent = EditorTheme.accent();
+        Font f = getFont().deriveFont(Font.ITALIC, getFont().getSize2D() * 0.92f);
+        FontMetrics fm = g2.getFontMetrics(f);
+        applyTextHints(g2);
+        int max = getDocument().getLength();
+        for (Ghost gh : ghosts) {
+            if (gh.start() > max || gh.end() > max) {
+                continue;
+            }
+            int line = lineAt(gh.start());
+            if (line < lines[0] || line > lines[1]) {
+                continue;
+            }
+            if (gh.end() > gh.start()) {
+                paintRange(g2, gh.start(), gh.end(), EditorTheme.alpha(accent, 46), EditorTheme.alpha(accent, 150));
+            } else {
+                Rectangle2D at = view(gh.start());
+                if (at != null) {
+                    g2.setColor(accent);
+                    g2.fill(new Rectangle2D.Float((float) at.getX() - 1, (float) at.getY() + 1, 2f,
+                                                  (float) at.getHeight() - 2));
+                }
+            }
+            Rectangle2D end = view(lineEndOffset(line));
+            if (end == null) {
+                continue;
+            }
+            String text = arrow(f) + " " + (gh.preview().length() > 90 ? gh.preview().substring(0, 89) + "…" : gh.preview());
+            float x = (float) end.getX() + fm.charWidth(' ') * 3;
+            float top = (float) end.getY() + 2;
+            float h = (float) end.getHeight() - 4;
+            float w = fm.stringWidth(text) + 12;
+            g2.setColor(EditorTheme.alpha(accent, 26));
+            g2.fill(new RoundRectangle2D.Float(x - 6, top, w, h, 7, 7));
+            g2.setColor(EditorTheme.alpha(accent, 110));
+            g2.setStroke(new BasicStroke(1f));
+            g2.draw(new RoundRectangle2D.Float(x - 5.5f, top + 0.5f, w - 1, h - 1, 7, 7));
+            g2.setFont(f);
+            g2.setColor(EditorTheme.readable(accent));
+            g2.drawString(text, x, (float) (end.getY() + (end.getHeight() + fm.getAscent() - fm.getDescent()) / 2));
+            ghostPills.put(line, new Rectangle((int) (x - 6), (int) top, (int) w, (int) h));
         }
     }
 

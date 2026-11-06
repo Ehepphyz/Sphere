@@ -59,6 +59,28 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
     private int lastWidth = 0;
     private byte[] changes = new byte[0];
     private final BreakpointModel.Listener breakpointRepaint = m -> repaint();
+    /** Adds the session's entries (Run to Line) to the menu of a line; null when nothing debugs. */
+    private java.util.function.BiConsumer<JPopupMenu, Integer> menuExtender;
+
+    public void setMenuExtender(java.util.function.BiConsumer<JPopupMenu, Integer> extender) {
+        this.menuExtender = extender;
+    }
+
+    /** Opens the breakpoint editor of a line under it: condition, hit count or log message. */
+    public void editBreakpoint(int line, boolean logpoint) {
+        if (breakpoints == null || line < 1) {
+            return;
+        }
+        Rectangle r = lineRect(lineStart(line));
+        int y = r == null ? 0 : r.y + r.height;
+        BreakpointEditor.show(this, GLYPH_STRIP, y, breakpoints, line,
+                              logpoint ? BreakpointEditor.Kind.LOG : BreakpointEditor.Kind.CONDITION);
+    }
+
+    private int lineStart(int line) {
+        Element root = component.getDocument().getDefaultRootElement();
+        return root.getElement(Math.max(0, Math.min(line - 1, root.getElementCount() - 1))).getStartOffset();
+    }
 
     /** Stops following breakpoints that outlive this gutter (a closed split). */
     public void dispose() {
@@ -206,9 +228,22 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
             menu.add(toggle);
             if (has) {
                 boolean enabled = breakpoints.isEnabled(line);
+                JMenuItem edit = new JMenuItem(breakpoints.spec(line).isLogpoint() ? "Edit Logpoint..." : "Edit Breakpoint...");
+                edit.addActionListener(a -> BreakpointEditor.show(this, e.getX(), e.getY(), breakpoints, line,
+                    breakpoints.spec(line).isLogpoint() ? BreakpointEditor.Kind.LOG : BreakpointEditor.Kind.CONDITION));
+                menu.add(edit);
                 JMenuItem enable = new JMenuItem(enabled ? "Disable Breakpoint" : "Enable Breakpoint");
                 enable.addActionListener(a -> breakpoints.setEnabled(line, !enabled));
                 menu.add(enable);
+            } else {
+                JMenuItem conditional = new JMenuItem("Add Conditional Breakpoint...");
+                conditional.addActionListener(a -> BreakpointEditor.show(this, e.getX(), e.getY(), breakpoints, line,
+                                                                         BreakpointEditor.Kind.CONDITION));
+                menu.add(conditional);
+                JMenuItem logpoint = new JMenuItem("Add Logpoint...");
+                logpoint.addActionListener(a -> BreakpointEditor.show(this, e.getX(), e.getY(), breakpoints, line,
+                                                                      BreakpointEditor.Kind.LOG));
+                menu.add(logpoint);
             }
             if (!breakpoints.lines().isEmpty()) {
                 menu.addSeparator();
@@ -217,7 +252,12 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
                 menu.add(clear);
             }
         }
-        menu.show(this, e.getX(), e.getY());
+        if (menuExtender != null) {
+            menuExtender.accept(menu, line);
+        }
+        if (menu.getComponentCount() > 0) {
+            menu.show(this, e.getX(), e.getY());
+        }
     }
 
     @Override
@@ -243,8 +283,13 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
             if (sb.length() > 0) {
                 sb.append("<br>");
             }
-            sb.append(breakpoints.isEnabled(line) ? "Breakpoint" : "Breakpoint (disabled)")
-              .append(" — click to remove, right-click for more");
+            BreakpointModel.Spec spec = breakpoints.spec(line);
+            sb.append("<b>").append(spec.isLogpoint() ? "Logpoint" : spec.hasCondition() ? "Conditional breakpoint" : "Breakpoint")
+              .append("</b>").append(breakpoints.isEnabled(line) ? "" : " (disabled)");
+            if (!spec.isPlain()) {
+                sb.append("<br>").append(CodeTextPane.escape(spec.describe()));
+            }
+            sb.append("<br><font color='#888888'>Click to remove, right-click to edit</font>");
         }
         if (sb.length() == 0 && line - 1 < changes.length && event.getX() >= getWidth() - RIGHT_PAD) {
             int mark = changes[line - 1] & 3;
@@ -368,7 +413,15 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
             boolean hasBreakpoint = breakpoints != null && breakpoints.has(lineNumber);
             EditorDiagnostic.Severity severity = markers.get(lineNumber);
             if (hasBreakpoint) {
-                paintBreakpoint(g2, cy, rect.height, breakpoints.isEnabled(lineNumber), false);
+                BreakpointModel.Spec spec = breakpoints.spec(lineNumber);
+                if (spec.isLogpoint()) {
+                    paintLogpoint(g2, cy, rect.height, breakpoints.isEnabled(lineNumber));
+                } else {
+                    paintBreakpoint(g2, cy, rect.height, breakpoints.isEnabled(lineNumber), false);
+                    if (spec.hasCondition() && breakpoints.isEnabled(lineNumber)) {
+                        paintConditionMark(g2, cy, rect.height);
+                    }
+                }
             } else if (severity != null) {
                 paintSeverity(g2, severity, cy, rect.height);
             } else if (lineNumber == hoverLine && breakpoints != null) {
@@ -411,6 +464,38 @@ public final class EditorGutter extends JPanel implements DocumentListener, Care
             g2.setColor(EditorTheme.breakpointDisabled());
             g2.setStroke(new BasicStroke(1.6f));
             g2.draw(new Ellipse2D.Float(x + 0.8f, y + 0.8f, d - 1.6f, d - 1.6f));
+        }
+    }
+
+    /** Two short bars across the dot: this breakpoint waits for a condition or a hit count. */
+    private void paintConditionMark(Graphics2D g2, int cy, int lineHeight) {
+        float d = Math.min(11f, lineHeight - 4f);
+        float x = (GLYPH_STRIP - d) / 2f + 1;
+        g2.setColor(EditorTheme.gutterBackground());
+        g2.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        float a = x + d * 0.28f;
+        float b = x + d * 0.72f;
+        g2.draw(new Line2D.Float(a, cy - d * 0.13f, b, cy - d * 0.13f));
+        g2.draw(new Line2D.Float(a, cy + d * 0.15f, b, cy + d * 0.15f));
+    }
+
+    /** A diamond: a logpoint prints and never stops. */
+    private void paintLogpoint(Graphics2D g2, int cy, int lineHeight, boolean enabled) {
+        float d = Math.min(12f, lineHeight - 3f);
+        float cx = GLYPH_STRIP / 2f + 1;
+        GeneralPath p = new GeneralPath();
+        p.moveTo(cx, cy - d / 2f);
+        p.lineTo(cx + d / 2f, cy);
+        p.lineTo(cx, cy + d / 2f);
+        p.lineTo(cx - d / 2f, cy);
+        p.closePath();
+        if (enabled) {
+            g2.setColor(EditorTheme.breakpoint());
+            g2.fill(p);
+        } else {
+            g2.setColor(EditorTheme.breakpointDisabled());
+            g2.setStroke(new BasicStroke(1.4f));
+            g2.draw(p);
         }
     }
 

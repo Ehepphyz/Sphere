@@ -98,7 +98,23 @@ public class CodeTab extends JPanel {
             selectTab(target);
             target.reveal(symbol);
         }
+
+        /** Whether a debug session on this tab's file is paused, so it can run on to a line. */
+        default boolean canRunToLine(CodeTab tab) {
+            return false;
+        }
+
+        /** Runs the paused session on to a line of the tab's file (the gutter's Run to Line). */
+        default void runToLine(CodeTab tab, int line) { }
     }
+
+    /** Analyses the Units Lens off the event thread, one file at a time. */
+    private static final java.util.concurrent.ExecutorService LENS = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "sphere-units-lens");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        return t;
+    });
 
     private EditorMode currentMode = EditorMode.PLAIN_TEXT;
 
@@ -133,9 +149,22 @@ public class CodeTab extends JPanel {
 
     private List<EditorDiagnostic> externalDiagnostics = List.of();
     private List<EditorDiagnostic> insightDiagnostics = List.of();
+    private List<EditorDiagnostic> lensDiagnostics = List.of();
     private List<EditorDiagnostic> combined = List.of();
     private SnippetSession snippet;
     private Host host;
+
+    /* Intelligence: Edit Echo, rename, the Units Lens, and what a paused debugger shows. */
+    private final EditEcho echo;
+    private final EchoBar echoBar;
+    private RenameBox renameBox;
+    private boolean smartLens;
+    private long lensGeneration;
+    private java.util.Map<Integer, String> lensInlays = java.util.Map.of();
+    private java.util.Map<Integer, String> debugInlays = java.util.Map.of();
+    private java.util.Map<String, String> debugVariables = java.util.Map.of();
+    /** True once this tab set the inlays itself; a tab of G4code keeps the ones its frame gives. */
+    private boolean ownsInlays;
 
     private final Timer previewDebounceTimer;
     private final Timer autoSaveTimer;
@@ -276,6 +305,22 @@ public class CodeTab extends JPanel {
         overlay = new EditorWidgets.OverlayPane(splitPane);
         overlay.addOverlay(findWidget, EditorWidgets.Anchor.TOP_RIGHT, 20, -4);
 
+        /* --- 8b. Edit Echo: an edit offered to the lines it fits, with its bar under the code --- */
+        echo = new EditEcho(editorArea, highlighter, () -> language);
+        echo.setEnabled(EditorState.flag(EditorState.EDIT_ECHO, true));
+        echoBar = new EchoBar(this::applyEcho, () -> echoGo(1), echo::clear);
+        echo.setListener(echoBar::showCount);
+        overlay.addOverlay(echoBar, EditorWidgets.Anchor.BOTTOM_CENTER, 0, 18);
+        editorArea.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                int line = SwingUtilities.isLeftMouseButton(e) && editorArea.hasGhosts() ? editorArea.ghostLineAt(e.getPoint()) : -1;
+                if (line >= 0 && echo.applyAt(line) && host != null) {
+                    host.toast("Edit Echo applied on line " + (line + 1));
+                }
+            }
+        });
+
         /* --- 9. Breadcrumbs and their actions --- */
         breadcrumbs = new BreadcrumbBar(new BreadcrumbBar.Host() {
             @Override public void openFile(File f) { if (host != null) host.openFile(f); }
@@ -317,6 +362,14 @@ public class CodeTab extends JPanel {
         setupScrollSynchronization();
         installKeys();
         installHover();
+        gutter.setMenuExtender((menu, line) -> {
+            if (host != null && host.canRunToLine(this)) {
+                menu.addSeparator();
+                JMenuItem run = new JMenuItem("Run to Line " + line);
+                run.addActionListener(a -> host.runToLine(this, line));
+                menu.add(run);
+            }
+        });
         editorArea.addCaretListener(e -> {
             breadcrumbs.setPath(insight.result().path(editorArea.lineAt(e.getDot())));
             if (host != null) {
@@ -402,6 +455,9 @@ public class CodeTab extends JPanel {
             return;
         }
         disposed = true;
+        closeRename();
+        echo.setEnabled(false);
+        lensGeneration++;
         host = null;
         previewDebounceTimer.stop();
         autoSaveTimer.stop();
@@ -495,6 +551,8 @@ public class CodeTab extends JPanel {
                 snippet = null;
             } else if (findWidget != null && findWidget.isOpen()) {
                 findWidget.close();
+            } else if (echo != null && echo.hasSuggestions()) {
+                echo.clear();
             } else if (infoBar.isVisible()) {
                 infoBar.setVisible(false);
             } else if (editorArea.getSelectionStart() != editorArea.getSelectionEnd()) {
@@ -543,6 +601,299 @@ public class CodeTab extends JPanel {
         bind(ks(KeyEvent.VK_V, ctrl | shift), "sphere-preview", this::togglePreview);
         // The text area's own Ctrl+\ (unselect) would hide Split Editor Right from the editor around it.
         editorArea.getInputMap(JComponent.WHEN_FOCUSED).put(ks(KeyEvent.VK_BACK_SLASH, ctrl), "none");
+
+        // Rename and Edit Echo, in every editor that shows a CodeTab.
+        bind(ks(KeyEvent.VK_F2, 0), "sphere-rename", this::startRename);
+        bind(ks(KeyEvent.VK_ENTER, alt), "sphere-echo-apply", () -> {
+            if (echo.hasSuggestions()) {
+                applyEcho();
+            } else if (host != null) {
+                host.toast("No edit to repeat: change a line, then Alt+Enter makes the same change where it fits");
+            }
+        });
+        bind(ks(KeyEvent.VK_CLOSE_BRACKET, alt), "sphere-echo-next", () -> echoGo(1));
+        bind(ks(KeyEvent.VK_OPEN_BRACKET, alt), "sphere-echo-prev", () -> echoGo(-1));
+        // Brackets sit behind AltGr on an AZERTY keyboard: the page keys work on any layout.
+        bind(ks(KeyEvent.VK_PAGE_DOWN, alt), "sphere-echo-next", () -> echoGo(1));
+        bind(ks(KeyEvent.VK_PAGE_UP, alt), "sphere-echo-prev", () -> echoGo(-1));
+    }
+
+    // ---- Edit Echo ---------------------------------------------------------
+
+    /** Makes the last edit on every line offered it, as one undo step. */
+    public int applyEcho() {
+        int n = echo.applyAll();
+        if (host != null) {
+            host.toast(n == 0 ? "The lines offered the edit have changed since" : "Edit Echo: " + n
+                       + (n == 1 ? " line changed" : " lines changed") + " (Ctrl+Z undoes them all)");
+        }
+        return n;
+    }
+
+    /** Goes to the next (or previous) line offered the last edit. */
+    public void echoGo(int direction) {
+        if (!echo.go(direction) && host != null) {
+            host.toast("No line is offered an edit");
+        }
+    }
+
+    public EditEcho getEcho() {
+        return echo;
+    }
+
+    public void setEditEcho(boolean on) {
+        echo.setEnabled(on);
+    }
+
+    // ---- Rename (F2) -------------------------------------------------------
+
+    /** Opens the rename box on the name at the caret: its occurrences light up, Enter renames them. */
+    public void startRename() {
+        closeRename();
+        String text = editorArea.getText();
+        SmartRename.Plan plan = SmartRename.plan(text, editorArea.getCaretPosition(), language,
+                                                 insight.result().symbols, highlighter::liveKindAt);
+        if (plan == null) {
+            if (host != null) {
+                host.toast("Place the caret on a name to rename it");
+            }
+            return;
+        }
+        List<int[]> marks = new ArrayList<>();
+        for (int k = 0; k < plan.ranges().size(); k++) {
+            int[] r = plan.ranges().get(k);
+            marks.add(new int[] { r[0], r[1], k == plan.primary() ? 1 : 0 });
+        }
+        editorArea.setPlaceholders(marks, -1);
+        RenameBox box = new RenameBox(plan, language, text, name -> applyRename(plan, name), this::closeRename);
+        renameBox = box;
+        int at = plan.ranges().get(plan.primary())[0];
+        Point p = new Point(0, 0);
+        try {
+            Rectangle2D r = editorArea.modelToView2D(at);
+            if (r != null) {
+                p = SwingUtilities.convertPoint(editorArea, (int) r.getX(), (int) (r.getY() + r.getHeight()), overlay);
+            }
+        } catch (BadLocationException ignored) {
+            // placed at the top left
+        }
+        java.awt.Dimension d = box.getPreferredSize();
+        int w = Math.min(Math.max(d.width, 300), Math.max(200, overlay.getWidth() - 16));
+        int x = Math.max(4, Math.min(p.x - 12, overlay.getWidth() - w - 8));
+        int y = p.y + 2 + d.height > overlay.getHeight() ? Math.max(0, p.y - d.height - editorArea.lineHeight() - 4) : p.y + 2;
+        box.setBounds(x, y, w, d.height);
+        overlay.add(box, javax.swing.JLayeredPane.POPUP_LAYER);
+        overlay.repaint();
+        box.field.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                SwingUtilities.invokeLater(() -> {
+                    if (renameBox == box && !box.field.isFocusOwner()) {
+                        closeRename();
+                    }
+                });
+            }
+        });
+        SwingUtilities.invokeLater(() -> {
+            box.field.requestFocusInWindow();
+            box.field.selectAll();
+        });
+    }
+
+    private void closeRename() {
+        RenameBox box = renameBox;
+        if (box == null) {
+            return;
+        }
+        renameBox = null;
+        overlay.remove(box);
+        overlay.repaint();
+        editorArea.setPlaceholders(null, -1);
+        editorArea.requestFocusInWindow();
+    }
+
+    /** Renames every occurrence of the plan, as one undo step, if the text still holds them. */
+    private void applyRename(SmartRename.Plan plan, String newName) {
+        closeRename();
+        if (newName.equals(plan.name())) {
+            return;
+        }
+        Document doc = editorArea.getDocument();
+        try {
+            for (int[] r : plan.ranges()) {
+                if (!doc.getText(r[0], r[1] - r[0]).equalsIgnoreCase(plan.name())) {
+                    if (host != null) {
+                        host.toast("The text changed since the rename was opened; press F2 again");
+                    }
+                    return;
+                }
+            }
+        } catch (BadLocationException ex) {
+            return;
+        }
+        int[] primary = plan.ranges().get(plan.primary());
+        int caretIn = Math.max(0, Math.min(editorArea.getCaretPosition() - primary[0], newName.length()));
+        int shift = (newName.length() - plan.name().length()) * plan.primary();
+        echo.suspend(() -> editorArea.atomic(() -> {
+            try {
+                for (int k = plan.ranges().size() - 1; k >= 0; k--) {
+                    int[] r = plan.ranges().get(k);
+                    doc.remove(r[0], r[1] - r[0]);
+                    doc.insertString(r[0], newName, null);
+                }
+            } catch (BadLocationException ignored) {
+                // the document moved under the rename; the part done stays one undo step
+            }
+        }));
+        editorArea.setCaretPosition(Math.min(doc.getLength(), primary[0] + shift + caretIn));
+        int n = plan.ranges().size();
+        if (host != null) {
+            host.toast("Renamed " + n + (n == 1 ? " occurrence" : " occurrences") + " of " + plan.name()
+                       + " to " + newName + " " + plan.scope());
+        }
+    }
+
+    // ---- Breakpoints from the keyboard ---------------------------------------
+
+    /** Opens the breakpoint editor of the caret's line: a condition, or a log message. */
+    public void editBreakpointAtCaret(boolean logpoint) {
+        gutter.editBreakpoint(editorArea.lineAt(editorArea.getCaretPosition()) + 1, logpoint);
+    }
+
+    // ---- Units Lens and inline values -------------------------------------
+
+    /** Turns the Units Lens on or off for this tab; its values and findings go with it. */
+    public void setSmartLens(boolean on) {
+        if (on == smartLens) {
+            return;
+        }
+        smartLens = on;
+        lensGeneration++;
+        if (on) {
+            insight.refresh();
+        } else {
+            lensInlays = java.util.Map.of();
+            lensDiagnostics = List.of();
+            mergeDiagnostics();
+            refreshInlays();
+        }
+    }
+
+    private void runLens(CodeInsight.Result r) {
+        if (!smartLens || (r.spec != LanguageSpec.CPP && r.spec != LanguageSpec.PYTHON)) {
+            if (!lensInlays.isEmpty() || !lensDiagnostics.isEmpty()) {
+                lensInlays = java.util.Map.of();
+                lensDiagnostics = List.of();
+                mergeDiagnostics();
+                refreshInlays();
+            }
+            return;
+        }
+        final long generation = ++lensGeneration;
+        final String text = r.text;
+        final LanguageSpec spec = r.spec;
+        LENS.execute(() -> {
+            UnitsLens.Result result;
+            try {
+                result = UnitsLens.analyse(text, spec);
+            } catch (RuntimeException ex) {
+                result = UnitsLens.Result.EMPTY;            // a lens that fails says nothing
+            }
+            final UnitsLens.Result done = result;
+            SwingUtilities.invokeLater(() -> {
+                if (generation != lensGeneration || disposed) {
+                    return;
+                }
+                lensInlays = done.inlays();
+                lensDiagnostics = done.diagnostics();
+                mergeDiagnostics();
+                refreshInlays();
+            });
+        });
+    }
+
+    /**
+     * Shows a paused debugger's values past the end of the lines of the frame, up to
+     * the stopped line: "x = 1.5, h = 0x5a3f10". Hovering a name shows its value too.
+     */
+    public void setDebugValues(int line, java.util.Map<String, String> variables) {
+        debugVariables = variables == null ? java.util.Map.of() : java.util.Map.copyOf(variables);
+        java.util.Map<Integer, String> out = new java.util.HashMap<>();
+        int stopped = line - 1;
+        int total = editorArea.lineCountTotal();
+        if (stopped >= 0 && stopped < total && !debugVariables.isEmpty()) {
+            int from = Math.max(0, stopped - 80);
+            DocSymbol fn = null;
+            for (DocSymbol s : insight.result().symbols) {
+                if (s.kind.isCallable() && s.contains(stopped) && (fn == null || s.line >= fn.line)) {
+                    fn = s;
+                }
+            }
+            if (fn != null) {
+                from = Math.max(from, fn.line);
+            }
+            for (int l = from; l <= stopped; l++) {
+                String text = editorArea.lineText(l);
+                int start = editorArea.lineStartOffset(l);
+                java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+                int i = 0;
+                while (i < text.length()) {
+                    if (Character.isLetter(text.charAt(i)) || text.charAt(i) == '_') {
+                        int s = i;
+                        while (i < text.length() && CodeTextPane.isWordChar(text.charAt(i))) {
+                            i++;
+                        }
+                        String w = text.substring(s, i);
+                        boolean member = s > 0 && (text.charAt(s - 1) == '.' || s > 1 && text.charAt(s - 1) == '>'
+                                                   && text.charAt(s - 2) == '-');
+                        TokenKind k = highlighter.liveKindAt(start + s);
+                        if (!member && debugVariables.containsKey(w) && k != TokenKind.COMMENT && k != TokenKind.STRING) {
+                            names.add(w);
+                        }
+                    } else {
+                        i++;
+                    }
+                }
+                if (names.isEmpty()) {
+                    continue;
+                }
+                StringBuilder sb = new StringBuilder();
+                for (String n : names) {
+                    if (sb.length() > 0) {
+                        sb.append(", ");
+                    }
+                    String v = debugVariables.get(n).replaceAll("\\s+", " ").strip();
+                    sb.append(n).append(" = ").append(v.length() > 32 ? v.substring(0, 31) + "…" : v);
+                    if (sb.length() > 100) {
+                        break;
+                    }
+                }
+                out.put(l + 1, sb.toString());
+            }
+        }
+        debugInlays = out;
+        refreshInlays();
+    }
+
+    /** Takes a debugger's values away: the program runs again, or ended. */
+    public void clearDebugValues() {
+        if (debugInlays.isEmpty() && debugVariables.isEmpty()) {
+            return;
+        }
+        debugInlays = java.util.Map.of();
+        debugVariables = java.util.Map.of();
+        refreshInlays();
+    }
+
+    /** The lens's values, with a paused debugger's in their place where it has some. */
+    private void refreshInlays() {
+        if (!smartLens && debugInlays.isEmpty() && !ownsInlays) {
+            return;                                         // a G4code tab: its frame sets the inlays
+        }
+        java.util.Map<Integer, String> merged = new java.util.HashMap<>(lensInlays);
+        merged.putAll(debugInlays);
+        ownsInlays = smartLens || !debugInlays.isEmpty();
+        editorArea.setInlays(merged);
     }
 
     private boolean onTab() {
@@ -579,7 +930,8 @@ public class CodeTab extends JPanel {
 
     public void undo() {
         if (undoManager.canUndo()) {
-            buffer.keepOtherViews(this, undoManager::undo);
+            // Taking an edit back is not an edit to offer elsewhere.
+            echo.suspend(() -> buffer.keepOtherViews(this, undoManager::undo));
             placeCaretAfterHistory();
             buffer.recheckSaved();
         }
@@ -587,7 +939,7 @@ public class CodeTab extends JPanel {
 
     public void redo() {
         if (undoManager.canRedo()) {
-            buffer.keepOtherViews(this, undoManager::redo);
+            echo.suspend(() -> buffer.keepOtherViews(this, undoManager::redo));
             placeCaretAfterHistory();
             buffer.recheckSaved();
         }
@@ -776,6 +1128,20 @@ public class CodeTab extends JPanel {
         String fg = hex(EditorTheme.foreground());
         String muted = hex(EditorTheme.textMuted());
         String mono = editorArea.getFont().getFamily();
+        if (editorArea.hasGhosts() && editorArea.ghostLineAt(e.getPoint()) >= 0) {
+            return "<html>Edit Echo: click to make the same edit on this line<br>"
+                   + "<span style='color:" + muted + "'>Alt+Enter: every line shown · Escape: dismiss</span></html>";
+        }
+        // A paused debugger knows what the name holds right now.
+        int[] dw = debugVariables.isEmpty() ? null : editorArea.wordAt(offset);
+        String debugName = dw == null ? null : word(dw);
+        if (debugName != null && debugVariables.containsKey(debugName)) {
+            String v = debugVariables.get(debugName);
+            sb.append("<div style='margin-bottom:3px'><span style='font-family:\"").append(mono).append("\";color:")
+              .append(fg).append("'><b>").append(CodeTextPane.escape(debugName)).append("</b> = ")
+              .append(CodeTextPane.escape(v.length() > 600 ? v.substring(0, 600) + "…" : v)).append("</span>")
+              .append(" <span style='color:").append(muted).append("'>paused</span></div>");
+        }
         for (EditorDiagnostic d : combined) {
             if (d.getLine() != line) {
                 continue;
@@ -1104,6 +1470,7 @@ public class CodeTab extends JPanel {
     private void onInsight(CodeInsight.Result r) {
         insightDiagnostics = r.diagnostics;
         mergeDiagnostics();
+        runLens(r);
         gutter.setChanges(r.changes);
         minimap.setChanges(r.changes);
         breadcrumbs.setPath(r.path(editorArea.lineAt(editorArea.getCaretPosition())));
@@ -1120,6 +1487,11 @@ public class CodeTab extends JPanel {
         }
         for (EditorDiagnostic d : insightDiagnostics) {
             if (seen.add(d.getLine() + ":" + d.getMessage())) {
+                all.add(d);
+            }
+        }
+        for (EditorDiagnostic d : lensDiagnostics) {
+            if (d.getLine() <= editorArea.lineCountTotal() && seen.add(d.getLine() + ":" + d.getMessage())) {
                 all.add(d);
             }
         }
@@ -1262,6 +1634,10 @@ public class CodeTab extends JPanel {
         highlighter.rehighlightAll();
         updatePreview();
         refreshChrome();
+        // What was read is the reference the first edit is compared with.
+        echo.clear();
+        echo.settle();
+        clearDebugValues();
     }
 
     /** Tabs or spaces, and how many, as the file is already indented: {1 for tabs, width}. */
