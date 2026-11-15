@@ -69,12 +69,17 @@ public final class CppExport {
 
     /** Writes the project into a folder; returns the files written. */
     public List<Path> write(Path dir) throws IOException {
+        return write(dir, files());
+    }
+
+    /** Writes files, by path relative to a folder, into it; returns the files written. */
+    public static List<Path> write(Path dir, Map<String, String> files) throws IOException {
         final List<Path> out = new ArrayList<>();
         Files.createDirectories(dir.resolve("include"));
         Files.createDirectories(dir.resolve("src"));
-        final Map<String, String> files = files();
         for (Map.Entry<String, String> e : files.entrySet()) {
             final Path p = dir.resolve(e.getKey());
+            Files.createDirectories(p.getParent());
             Files.writeString(p, e.getValue(), StandardCharsets.UTF_8);
             out.add(p);
         }
@@ -155,7 +160,8 @@ public final class CppExport {
               + "    explicit DetectorConstruction(const G4String& gdmlFile = \"\");\n"
             : "    // Builds the geometry in C++: Construct() is the detector.\n"
               + "    DetectorConstruction() = default;\n";
-        final String fromGdml = gdml ? "    G4VPhysicalVolume* ConstructFromGdml();\n    G4String fGdmlFile;\n" : "";
+        final String fromGdml = gdml ? "    G4VPhysicalVolume* ConstructFromGdml();\n    G4String fGdmlFile;\n"
+            + "    std::vector<std::pair<G4LogicalVolume*, G4String>> fSensitive;   // the GDML file's SensDet tags\n" : "";
         return """
             #ifndef DetectorConstruction_h
             #define DetectorConstruction_h 1
@@ -164,6 +170,9 @@ public final class CppExport {
 
             #include "G4VUserDetectorConstruction.hh"
             #include "globals.hh"
+
+            #include <utility>
+            #include <vector>
 
             class G4VPhysicalVolume;
             class G4LogicalVolume;
@@ -264,9 +273,11 @@ public final class CppExport {
             {
               G4GDMLParser parser;
               parser.Read(fGdmlFile, false);
-              // Colors and visibility travel as auxiliary tags of the volumes
+              fSensitive.clear();
+              // Colors, visibility and sensitive detectors travel as auxiliary tags of the volumes
               for (auto* lv : *G4LogicalVolumeStore::GetInstance()) {
                 for (const auto& aux : parser.GetVolumeAuxiliaryInformation(lv)) {
+                  if (aux.type == "SensDet") fSensitive.emplace_back(lv, aux.value);
                   if (aux.type == "Color" && aux.value.size() >= 7) {
                     const auto hex = [&](std::size_t i) { return std::stoi(aux.value.substr(i, 2), nullptr, 16) / 255.; };
                     const G4double a = aux.value.size() >= 9 ? hex(7) : 1.;
@@ -520,6 +531,23 @@ public final class CppExport {
 
     private void sdBinding(StringBuilder b) {
         b.append("void DetectorConstruction::ConstructSDandField()\n{\n");
+        if (o.readsGdml()) {
+            b.append("""
+                  if (!fGdmlFile.empty()) {
+                    // A GDML file names its own sensitive volumes, by their SensDet auxiliary tags (G4editor writes them)
+                    auto* manager = G4SDManager::GetSDMpointer();
+                    for (const auto& [volume, name] : fSensitive) {
+                      auto* sd = manager->FindSensitiveDetector(name, false);
+                      if (sd == nullptr) {
+                        sd = new SensitiveDetector(name);
+                        manager->AddNewDetector(sd);
+                      }
+                      SetSensitiveDetector(volume, sd);
+                    }
+                    return;
+                  }
+                """);
+        }
         final Map<String, List<LogicalVolume>> bySd = new LinkedHashMap<>();
         for (LogicalVolume lv : g.volumes()) {
             if (lv.sensitive() != null) {
@@ -532,7 +560,7 @@ public final class CppExport {
         }
         b.append("  auto* sdManager = G4SDManager::GetSDMpointer();\n");
         if (o.readsGdml()) {
-            b.append("  // With a GDML file, the volumes come from its SensDet auxiliary tags; built in C++, from the design.\n");
+            b.append("  // Built in C++: the sensitive volumes are the design's.\n");
         }
         for (Map.Entry<String, List<LogicalVolume>> e : bySd.entrySet()) {
             final String v = "sd_" + cppId(e.getKey());

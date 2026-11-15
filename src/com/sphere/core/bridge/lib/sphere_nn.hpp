@@ -2,10 +2,11 @@
 //
 // A network trained in Sphere (sphere_ml: PyTorch or Keras) run from C++: a ROOT macro, a Geant4 program (a
 // tagger in an analysis, a fast simulation), any C++17 program, with nothing but this header and
-// sphere_spx.hpp -- no LibTorch, no TensorFlow, no ONNX Runtime. The five networks of sphere_ml's zoo (an
-// MLP, Deep Sets, an Energy Flow Network, ParticleNet, a Particle Transformer) are evaluated in double precision with the formulas
-// and in the order of sphere_ml's numpy reference, which ':ml crosscheck' holds them to; the weights are read
-// in place from the mapped export, not copied.
+// sphere_spx.hpp -- no LibTorch, no TensorFlow, no ONNX Runtime. The seven networks of sphere_ml's zoo (an
+// MLP, Deep Sets, an Energy Flow Network, ParticleNet, a Particle Transformer, and the Lorentz invariant LorentzNet and
+// PELICAN, which see a jet through its particles' Minkowski products only) are evaluated in double precision with the
+// formulas and in the order of sphere_ml's numpy reference, which ':ml crosscheck' holds them to; the weights are
+// read in place from the mapped export, not copied.
 //
 //     #include "sphere_nn.hpp"
 //     sphere::nn::Network net("tagger");                  // $SPHERE_BRIDGE/models/tagger.snn.spx
@@ -72,8 +73,19 @@ public:
             dim_ = std::stoi(meta_["Dim"]);
             heads_ = std::stoi(meta_["Heads"]);
             layers_ = std::stoi(meta_["Layers"]);
+        } else if (model_ == "lorentznet") {
+            dim_ = std::stoi(meta_["Dim"]);
+            msg_ = std::stoi(meta_["Msg"]);
+            layers_ = std::stoi(meta_["Layers"]);
+            coef_ = std::stod(meta_["Coef"]);
+            scale_ = std::stod(meta_["Scale"]);
+        } else if (model_ == "pelican") {
+            channels_ = std::stoi(meta_["Channels"]);
+            layers_ = std::stoi(meta_["Layers"]);
+            scale_ = std::stod(meta_["Scale"]);
         } else {
-            throw std::runtime_error("no network " + model_ + " in this header (mlp, deepsets, efn, particlenet, transformer)");
+            throw std::runtime_error("no network " + model_ + " in this header (mlp, deepsets, efn, particlenet, transformer,"
+                                     " lorentznet, pelican)");
         }
         for (const auto& s : file_.sections())
             if (s.second.type == spx::F64) w_[s.first] = file_.f64(s.first, &n_[s.first]);
@@ -116,6 +128,8 @@ public:
         if (model_ == "deepsets") return deepsets(xs, m);
         if (model_ == "efn") return efn(pts, pt);
         if (model_ == "particlenet") return particleNet(xs, pts, m);
+        if (model_ == "lorentznet") return lorentzNet(gram(pts, pt, m), m);
+        if (model_ == "pelican") return pelican(gram(pts, pt, m), m);
         return transformer(xs, pts, pt, m);
     }
 
@@ -419,6 +433,246 @@ private:
         return dense("head", norm("head.n", c[0]));
     }
 
+    // ---- The Lorentz invariant networks: LorentzNet and PELICAN, on the jet's Minkowski products
+
+    // sgn(x) log(1 + |x|), as sphere_ml's _psi.
+    static double psi(double x) {
+        return (x > 0 ? 1.0 : x < 0 ? -1.0 : 0.0) * std::log(1.0 + std::abs(x));
+    }
+
+    // The Minkowski products of the jet's (massless) particles in units of scale^2, as sphere_ml.gram computes them:
+    // 2 pt_i pt_j (sinh^2(deta/2) + sin^2(dphi/2)), with no cancellation for close particles.
+    std::vector<Vec> gram(const std::vector<Vec>& pts, const Vec& pt, const Vec& m) const {
+        const int n = points_;
+        std::vector<Vec> g(n, Vec(n, 0.0));
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                const double sh = std::sinh(0.5 * (pts[i][0] - pts[j][0])), sn = std::sin(0.5 * (pts[i][1] - pts[j][1]));
+                g[i][j] = 2.0 * (pt[i] / scale_) * (pt[j] / scale_) * (sh * sh + sn * sn) * (m[i] * m[j]);
+            }
+        return g;
+    }
+
+    // x times the rows [from, from + x.size()) of a weight (in, out) of name, no bias.
+    Vec project(const std::string& name, const Vec& x, int from) const {
+        const double* W = at(name + ".W");
+        const int out = static_cast<int>(size(name + ".b"));
+        Vec y(out, 0.0);
+        for (size_t i = 0; i < x.size(); ++i) {
+            const double xi = x[i];
+            if (xi == 0) continue;
+            const double* row = W + static_cast<std::int64_t>(from + static_cast<int>(i)) * out;
+            for (int o = 0; o < out; ++o) y[o] += xi * row[o];
+        }
+        return y;
+    }
+
+    // LorentzNet on the Gram matrix, as sphere_ml's forward: the particles' scalars from their invariants (psi of
+    // their product with the jet and of the jet's mass squared), equivariant blocks moving G to A G A^T, a masked mean.
+    Vec lorentzNet(std::vector<Vec> g, const Vec& m) const {
+        const int n = points_;
+        Vec jdot(n, 0.0);
+        double mj = 0;
+        for (int i = 0; i < n; ++i) {
+            double s = 0;
+            for (int j = 0; j < n; ++j) s += g[i][j];
+            jdot[i] = s;
+        }
+        for (int i = 0; i < n; ++i) mj += jdot[i];
+        std::vector<Vec> h(n);
+        for (int i = 0; i < n; ++i) {
+            Vec e = dense("lz.emb", Vec{psi(jdot[i]), psi(mj)});
+            relu(e);
+            for (double& v : e) v *= m[i];
+            h[i] = std::move(e);
+        }
+        for (int l = 0; l < layers_; ++l) lgeb("lz" + std::to_string(l), h, g, m, l == layers_ - 1);
+        Vec mean(dim_, 0.0);
+        double count = 0;
+        for (int i = 0; i < n; ++i) {
+            count += m[i];
+            for (int c = 0; c < dim_; ++c) mean[c] += h[i][c] * m[i];
+        }
+        for (int c = 0; c < dim_; ++c) mean[c] /= std::max(count, 1.0);
+        Vec z = dense("lz.out.0", mean);
+        relu(z);
+        return dense("lz.out.1", z);
+    }
+
+    // One Lorentz group equivariant block, h and G updated in place. The last moves no four-vector: nothing reads
+    // them after it, and its phi_x was not even exported.
+    void lgeb(const std::string& name, std::vector<Vec>& h, std::vector<Vec>& g, const Vec& m, bool last) const {
+        const int n = points_, d = dim_, dm = msg_;
+        const double* W0 = at(name + ".e0.W");
+        const double* b0 = at(name + ".e0.b");
+        std::vector<Vec> hi(n), hj(n);
+        for (int i = 0; i < n; ++i) {
+            hi[i] = project(name + ".e0", h[i], 0);
+            hj[i] = project(name + ".e0", h[i], d);
+        }
+        std::vector<Vec> a(n, Vec(n, 0.0)), agg(n, Vec(dm, 0.0));
+        Vec e(dm);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                const double nrm = g[i][i] + g[j][j] - 2.0 * g[i][j];
+                const double pn = psi(nrm), pg = psi(g[i][j]);
+                for (int o = 0; o < dm; ++o)
+                    e[o] = std::max(hi[i][o] + hj[j][o] + pn * W0[2 * d * dm + o] + pg * W0[(2 * d + 1) * dm + o] + b0[o], 0.0);
+                Vec mm = dense(name + ".e1", e);
+                relu(mm);
+                const double pm = i == j ? 0.0 : m[i] * m[j];
+                const double wij = 1.0 / (1.0 + std::exp(-dense(name + ".m", mm)[0]));
+                for (int o = 0; o < dm; ++o) agg[i][o] += mm[o] * wij * pm;
+                if (!last) {
+                    Vec x0 = dense(name + ".x0", mm);
+                    relu(x0);
+                    const double phi = dense(name + ".x1", x0)[0];
+                    a[i][j] = (i == j ? 1.0 : 0.0) + coef_ * phi * pm;
+                }
+            }
+        std::vector<Vec> h2(n);
+        for (int i = 0; i < n; ++i) {
+            Vec cat(d + dm);
+            std::copy(h[i].begin(), h[i].end(), cat.begin());
+            std::copy(agg[i].begin(), agg[i].end(), cat.begin() + d);
+            Vec u = dense(name + ".h0", cat);
+            relu(u);
+            const Vec up = dense(name + ".h1", u);
+            h2[i].assign(d, 0.0);
+            for (int c = 0; c < d; ++c) h2[i][c] = (h[i][c] + up[c]) * m[i];
+        }
+        h = std::move(h2);
+        if (last) return;
+        std::vector<Vec> ag(n, Vec(n, 0.0)), g2(n, Vec(n, 0.0));
+        for (int i = 0; i < n; ++i)
+            for (int k = 0; k < n; ++k) {
+                double s = 0;
+                for (int j = 0; j < n; ++j) s += a[i][j] * g[j][k];
+                ag[i][k] = s;
+            }
+        for (int i = 0; i < n; ++i)
+            for (int l = 0; l < n; ++l) {
+                double s = 0;
+                for (int k = 0; k < n; ++k) s += ag[i][k] * a[l][k];
+                g2[i][l] = s;
+            }
+        g = std::move(g2);
+    }
+
+    // x times the k-th of an Eq2to2 layer's 15 maps (rows k C .. (k + 1) C of its weight).
+    static Vec eqmap(const double* W, int k, int c, int co, const Vec& x) {
+        Vec y(co, 0.0);
+        for (int i = 0; i < c; ++i) {
+            const double xi = x[i];
+            if (xi == 0) continue;
+            const double* row = W + static_cast<std::int64_t>(k * c + i) * co;
+            for (int o = 0; o < co; ++o) y[o] += xi * row[o];
+        }
+        return y;
+    }
+
+    // PELICAN, as sphere_ml's forward: the products' embedding, Eq2to2 layers, the diagonal's and the whole mean.
+    Vec pelican(const std::vector<Vec>& g, const Vec& m) const {
+        const int n = points_, c = channels_;
+        double nreal = 0, mj = 0;
+        for (int i = 0; i < n; ++i) nreal += m[i];
+        nreal = std::max(nreal, 1.0);
+        for (int i = 0; i < n; ++i) {
+            double s = 0;
+            for (int j = 0; j < n; ++j) s += g[i][j];
+            mj += s;
+        }
+        const double rel = nreal * nreal / (mj + 1e-12);
+        std::vector<std::vector<Vec>> t(n, std::vector<Vec>(n));
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                Vec e = dense("pe.in", Vec{psi(g[i][j]), psi(g[i][j] * rel)});
+                relu(e);
+                const double mm = m[i] * m[j];
+                for (double& v : e) v *= mm;
+                t[i][j] = std::move(e);
+            }
+        for (int l = 0; l < layers_; ++l) t = eq2to2("pe" + std::to_string(l), t, nreal, m);
+        Vec sd(c, 0.0), sa(c, 0.0);
+        for (int i = 0; i < n; ++i)
+            for (int o = 0; o < c; ++o) sd[o] += t[i][i][o];
+        for (int i = 0; i < n; ++i) {
+            Vec row(c, 0.0);
+            for (int j = 0; j < n; ++j)
+                for (int o = 0; o < c; ++o) row[o] += t[i][j][o];
+            for (int o = 0; o < c; ++o) sa[o] += row[o];
+        }
+        Vec cat(2 * c);
+        for (int o = 0; o < c; ++o) {
+            cat[o] = sd[o] / nreal;
+            cat[c + o] = sa[o] / (nreal * nreal);
+        }
+        Vec z = dense("pe.out.0", cat);
+        relu(z);
+        return dense("pe.out.1", z);
+    }
+
+    // One Eq2to2 layer: the 15 permutation-equivariant maps of a 2-tensor, added as sphere_ml's _eq2to2 adds them.
+    std::vector<std::vector<Vec>> eq2to2(const std::string& name, const std::vector<std::vector<Vec>>& t, double nreal,
+                                         const Vec& m) const {
+        const int n = points_, c = channels_;
+        const double* W = at(name + ".W");
+        const double* b = at(name + ".b");
+        const int co = static_cast<int>(size(name + ".b"));
+        std::vector<Vec> d(n), r(n, Vec(c, 0.0)), col(n, Vec(c, 0.0));
+        Vec sd(c, 0.0), sa(c, 0.0);
+        for (int i = 0; i < n; ++i) {
+            d[i] = t[i][i];
+            for (int j = 0; j < n; ++j)
+                for (int o = 0; o < c; ++o) {
+                    r[i][o] += t[i][j][o];
+                    col[j][o] += t[i][j][o];
+                }
+        }
+        for (int i = 0; i < n; ++i)
+            for (int o = 0; o < c; ++o) {
+                r[i][o] /= nreal;
+                col[i][o] /= nreal;
+            }
+        for (int i = 0; i < n; ++i)
+            for (int o = 0; o < c; ++o) {
+                sd[o] += d[i][o];
+                sa[o] += r[i][o];
+            }
+        for (int o = 0; o < c; ++o) {
+            sd[o] /= nreal;
+            sa[o] /= nreal;
+        }
+        const Vec sdW3 = eqmap(W, 3, c, co, sd), saW6 = eqmap(W, 6, c, co, sa);
+        const Vec sdW13 = eqmap(W, 13, c, co, sd), saW14 = eqmap(W, 14, c, co, sa);
+        Vec every(co);
+        for (int o = 0; o < co; ++o) every[o] = sdW13[o] + saW14[o] + b[o];
+        std::vector<Vec> onDiag(n, Vec(co)), rows(n, Vec(co)), cols(n, Vec(co));
+        for (int i = 0; i < n; ++i) {
+            const Vec dW2 = eqmap(W, 2, c, co, d[i]), rW4 = eqmap(W, 4, c, co, r[i]), cW5 = eqmap(W, 5, c, co, col[i]);
+            const Vec cW7 = eqmap(W, 7, c, co, col[i]), rW8 = eqmap(W, 8, c, co, r[i]), dW11 = eqmap(W, 11, c, co, d[i]);
+            const Vec cW9 = eqmap(W, 9, c, co, col[i]), rW10 = eqmap(W, 10, c, co, r[i]), dW12 = eqmap(W, 12, c, co, d[i]);
+            for (int o = 0; o < co; ++o) {
+                onDiag[i][o] = dW2[o] + rW4[o] + cW5[o] + (sdW3[o] + saW6[o]);
+                rows[i][o] = cW7[o] + rW8[o] + dW11[o];
+                cols[i][o] = cW9[o] + rW10[o] + dW12[o];
+            }
+        }
+        std::vector<std::vector<Vec>> out(n, std::vector<Vec>(n));
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                const Vec a0 = eqmap(W, 0, c, co, t[i][j]), a1 = eqmap(W, 1, c, co, t[j][i]);
+                const double mm = m[i] * m[j];
+                Vec y(co);
+                for (int o = 0; o < co; ++o) {
+                    const double v = a0[o] + a1[o] + onDiag[i][o] * (i == j ? 1.0 : 0.0) + rows[i][o] + cols[j][o] + every[o];
+                    y[o] = std::max(v, 0.0) * mm;
+                }
+                out[i][j] = std::move(y);
+            }
+        return out;
+    }
+
     spx::File file_;
     std::map<std::string, std::string> meta_;
     std::map<std::string, const double*> w_;
@@ -427,7 +681,8 @@ private:
     double temperature_ = 1.0;
     int classes_ = 0, features_ = 0, points_ = 0, highLevel_ = 0, ptIndex_ = 0;
     std::vector<int> coords_, widths_, phi_, rho_;
-    int k_ = 0, dim_ = 0, heads_ = 0, layers_ = 0;
+    int k_ = 0, dim_ = 0, heads_ = 0, layers_ = 0, msg_ = 0, channels_ = 0;
+    double coef_ = 0.0, scale_ = 1.0;
     std::vector<std::vector<int>> blocks_;
 };
 

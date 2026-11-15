@@ -47,7 +47,7 @@ public class Sphere extends JFrame {
      */
 
     /** Sphere itself (:version). */
-    public static final String VERSION = "v2026.2.3.0";
+    public static final String VERSION = "v2026.2.2.0";
 
     // ---- FastJet, SISCone and fjcontrib, ported to Java ----------------------------
     /** The FastJet release the Java port follows. */
@@ -134,9 +134,13 @@ public class Sphere extends JFrame {
     /** The Julia driver Sphere writes; bumped whenever its source changes, so a stale copy is rewritten. */
     public static final int JULIA_DRIVER_VERSION = 4;
     /** The JupyterLab kernel driver Sphere writes; bumped whenever its source changes. */
-    public static final int JUPYTER_KERNEL_VERSION = 3;
+    public static final int JUPYTER_KERNEL_VERSION = 4;
     /** The kernel's shared-memory module; bumped whenever its source changes. */
     public static final int JUPYTER_SHM_MODULE_VERSION = 2;
+    /** The bootstrap that starts an ipykernel with Sphere's side channel; bumped whenever its source changes. */
+    public static final int JUPYTER_IPYKERNEL_BOOTSTRAP_VERSION = 1;
+    /** The namespace and analysis helpers the kernels import; bumped whenever their source changes. */
+    public static final int JUPYTER_TOOLS_VERSION = 4;
     /** The debugger script Sphere writes; bumped whenever its source changes. */
     public static final int DEBUG_SCRIPT_VERSION = 2;
 
@@ -254,6 +258,8 @@ public class Sphere extends JFrame {
         Thread startup = new Thread(() -> {
             com.sphere.utils.SecurityManager.initialize();
             StartupDiagnostic.run(this.settings);
+            // TensorFlow, PyTorch and pyhf found and made reachable before anything asks for them
+            com.sphere.core.ml.MlLink.prepare();
         }, "sphere-startup");
         startup.setDaemon(true);
         startup.start();

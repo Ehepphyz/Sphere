@@ -41,6 +41,12 @@ public class CommandDefinitions {
         register(":set", "Assign or update an application runtime context variable", Handlers::setCommand);
         register(":create new", "Create a new file within the active directory", Handlers::createNew);
 
+        // --- :jlab, Jupylab: Sphere's notebook, listed under system (SYSTEM_FAMILIES) ---
+        register(":jlab", "Open Jupylab, Sphere's notebook: names colored by scope and runtime type, stale cells found and re-run, the dataflow between cells. Usage: :jlab [notebook.ipynb] (created when missing)", JlabCommands::open);
+        register(":jlab new", "Write a new notebook in the current folder (untitled.ipynb, untitled-2.ipynb...) and open it in Jupylab. Usage: :jlab new [name.ipynb]", JlabCommands::newNotebook);
+        register(":jlab ls", "The notebooks of a folder: cells, cells run, kernel, last saved. Usage: :jlab ls [folder]", JlabCommands::list);
+        register(":jlab kernels", "The kernels Jupylab can start: Sphere's homemade one first, the default one marked", JlabCommands::kernels);
+
         // --- :spdf, the PDF reader and editor (pure Java, in SphereCoder) ---
         register(":spdf", "Open :spdf, Sphere's PDF editor, in SphereCoder: thumbnails, text edited in place (fonts, colors, styles), annotations, pages, redaction, smart search, document analysis, Ctrl+K commands in plain words. Usage: :spdf [file.pdf]", PdfCommands::open);
         register(":spdf info", "What a PDF is: version, pages, metadata, fonts. Usage: :spdf info <file.pdf>", PdfCommands::info);
@@ -66,7 +72,11 @@ public class CommandDefinitions {
         register(":g4code new", "Write a new Geant4 application (CMake, main, DetectorConstruction, actions, macros) and open it in :g4code. Usage: :g4code new <folder> [calorimeter|tracker|telescope|shield|phantom|tpc|design.gdml]", G4Commands::codeNew);
         register(":g4 convert", "Convert a geometry between GDML and ROOT (TGeoManager), without ROOT. Usage: :g4 convert <in> <out.root|out.gdml> [portable]", G4Commands::convert);
         register(":g4", "Geant4 in Sphere: G4editor and the geant4-bridge engine", G4Commands::overview);
-        register(":g4 bib", "Write the BibTeX of the Geant4 papers to cite (Citations > Citation Geant4 shows them). Usage: :g4 bib <file.bib>", G4Commands::bib);
+        register(":g4 model", "The PyTorch and TensorFlow graphs a Geant4 application can take as C++", G4Commands::models);
+        register(":g4 model cpp", "A PyTorch or TensorFlow graph transcribed into one C++ header of a Geant4 application: no ML library, thread-safe, compiled and held to Sphere's interpreter before it is written. Usage: :g4 model cpp <graph> <application folder> [--name Class] [--batch 1]", G4Commands::modelCpp);
+        register(":g4 fastsim plan", "What a learned fast simulation of a design should be, from its geometry and shower physics. Usage: :g4 fastsim plan <design.gdml>", G4Commands::fastsimPlan);
+        register(":g4 fastsim run", "Geant4 run to learn from, a flow trained in PyTorch, written as C++ in a G4VFastSimulationModel and held against Geant4 until it passes. Usage: :g4 fastsim run <design.gdml> <folder> [--minutes 20]", G4Commands::fastsimRun);
+        register(":g4 bib","Write the BibTeX of the Geant4 papers to cite (Citations > Citation Geant4 shows them). Usage: :g4 bib <file.bib>", G4Commands::bib);
         register(":g4 locate", "Geant4 installations found: settings.conf GEANT4_DIR, PATH, conda, virtual environments", G4Commands::locate);
         register(":g4 material", "Radiation and interaction lengths of a material. Usage: :g4 material <name> [thickness]", G4Commands::material);
         register(":g4 check", "Check a GDML design for overlaps. Usage: :g4 check <design.gdml> [points]", G4Commands::check);
@@ -1121,11 +1131,23 @@ public class CommandDefinitions {
     /**
      * Families that are Sphere's own housekeeping rather than an engine or a
      * domain, listed by :help inside "system" instead of as categories of their
-     * own, in this order, each one kept together. ":help vault" still lists one
-     * of them alone, through the start of the command names.
+     * own, in this order, each one kept together: among them :project and
+     * :plots, the workbench's projects and its Plots tab, :spdf, the PDF
+     * reader and editor, and :jlab, the notebook -- tools of the workbench, not
+     * domains of physics. ":help vault" (or ":help spdf", ":help jlab") still
+     * lists one of them alone, through the start of the command names.
      */
     private static final List<String> SYSTEM_FAMILIES =
-        List.of("vault", "tools", "vars", "log", "snippet", "env", "config", "bridge", "backend", "workspace");
+        List.of("vault", "tools", "vars", "log", "snippet", "env", "config", "bridge", "backend", "workspace", "project",
+                "plots", "spdf", "jlab");
+
+    /**
+     * Families listed by :help inside another category than system, after that
+     * category's own commands, kept together: ROOT Lab (:rootlab, ROOT's test
+     * programs and data files) belongs with ROOT. ":help rootlab" still lists it
+     * alone, through the start of the command names.
+     */
+    private static final Map<String, String> JOINED_FAMILIES = Map.of("rootlab", "root");
 
     /**
      * Commands grouped the way :help shows them.
@@ -1133,12 +1155,14 @@ public class CommandDefinitions {
      * A command with several words belongs to its first word, which is what the
      * user types after :help. A one-word command has no family of its own and
      * joins "system", except the ones declared above with their own section,
-     * and except a word that heads one of SYSTEM_FAMILIES (":vault", ":vars"),
-     * which stays with the rest of its family.
+     * and except a word that heads one of SYSTEM_FAMILIES (":vault", ":vars")
+     * or of JOINED_FAMILIES (":rootlab"), which stays with the rest of its
+     * family; the JOINED_FAMILIES go after the category they join.
      */
     public static Map<String, List<String>> sections() {
         Map<String, List<String>> grouped = new LinkedHashMap<>();
         Map<String, List<String>> folded = new LinkedHashMap<>();
+        Map<String, List<String>> joined = new LinkedHashMap<>();
         for (String family : SYSTEM_FAMILIES) {
             folded.put(family, new ArrayList<>());
         }
@@ -1149,12 +1173,20 @@ public class CommandDefinitions {
                 folded.get(head).add(name);
                 continue;
             }
+            if (JOINED_FAMILIES.containsKey(head)) {
+                joined.computeIfAbsent(head, key -> new ArrayList<>()).add(name);
+                continue;
+            }
             final String family = (words.length > 1) ? head : "system";
             grouped.computeIfAbsent(family, key -> new ArrayList<>()).add(name);
         }
         for (Map.Entry<String, String[]> entry : EXTERNAL_COMMANDS.entrySet()) {
             grouped.computeIfAbsent(entry.getValue()[0], key -> new ArrayList<>())
                    .add(entry.getKey());
+        }
+        for (Map.Entry<String, List<String>> entry : joined.entrySet()) {
+            grouped.computeIfAbsent(JOINED_FAMILIES.get(entry.getKey()), key -> new ArrayList<>())
+                   .addAll(entry.getValue());
         }
         // A family of one is not a family; it reads better among the odds and ends.
         List<String> lonely = new ArrayList<>();

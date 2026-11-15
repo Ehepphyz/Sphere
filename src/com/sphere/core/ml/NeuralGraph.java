@@ -83,29 +83,33 @@ public final class NeuralGraph {
         }
     }
 
-    private record Ref(String name) {
+    record Ref(String name) {
     }
 
-    private record Node(String name, String op, Object[] args, List<String> refs, String[] distinct) {
+    record Node(String name, String op, Object[] args, List<String> refs, String[] distinct) {
     }
 
     /** A block: a loop's condition or body, a branch of a condition -- a function of its inputs and the weights. */
-    private record Block(List<String> inputs, List<Node> nodes, List<String> outputs) {
+    record Block(List<String> inputs, List<Node> nodes, List<String> outputs) {
     }
 
     /** The control operations, which run blocks: sphere.while (condition, body, values[, limit]), sphere.case (index, branches, values). */
     static final Set<String> CONTROL = Set.of("sphere.while", "sphere.case");
     static final long LOOP_LIMIT = 10_000_000L;   // a loop past this many iterations is taken for one that does not end
-    private final Map<String, Block> blocks = new HashMap<>();
+    final Map<String, Block> blocks = new HashMap<>();
 
     /** batch: how the graph's batch was left free -- "symbolic" (torch.export's), "generalized ..." (from two traces), "fixed". */
     public final String name, feeds, framework, precision, batch;
     public final List<String> inputNames = new ArrayList<>();
-    private final List<String> inputs = new ArrayList<>(), outputs = new ArrayList<>();
+    final List<String> inputs = new ArrayList<>(), outputs = new ArrayList<>();
     private final Set<String> outputSet = new HashSet<>();
-    private final Map<String, Tensor> consts = new HashMap<>();
+    final Map<String, Tensor> consts = new HashMap<>();
+    /** The weights an optimizer moves, by their names in the model ("w3" -> "encoder.0.weight"): empty for a graph exported frozen. */
+    final Map<String, String> params = new LinkedHashMap<>();
+    /** The file the graph was read from, which {@link #save} copies with new weights. */
+    private Path source;
     private final IdentityHashMap<double[], Boolean> constArrays = new IdentityHashMap<>();
-    private final List<Node> nodes = new ArrayList<>();
+    final List<Node> nodes = new ArrayList<>();
     private final Map<String, Integer> last = new HashMap<>();
     private final boolean rowsIndependent;
     private final int[][] exampleShapes;
@@ -137,6 +141,15 @@ public final class NeuralGraph {
                 throw new IOException(file + " is not a graph exported by sphere_graph");
             }
             final NeuralGraph g = new NeuralGraph(meta);
+            g.source = file;
+            if (r.has("params")) {   // "w3<TAB>encoder.0.weight": the weights an optimizer moves
+                for (String line : r.text("params").split("\n")) {
+                    final int tab = line.indexOf('\t');
+                    if (tab > 0) {
+                        g.params.put(line.substring(0, tab), line.substring(tab + 1).strip());
+                    }
+                }
+            }
             final Set<String> missing = new TreeSet<>();
             Block block = null;   // the block being read, between begin and end
             for (String line : r.text("graph").split("\n")) {
@@ -188,6 +201,7 @@ public final class NeuralGraph {
             for (Tensor t : g.consts.values()) {
                 g.constArrays.put(t.data, Boolean.TRUE);
             }
+            g.params.keySet().retainAll(g.consts.keySet());
             return g;
         }
     }
@@ -849,7 +863,7 @@ public final class NeuralGraph {
             : c == 1 ? "a sigmoid of its output, a logit" : "a softmax of its " + c + " logits, the last class");
     }
 
-    private static Object resolve(Object a, Map<String, Object> env) {
+    static Object resolve(Object a, Map<String, Object> env) {
         if (a instanceof Ref r) {
             return env.get(r.name);
         }
@@ -990,6 +1004,64 @@ public final class NeuralGraph {
         return n;
     }
 
+    /** The weights an optimizer moves, by graph name, with their names in the model (empty: exported frozen). */
+    public Map<String, String> params() {
+        return java.util.Collections.unmodifiableMap(params);
+    }
+
+    /** Whether the export kept the model's parameters as the weights to train (sphere_graph's trainable export). */
+    public boolean trainable() {
+        return !params.isEmpty();
+    }
+
+    /** A weight of the graph by its name (null if none): its values are the graph's own, not a copy. */
+    public Tensor weight(String name) {
+        return consts.get(name);
+    }
+
+    /** The file the graph was read from. */
+    public Path source() {
+        return source;
+    }
+
+    /**
+     * The graph written to out with these weights in place of its own (by name: the others kept, each of its
+     * shape), its meta given the entries of extra: a trained graph that Java, C++ and numpy run as they ran the
+     * first. The other sections -- the graph, its params -- are copied as they are.
+     */
+    public Path save(Path out, Map<String, double[]> weights, Map<String, String> extra) throws IOException {
+        if (source == null) {
+            throw new IOException(name + " was not read from a file");
+        }
+        for (Map.Entry<String, double[]> e : weights.entrySet()) {
+            final Tensor t = consts.get(e.getKey());
+            if (t == null || t.numel() != e.getValue().length) {
+                throw new IOException("no weight " + e.getKey() + " of " + e.getValue().length + " values in " + name);
+            }
+        }
+        try (Spx.Reader r = new Spx.Reader(source)) {
+            final Map<String, String> meta = new LinkedHashMap<>(r.meta());
+            meta.putAll(extra);
+            final Spx.Writer w = new Spx.Writer(Spx.Kind.TABLE, extra.getOrDefault("Name", r.title()));
+            w.meta(meta);
+            for (Spx.Section s : r.sections()) {
+                final String n = s.name();
+                if (n.equals("meta")) {
+                    continue;
+                }
+                if (s.type() == Spx.TEXT) {
+                    w.text(n, r.text(n));
+                } else if (s.type() == Spx.I64) {
+                    w.i64(n, r.i64(n));
+                } else {
+                    final double[] v = n.startsWith("w.") ? weights.get(n.substring(2)) : null;
+                    w.f64(n, v != null ? v : r.f64(n));
+                }
+            }
+            return w.write(out);
+        }
+    }
+
     @Override
     public String toString() {
         return name + " (" + nodes.size() + " operations, " + weights() + " weights, inputs " + String.join(", ", inputNames)
@@ -1008,7 +1080,7 @@ public final class NeuralGraph {
         return n;
     }
 
-    private static int[] strides(int[] shape) {
+    static int[] strides(int[] shape) {
         final int[] s = new int[shape.length];
         int acc = 1;
         for (int i = shape.length - 1; i >= 0; i--) {
@@ -1018,12 +1090,12 @@ public final class NeuralGraph {
         return s;
     }
 
-    private static int dim(long d, int rank) {
+    static int dim(long d, int rank) {
         final int r = Math.max(rank, 1);
         return (int) (((d % r) + r) % r);
     }
 
-    private static Tensor tensor(Object v) {
+    static Tensor tensor(Object v) {
         if (v instanceof Tensor t) {
             return t;
         }
@@ -1036,7 +1108,7 @@ public final class NeuralGraph {
         throw new GraphException("a tensor expected, " + (v == null ? "none" : v.getClass().getSimpleName()) + " found");
     }
 
-    private static double num(Object v) {
+    static double num(Object v) {
         if (v instanceof Number n) {
             return n.doubleValue();
         }
@@ -1049,11 +1121,11 @@ public final class NeuralGraph {
         throw new GraphException("a number expected, " + v + " found");
     }
 
-    private static long lng(Object v) {
+    static long lng(Object v) {
         return (long) num(v);
     }
 
-    private static int[] shapeOf(Object list) {
+    static int[] shapeOf(Object list) {
         if (!(list instanceof List<?>)) {
             return new int[] {(int) lng(list)};   // an int[2] argument given one int, as padding=0
         }
@@ -1065,7 +1137,7 @@ public final class NeuralGraph {
         return s;
     }
 
-    private static int[] dimsOf(Object v, int rank) {
+    static int[] dimsOf(Object v, int rank) {
         if (v == null) {
             return null;
         }
@@ -1079,7 +1151,7 @@ public final class NeuralGraph {
         return new int[] {dim(lng(v), rank)};
     }
 
-    private static int[] broadcast(int[] a, int[] b) {
+    static int[] broadcast(int[] a, int[] b) {
         final int n = Math.max(a.length, b.length);
         final int[] out = new int[n];
         for (int i = 0; i < n; i++) {
@@ -1094,7 +1166,7 @@ public final class NeuralGraph {
     }
 
     /** The strides of x read as shape out (broadcast: 0 where x has 1 or nothing). */
-    private static int[] bstrides(int[] xs, int[] out) {
+    static int[] bstrides(int[] xs, int[] out) {
         final int[] st = strides(xs), r = new int[out.length];
         for (int i = 0; i < out.length; i++) {
             final int j = i - (out.length - xs.length);
@@ -1144,7 +1216,7 @@ public final class NeuralGraph {
         return new Tensor(o, x.shape.clone());
     }
 
-    private static Tensor broadcastTo(Tensor x, int[] shape) {
+    static Tensor broadcastTo(Tensor x, int[] shape) {
         if (Arrays.equals(x.shape, shape)) {
             return x;
         }
@@ -1168,17 +1240,19 @@ public final class NeuralGraph {
         return new Tensor(o, shape);
     }
 
-    private static final int SUM = 0, MEAN = 1, MAX = 2, MIN = 3, PROD = 4, ANY = 5;
+    static final int SUM = 0, MEAN = 1, MAX = 2, MIN = 3, PROD = 4, ANY = 5;
 
     /** Reduces dims (null: all), numpy's pairwise sums aside: sums in order. */
-    private static Tensor reduce(Tensor x, int[] dims, boolean keep, int kind) {
+    static Tensor reduce(Tensor x, int[] dims, boolean keep, int kind) {
         final int rank = x.rank();
         final boolean[] red = new boolean[rank];
         if (dims == null || dims.length == 0) {
             Arrays.fill(red, true);
         } else {
             for (int d : dims) {
-                red[d] = true;
+                if (rank > 0) {   // a 0-d tensor: a dimension named, and nothing to reduce
+                    red[d] = true;
+                }
             }
         }
         final int[] kshape = x.shape.clone();
@@ -1233,7 +1307,7 @@ public final class NeuralGraph {
     }
 
     /** x seen as (outer, n, inner) around one dim. */
-    private record Around(int outer, int n, int inner) {
+    record Around(int outer, int n, int inner) {
         static Around of(int[] shape, int d) {
             int o = 1, in = 1;
             for (int i = 0; i < d; i++) {
@@ -1271,7 +1345,7 @@ public final class NeuralGraph {
         return new Tensor(o, x.shape.clone());
     }
 
-    private static Tensor permute(Tensor x, int[] perm) {
+    static Tensor permute(Tensor x, int[] perm) {
         final int rank = x.rank();
         final int[] shape = new int[rank], st = strides(x.shape), pst = new int[rank];
         for (int i = 0; i < rank; i++) {
@@ -1296,7 +1370,7 @@ public final class NeuralGraph {
         return new Tensor(o, shape);
     }
 
-    private static Tensor view(Tensor x, int[] sizes) {
+    static Tensor view(Tensor x, int[] sizes) {
         final int[] s = sizes.clone();
         int known = 1, free = -1;
         for (int i = 0; i < s.length; i++) {
@@ -1336,7 +1410,7 @@ public final class NeuralGraph {
         return new Tensor(o, s);
     }
 
-    private static Tensor rows(Tensor x, int lo, int hi) {
+    static Tensor rows(Tensor x, int lo, int hi) {
         return x.rank() == 0 ? x : narrow(x, 0, lo, hi, 1);
     }
 
@@ -1438,10 +1512,7 @@ public final class NeuralGraph {
             final int ao = za * n * k, bo = zb * k * m, oo = z * n * m;
             for (int i = 0; i < n; i++) {
                 for (int p = 0; p < k; p++) {
-                    final double av = a.data[ao + i * k + p];
-                    if (av == 0) {
-                        continue;
-                    }
+                    final double av = a.data[ao + i * k + p];   // a zero is multiplied like the others: 0 * NaN is NaN, and a NaN must not vanish
                     final int brow = bo + p * m, orow = oo + i * m;
                     for (int j = 0; j < m; j++) {
                         o[orow + j] += av * b.data[brow + j];
@@ -1528,9 +1599,7 @@ public final class NeuralGraph {
                                 }
                                 xi += pos * ist[d];
                             }
-                            if (inside) {
-                                acc += x.data[xc + xi] * w.data[wc + kp];
-                            }
+                            acc += (inside ? x.data[xc + xi] : 0.0) * w.data[wc + kp];   // the padding is zeros: an infinite weight there makes NaN
                         }
                     }
                     o[(s * cout + co) * osz + op] = acc;
@@ -1544,7 +1613,7 @@ public final class NeuralGraph {
         return new Tensor(o, shape);
     }
 
-    private static int[] rep(int[] v, int nd) {
+    static int[] rep(int[] v, int nd) {
         if (v.length == nd) {
             return v;
         }
@@ -1655,6 +1724,9 @@ public final class NeuralGraph {
 
     /** Stable order along a dim, as numpy's argsort(kind="stable"): values and indices of the first k. */
     private static Object[] order(Tensor x, int d, int k, boolean descending) {
+        if (x.rank() == 0) {
+            return new Object[] {x, Tensor.scalar(0)};
+        }
         final Around a = Around.of(x.shape, d);
         final double[] vals = new double[a.outer * k * a.inner], idx = new double[vals.length];
         final Integer[] perm = new Integer[a.n];
@@ -1666,7 +1738,7 @@ public final class NeuralGraph {
                 }
                 Arrays.sort(perm, (u, v) -> {
                     final double xu = x.data[base + u * a.inner], xv = x.data[base + v * a.inner];
-                    return descending ? numpyOrder(-xu, -xv) : numpyOrder(xu, xv);
+                    return descending ? numpyOrder(xv, xu) : numpyOrder(xu, xv);   // NaN greater than everything: first when descending
                 });
                 for (int i = 0; i < k; i++) {
                     final int at = (p * k + i) * a.inner + q;
@@ -1681,6 +1753,9 @@ public final class NeuralGraph {
     }
 
     private static Object[] argReduce(Tensor x, Object dv, boolean keep, boolean max) {
+        if (x.rank() == 0) {
+            return new Object[] {x, Tensor.scalar(0)};
+        }
         final int d = dim(lng(dv), x.rank());
         final Around a = Around.of(x.shape, d);
         final double[] v = new double[a.outer * a.inner], ix = new double[v.length];
@@ -1814,17 +1889,11 @@ public final class NeuralGraph {
         final Tensor wt = w == null ? null : tensor(w), bt = b == null ? null : tensor(b);
         for (int s = 0; s < n; s++) {
             for (int ch = 0; ch < c; ch++) {
-                final double sd = Math.sqrt(var.data[ch] + eps);
+                // as PyTorch computes it, a linear and a constant term: the same number, and the same NaN from an infinite weight
+                final double alpha = (wt != null ? wt.data[ch] : 1.0) / Math.sqrt(var.data[ch] + eps), beta = (bt != null ? bt.data[ch] : 0.0) - mean.data[ch] * alpha;
                 for (int i = 0; i < inner; i++) {
                     final int at = (s * c + ch) * inner + i;
-                    double y = (x.data[at] - mean.data[ch]) / sd;
-                    if (wt != null) {
-                        y *= wt.data[ch];
-                    }
-                    if (bt != null) {
-                        y += bt.data[ch];
-                    }
-                    o[at] = y;
+                    o[at] = x.data[at] * alpha + beta;
                 }
             }
         }
@@ -2037,12 +2106,34 @@ public final class NeuralGraph {
         "gather.default", "index_select.default", "embedding.default", "index.Tensor", "topk.default", "sort.default",
         "convolution.default", "max_pool2d_with_indices.default", "avg_pool2d.default", "_adaptive_avg_pool2d.default"));
 
-    private static double sgn(double v) {
-        return v > 0 ? 1 : v < 0 ? -1 : v;
+    static double sgn(double v) {
+        return v > 0 ? 1 : v < 0 ? -1 : 0;
+    }
+
+    /** pow as C and PyTorch have it: Java's makes NaN of 1 ** NaN and of (+-1) ** inf. */
+    static double cpow(double b, double e) {
+        return b == 1 || (b == -1 && Double.isInfinite(e)) ? 1 : Math.pow(b, e);
+    }
+
+    /** Division rounded down, as PyTorch does it: from the remainder, which is exact where the quotient is not, or is infinite. */
+    static double floorDiv(double a, double b) {
+        if (b == 0) {
+            return a / b;
+        }
+        final double mod = a % b;
+        double div = (a - mod) / b;
+        if (mod != 0 && (b < 0) != (mod < 0)) {
+            div -= 1;
+        }
+        if (div == 0) {
+            return Math.copySign(0.0, a / b);
+        }
+        final double low = Math.floor(div);
+        return div - low > 0.5 ? low + 1 : low;
     }
 
     @SuppressWarnings("unchecked")
-    private static Object apply(String op, Object[] a) {
+    static Object apply(String op, Object[] a) {
         switch (op) {
             case "_assert_tensor_metadata.default", "_assert_async.msg", "_assert_scalar.default", "_functional_assert_async.msg",
                  "sym_constrain_range_for_size.default", "sym_constrain_range.default" -> {
@@ -2073,7 +2164,7 @@ public final class NeuralGraph {
                     case "py.sub" -> x - y;
                     case "py.floordiv" -> Math.floor(x / y);
                     case "py.mod" -> mod(x, y);
-                    case "py.pow" -> Math.pow(x, y);
+                    case "py.pow" -> cpow(x, y);
                     default -> x / y;
                 };
             }
@@ -2325,7 +2416,7 @@ public final class NeuralGraph {
             case "elu.default" -> {
                 final double al = a.length > 1 && a[1] != null ? num(a[1]) : 1, sc = a.length > 2 && a[2] != null ? num(a[2]) : 1;
                 final double is = a.length > 3 && a[3] != null ? num(a[3]) : 1;
-                return unary(a[0], v -> sc * (v > 0 ? v : al * (Math.exp(is * v) - 1.0)));
+                return unary(a[0], v -> sc * (v > 0 ? v : al * Math.expm1(is * v)));
             }
             case "softplus.default" -> {
                 final double be = a.length > 1 && a[1] != null ? num(a[1]) : 1, th = a.length > 2 && a[2] != null ? num(a[2]) : 20;
@@ -2348,7 +2439,7 @@ public final class NeuralGraph {
                 return binary(a[0], a[1], (u, w) -> Double.isNaN(u) ? u : Math.min(u, w));
             }
             case "pow.Tensor_Scalar", "pow.Tensor_Tensor", "pow.Scalar" -> {
-                return binary(a[0], a[1], Math::pow);
+                return binary(a[0], a[1], NeuralGraph::cpow);
             }
             case "logical_not.default" -> {
                 return unary(a[0], v -> v == 0 ? 1 : 0);
@@ -2382,7 +2473,7 @@ public final class NeuralGraph {
             }
             case "div.Tensor_mode" -> {
                 final Object mode = a.length > 2 ? a[2] : null;
-                return binary(a[0], a[1], "floor".equals(mode) ? (u, w) -> Math.floor(u / w)
+                return binary(a[0], a[1], "floor".equals(mode) ? NeuralGraph::floorDiv
                     : "trunc".equals(mode) ? (u, w) -> { final double q = u / w; return q < 0 ? Math.ceil(q) : Math.floor(q); }
                     : (u, w) -> u / w);
             }
@@ -2461,7 +2552,13 @@ public final class NeuralGraph {
             case "argmax.default", "argmin.default" -> {
                 final Tensor x = tensor(a[0]);
                 if (a.length < 2 || a[1] == null) {
-                    return argReduce(new Tensor(x.data, x.numel()), 0L, false, op.startsWith("argmax"))[1];
+                    final Tensor at = (Tensor) argReduce(new Tensor(x.data, x.numel()), 0L, false, op.startsWith("argmax"))[1];
+                    if (a.length > 2 && Boolean.TRUE.equals(a[2])) {
+                        final int[] ones = new int[x.rank()];
+                        Arrays.fill(ones, 1);
+                        return new Tensor(at.data, ones);
+                    }
+                    return at;
                 }
                 return argReduce(x, a[1], a.length > 2 && Boolean.TRUE.equals(a[2]), op.startsWith("argmax"))[1];
             }
@@ -2506,7 +2603,7 @@ public final class NeuralGraph {
             case "sort.default" -> {
                 final Tensor x = tensor(a[0]);
                 final int d = dim(a.length > 1 && a[1] != null ? lng(a[1]) : -1, x.rank());
-                return order(x, d, x.shape[d], a.length > 2 && Boolean.TRUE.equals(a[2]));
+                return order(x, d, x.rank() == 0 ? 1 : x.shape[d], a.length > 2 && Boolean.TRUE.equals(a[2]));
             }
             case "convolution.default" -> {
                 if (Boolean.TRUE.equals(a[6])) {

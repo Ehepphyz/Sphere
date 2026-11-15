@@ -30,7 +30,8 @@ module sphere_spx
 
   public :: spx_pdf, spx_events, spx_open_pdf, spx_open_events, spx_xfxq2, spx_xfxq, spx_alphasq2, &
             spx_alphasq, spx_inrange, spx_members, spx_publish, spx_bridge_folder, spx_resolve, &
-            spx_crosscheck, spx_meta, spx_column, spx_hepevt, spx_nmxhep, spx_hepmc_check
+            spx_crosscheck, spx_meta, spx_column, spx_hepevt, spx_nmxhep, spx_hepmc_check, &
+            spx_write_table, spx_read_meta
 
   integer, parameter :: F64 = 1, I64 = 2, TEXT = 3
 
@@ -257,6 +258,20 @@ contains
       start = finish + 2
     end do
   end function spx_meta
+
+  !> The whole "Key: value" text of a file's meta section. ok is false when the file cannot be read.
+  subroutine spx_read_meta(path, meta, ok)
+    character(len=*), intent(in) :: path
+    character(len=:), allocatable, intent(out) :: meta
+    logical, intent(out) :: ok
+    type(section), allocatable :: sections(:)
+    integer :: unit, kind
+    meta = ''
+    call open_file(path, unit, kind, sections, ok)
+    if (.not. ok) return
+    meta = read_text(unit, sections, 'meta')
+    close(unit)
+  end subroutine spx_read_meta
 
   ! ---------------------------------------------------------------------------
   ! Parton distributions
@@ -830,6 +845,15 @@ contains
       end do
     end subroutine pad_to
   end subroutine write_table
+
+  !> A table of float64 columns under a path, its "Key: value" lines given: columns(:, k) holds lengths(k) values.
+  subroutine spx_write_table(path, title, meta, names, columns, lengths)
+    character(len=*), intent(in) :: path, title, meta
+    character(len=24), intent(in) :: names(:)
+    real(real64), intent(in) :: columns(:, :)
+    integer, intent(in) :: lengths(:)
+    call write_table(path, title, meta, names, columns, lengths)
+  end subroutine spx_write_table
 
   pure integer(int64) function aligned(v)
     integer(int64), intent(in) :: v

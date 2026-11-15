@@ -3871,7 +3871,100 @@ public final class G4CodeFrame extends JFrame {
             i.addActionListener(e -> insertAtCaret(s[1].stripIndent()));
             m.add(i);
         }
+        m.addSeparator();
+        m.add(menuItem("Neural network from PyTorch or TensorFlow, transcribed into C++...", null, this::insertNetwork));
+        m.add(menuItem("Call PyTorch or TensorFlow while the application runs", null, this::insertGateway));
         m.show(anchor, 0, anchor.getHeight());
+    }
+
+    /** A graph written into the application as a header, and its call at the caret. */
+    private void insertNetwork() {
+        if (project == null || current() == null) {
+            status.setText("open a Geant4 application and a file to insert into");
+            return;
+        }
+        new ModelInsertDialog(this, project, (header, usage) -> {
+            addInclude(header);
+            insertAtCaret(usage);
+            projectTree.refresh();
+            say(header + " written in the application: no ML library is needed to build or run it.");
+        }).setVisible(true);
+    }
+
+    /** The headers that reach Sphere's gateway to PyTorch and TensorFlow, and a call at the caret. */
+    private void insertGateway() {
+        if (project == null || current() == null) {
+            status.setText("open a Geant4 application and a file to insert into");
+            return;
+        }
+        try {
+            com.sphere.core.ml.GraphCpp.installGateway(project);
+        } catch (IOException e) {
+            status.setText("cannot copy the gateway's headers: " + e.getMessage());
+            return;
+        }
+        addInclude("sphere_mlink.hpp");
+        insertAtCaret("""
+            // PyTorch or TensorFlow themselves, through Sphere's gateway: it must be reachable while the application runs.
+            // Each call crosses processes: for every step or track, transcribe the network into C++ instead (Insert menu).
+            const std::vector<double> x = {1., 2., 3.};
+            const double sum = sphere::mlink::link().number("torch.as_tensor(x).sum().item()", {{"x", x}});
+            // the same with TensorFlow: "tf.reduce_sum(x).numpy()"
+            G4cout << "PyTorch: " << sum << G4endl;
+            """.stripIndent());
+        projectTree.refresh();
+    }
+
+    /** #include "header" where includeOffset says, unless the file has it. */
+    private void addInclude(String header) {
+        final CodeTab t = current();
+        if (t == null) {
+            return;
+        }
+        final String text = t.getEditorArea().getText();
+        if (text.contains("#include \"" + header + "\"")) {
+            return;
+        }
+        final int at = includeOffset(text);
+        final String line = (at > 0 && text.charAt(at - 1) != '\n' ? "\n" : "") + "#include \"" + header + "\"\n";
+        try {
+            t.getEditorArea().getDocument().insertString(at, line, null);
+        } catch (BadLocationException e) {
+            status.setText("cannot add the #include: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Where a new #include goes: after the last one that is not inside an #if (a header guard's own #ifndef aside), so
+     * that it is seen whatever the configuration; else after the guard's #define, else at the top of the file.
+     */
+    static int includeOffset(String text) {
+        int depth = 0, base = 0, directives = 0, offset = 0, after = -1, guardEnd = -1;
+        String guard = null;
+        for (String line : text.split("\n", -1)) {
+            final int end = Math.min(text.length(), offset + line.length() + 1);
+            final String s = line.strip();
+            if (s.startsWith("#")) {
+                final String d = s.substring(1).strip();
+                directives++;
+                if (d.startsWith("ifndef") && directives == 1) {
+                    guard = d.substring(6).strip();
+                    depth++;
+                } else if (d.startsWith("if")) {
+                    depth++;
+                } else if (d.startsWith("endif")) {
+                    depth = Math.max(0, depth - 1);
+                } else if (d.startsWith("define") && directives == 2 && guard != null && !guard.isEmpty()
+                    && d.substring(6).strip().split("\\s+")[0].equals(guard)) {
+                    base = 1;   // a header guard: its body is the top level
+                    guardEnd = end;
+                } else if (d.startsWith("include") && depth == base) {
+                    after = end;
+                }
+            }
+            offset += line.length() + 1;
+        }
+        return after >= 0 ? after : guardEnd >= 0 ? guardEnd : 0;
     }
 
     // ==================================================================

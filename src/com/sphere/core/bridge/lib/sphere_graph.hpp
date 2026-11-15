@@ -568,7 +568,8 @@ enum Reduction { SUM, MEAN, MAX, MIN, PROD, ANY };
 inline Tensor reduce(const Tensor& x, const std::vector<int>& ds, bool keep, Reduction kind) {
     const int r = x.rank();
     std::vector<bool> red(r, ds.empty());
-    for (int d : ds) red[d] = true;
+    if (r > 0)   // a 0-d tensor: a dimension named, and nothing to reduce
+        for (int d : ds) red[d] = true;
     Shape ks = x.shape;
     I count = 1;
     for (int d = 0; d < r; ++d)
@@ -858,7 +859,7 @@ inline Tensor conv(const Tensor& x, const Tensor& w, const Value& bias, const Sh
                             }
                             xi += pos * ist[d];
                         }
-                        if (inside) acc += x.p[xc + xi] * w.p[wc + kp];
+                        acc += (inside ? x.p[xc + xi] : 0.0) * w.p[wc + kp];   // the padding is zeros: an infinite weight there makes NaN
                     }
                 }
                 yw[(s * cout + co) * osz + op] = acc;
@@ -954,8 +955,27 @@ inline Tensor index_select(const Tensor& x, int d, const Tensor& idx) {
 /** numpy's order of floats for sorting: NaN last, -0 and 0 alike. */
 inline bool before(double a, double b) { return a < b || (std::isnan(b) && !std::isnan(a)); }
 
+/** Division rounded down, as PyTorch does it: from the remainder, which is exact where the quotient is not, or is infinite. */
+inline double floor_div(double a, double b) {
+    if (b == 0) return a / b;
+    const double mod = std::fmod(a, b);
+    double div = (a - mod) / b;
+    if (mod != 0 && (b < 0) != (mod < 0)) div -= 1;
+    if (div == 0) return std::copysign(0.0, a / b);
+    const double low = std::floor(div);
+    return div - low > 0.5 ? low + 1 : low;
+}
+
+inline double larger(double u, double w) { return std::isnan(u) || std::isnan(w) ? std::numeric_limits<double>::quiet_NaN() : std::max(u, w); }
+inline double smaller(double u, double w) { return std::isnan(u) || std::isnan(w) ? std::numeric_limits<double>::quiet_NaN() : std::min(u, w); }
+
 /** Stable order along a dimension, as numpy's argsort(kind="stable"): values and indices of the first k. */
 inline Value order(const Tensor& x, int d, I k, bool descending) {
+    if (x.shape.empty()) {
+        Tensor zero = fresh({});
+        out(zero)[0] = 0;
+        return Value::tuple({Value::of(x), Value::of(zero)});
+    }
     const Around a(x.shape, d);
     Shape s = x.shape;
     s[d] = k;
@@ -968,7 +988,7 @@ inline Value order(const Tensor& x, int d, I k, bool descending) {
             std::iota(perm.begin(), perm.end(), I(0));
             std::stable_sort(perm.begin(), perm.end(), [&](I u, I v) {
                 const double xu = x.p[base + u * a.inner], xv = x.p[base + v * a.inner];
-                return descending ? before(-xu, -xv) : before(xu, xv);
+                return descending ? before(xv, xu) : before(xu, xv);   // NaN greater than everything: first when descending
             });
             for (I i = 0; i < k; ++i) {
                 const I at = (p * k + i) * a.inner + q;
@@ -1095,13 +1115,11 @@ inline Value batch_norm(const Tensor& x, const Value& wv, const Value& bv, const
     const Tensor wt = hw ? T(wv) : Tensor(), bt = hb ? T(bv) : Tensor();
     for (I s = 0; s < n; ++s)
         for (I ch = 0; ch < c; ++ch) {
-            const double sd = std::sqrt(var.p[ch] + eps);
+            // as PyTorch computes it, a linear and a constant term: the same number, and the same NaN from an infinite weight
+            const double alpha = (hw ? wt.p[ch] : 1.0) / std::sqrt(var.p[ch] + eps), beta = (hb ? bt.p[ch] : 0.0) - mean.p[ch] * alpha;
             for (I i = 0; i < inner; ++i) {
                 const I at = (s * c + ch) * inner + i;
-                double e = (x.p[at] - mean.p[ch]) / sd;
-                if (hw) e *= wt.p[ch];
-                if (hb) e += bt.p[ch];
-                w[at] = e;
+                w[at] = x.p[at] * alpha + beta;
             }
         }
     return Value::tuple({Value::of(y), Value::of(fresh({0})), Value::of(fresh({0}))});
@@ -1539,7 +1557,7 @@ inline const std::unordered_map<std::string, Op>& operations() {
         {"log10.default", [](const Args& a) { return un(a, [](double v) { return std::log10(v); }); }},
         {"erf.default", [](const Args& a) { return un(a, [](double v) { return graph::erf(v); }); }},
         {"reciprocal.default", [](const Args& a) { return un(a, [](double v) { return 1.0 / v; }); }},
-        {"sign.default", [](const Args& a) { return un(a, [](double v) { return v > 0 ? 1.0 : v < 0 ? -1.0 : v; }); }},
+        {"sign.default", [](const Args& a) { return un(a, [](double v) { return v > 0 ? 1.0 : v < 0 ? -1.0 : 0.0; }); }},
         {"floor.default", [](const Args& a) { return un(a, [](double v) { return std::floor(v); }); }},
         {"ceil.default", [](const Args& a) { return un(a, [](double v) { return std::ceil(v); }); }},
         {"round.default", [](const Args& a) { return un(a, [](double v) { return std::nearbyint(v); }); }},
@@ -1555,7 +1573,7 @@ inline const std::unordered_map<std::string, Op>& operations() {
          }},
         {"elu.default", [](const Args& a) {
              const double al = has(a, 1) ? N(a[1]) : 1, sc = has(a, 2) ? N(a[2]) : 1, is = has(a, 3) ? N(a[3]) : 1;
-             return un(a, [al, sc, is](double v) { return sc * (v > 0 ? v : al * (std::exp(is * v) - 1.0)); });
+             return un(a, [al, sc, is](double v) { return sc * (v > 0 ? v : al * std::expm1(is * v)); });
          }},
         {"softplus.default", [](const Args& a) {
              const double be = has(a, 1) ? N(a[1]) : 1, th = has(a, 2) ? N(a[2]) : 20;
@@ -1563,14 +1581,14 @@ inline const std::unordered_map<std::string, Op>& operations() {
          }},
         {"clamp.default", [](const Args& a) {
              Tensor x = T(a[0]);
-             if (has(a, 1)) x = binary(x, T(a[1]), [](double u, double w) { return std::isnan(u) ? u : std::max(u, w); });
-             if (has(a, 2)) x = binary(x, T(a[2]), [](double u, double w) { return std::isnan(u) ? u : std::min(u, w); });
+             if (has(a, 1)) x = binary(x, T(a[1]), larger);
+             if (has(a, 2)) x = binary(x, T(a[2]), smaller);
              return V(x);
          }},
         {"clamp.Tensor", [](const Args& a) {
              Tensor x = T(a[0]);
-             if (has(a, 1)) x = binary(x, T(a[1]), [](double u, double w) { return std::isnan(u) ? u : std::max(u, w); });
-             if (has(a, 2)) x = binary(x, T(a[2]), [](double u, double w) { return std::isnan(u) ? u : std::min(u, w); });
+             if (has(a, 1)) x = binary(x, T(a[1]), larger);
+             if (has(a, 2)) x = binary(x, T(a[2]), smaller);
              return V(x);
          }},
         {"clamp_min.default", [](const Args& a) { return bin(a, [](double u, double w) { return std::isnan(u) ? u : std::max(u, w); }); }},
@@ -1594,7 +1612,7 @@ inline const std::unordered_map<std::string, Op>& operations() {
         {"div.Scalar", [](const Args& a) { return bin(a, [](double u, double w) { return u / w; }); }},
         {"div.Tensor_mode", [](const Args& a) {
              const std::string mode = a.size() > 2 && a[2].kind == Value::STR ? a[2].s : "";
-             if (mode == "floor") return bin(a, [](double u, double w) { return std::floor(u / w); });
+             if (mode == "floor") return bin(a, floor_div);
              if (mode == "trunc") return bin(a, [](double u, double w) { return std::trunc(u / w); });
              return bin(a, [](double u, double w) { return u / w; });
          }},
@@ -1644,12 +1662,18 @@ inline const std::unordered_map<std::string, Op>& operations() {
         {"min.dim", [](const Args& a) { return arg_reduce(T(a[0]), L(a[1]), a.size() > 2 && B(a[2]), false); }},
         {"argmax.default", [](const Args& a) {
              const Tensor x = T(a[0]);
-             if (!has(a, 1)) return item(arg_reduce(reshaped(x, {x.numel()}), 0, false, true), 1);
+             if (!has(a, 1)) {
+                 const Value at = item(arg_reduce(reshaped(x, {x.numel()}), 0, false, true), 1);
+                 return a.size() > 2 && B(a[2]) ? V(reshaped(T(at), Shape(x.rank(), 1))) : at;
+             }
              return item(arg_reduce(x, L(a[1]), a.size() > 2 && B(a[2]), true), 1);
          }},
         {"argmin.default", [](const Args& a) {
              const Tensor x = T(a[0]);
-             if (!has(a, 1)) return item(arg_reduce(reshaped(x, {x.numel()}), 0, false, false), 1);
+             if (!has(a, 1)) {
+                 const Value at = item(arg_reduce(reshaped(x, {x.numel()}), 0, false, false), 1);
+                 return a.size() > 2 && B(a[2]) ? V(reshaped(T(at), Shape(x.rank(), 1))) : at;
+             }
              return item(arg_reduce(x, L(a[1]), a.size() > 2 && B(a[2]), false), 1);
          }},
         {"var.correction", [](const Args& a) {
@@ -1675,7 +1699,7 @@ inline const std::unordered_map<std::string, Op>& operations() {
         {"sort.default", [](const Args& a) {
              const Tensor x = T(a[0]);
              const int d = dim(has(a, 1) ? L(a[1]) : -1, x.rank());
-             return order(x, d, x.shape[d], a.size() > 2 && B(a[2]));
+             return order(x, d, x.shape.empty() ? 1 : x.shape[d], a.size() > 2 && B(a[2]));
          }},
         // images
         {"convolution.default", [](const Args& a) {

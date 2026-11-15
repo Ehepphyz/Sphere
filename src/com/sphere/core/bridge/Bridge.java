@@ -33,6 +33,7 @@ import java.util.concurrent.TimeUnit;
  *   SPHERE_BRIDGE_LIB   the readers: sphere_spx.hpp, SphereSPX.jl, sphere_spx.f90, sphere_spx.py
  *   CPLUS_INCLUDE_PATH  and ROOT_INCLUDE_PATH, so #include "sphere_spx.hpp" just works
  *   PYTHONPATH          so import sphere_spx just works
+ *   SPHERE_MLINK        the gateway to TensorFlow, PyTorch and pyhf (com.sphere.core.ml.MlLink says what else)
  * </pre>
  */
 public final class Bridge {
@@ -50,7 +51,17 @@ public final class Bridge {
         // any PyTorch or Keras model as a portable graph: its export and numpy reference, its C++ runtime
         "sphere_graph.py", "sphere_graph.hpp", "sphere_graph_tool.cpp",
         // TensorFlow's models (frozen graphs, SavedModels) read without TensorFlow, into the same graphs
-        "sphere_tf.py");
+        "sphere_tf.py",
+        // an analysis made differentiable (pyhf's model, its expected CLs), and the tensor arena shared with Java
+        "sphere_dana.py", "sphere_mlshm.py",
+        // simulation-based inference held to an exact likelihood, OmniFold against IBU, AutoML under constraints
+        "sphere_sbi.py", "sphere_unfold.py", "sphere_automl.py",
+        // one graph in PyTorch, TensorFlow and JAX (and their exports); normalizing flows written once for all
+        "sphere_xf.py", "sphere_flows.py", "sphere_fastsim.py",
+        // one differentiable computation across PyTorch, TensorFlow and JAX
+        "sphere_xgrad.py",
+        // TensorFlow, PyTorch and pyhf for every program: the gateway and a client in each language
+        "sphere_mlink.py", "sphere_mlink.hpp", "sphere_mlink.f90", "SphereMLink.jl");
 
     private static volatile boolean materialized;
 
@@ -69,7 +80,7 @@ public final class Bridge {
     }
 
     /** Where compiled pieces of the bridge are kept between runs. */
-    static Path buildFolder() {
+    public static Path buildFolder() {
         return Path.of("config", "bridge", "build").toAbsolutePath().normalize();
     }
 
@@ -116,22 +127,40 @@ public final class Bridge {
      */
     public static void environment(Map<String, String> env) {
         try {
-            final String lib = libraries().toString();
-            env.put("SPHERE_BRIDGE", folder().toString());
-            env.put("SPHERE_BRIDGE_LIB", lib);
-            prepend(env, "CPLUS_INCLUDE_PATH", lib);
-            prepend(env, "ROOT_INCLUDE_PATH", lib);
-            prepend(env, "PYTHONPATH", lib);
+            libraries(env);
             // Where a program's figures go to reach the Plots tab, and a
             // matplotlib whose plt.show() puts them there instead of opening
             // a window. A backend the user chose in the environment is kept.
             env.put("SPHERE_PLOTS", com.sphere.components.rootview.RootPlotsPanel.plotsFolder().toString());
             env.putIfAbsent("MPLBACKEND", "module://sphere_mpl");
+            com.sphere.core.ml.MlLink.environment(env);
             BridgeOutbox.start();
         } catch (IOException | RuntimeException unavailable) {
             // An engine without the bridge still runs; it only cannot see the others.
             AppLogger.warn("Bridge not available to this process: " + unavailable.getMessage());
         }
+    }
+
+    /**
+     * The bridge's libraries and the gateway to TensorFlow, PyTorch and pyhf, for a shell the user types in: what is
+     * compiled or run there finds them, and its figures stay the user's (no MPLBACKEND).
+     */
+    public static void reach(Map<String, String> env) {
+        try {
+            libraries(env);
+            com.sphere.core.ml.MlLink.environment(env);
+        } catch (IOException | RuntimeException unavailable) {
+            AppLogger.warn("Bridge not available to this shell: " + unavailable.getMessage());
+        }
+    }
+
+    private static void libraries(Map<String, String> env) throws IOException {
+        final String lib = libraries().toString();
+        env.put("SPHERE_BRIDGE", folder().toString());
+        env.put("SPHERE_BRIDGE_LIB", lib);
+        prepend(env, "CPLUS_INCLUDE_PATH", lib);
+        prepend(env, "ROOT_INCLUDE_PATH", lib);
+        prepend(env, "PYTHONPATH", lib);
     }
 
     private static void prepend(Map<String, String> env, String key, String dir) {
@@ -255,7 +284,8 @@ public final class Bridge {
     public static synchronized Path fortranObjects(String compiler) throws IOException {
         final Path lib = libraries();
         final String key = digest(compiler, new String(carried("sphere_spx.f90"), StandardCharsets.UTF_8),
-            new String(carried("sphere_lhaglue.f90"), StandardCharsets.UTF_8));
+            new String(carried("sphere_lhaglue.f90"), StandardCharsets.UTF_8),
+            new String(carried("sphere_mlink.f90"), StandardCharsets.UTF_8));
         final Path dir = buildFolder().resolve("fortran-" + key.substring(0, 12));
         if (Files.isRegularFile(dir.resolve("sphere_spx.o")) && Files.isRegularFile(dir.resolve("sphere_lhaglue.o"))) {
             return dir;
@@ -265,6 +295,12 @@ public final class Bridge {
             lib.resolve("sphere_lhaglue.f90").toString(), "-J", dir.toString()), dir, 300, parentOf(compiler));
         if (!built.ok()) {
             throw new IOException("The Fortran bridge did not compile:\n" + built.output());
+        }
+        // On its own, and allowed to fail: it uses gfortran's GETPID, and another compiler still has the rest of the bridge.
+        final Outcome link = run(List.of(compiler, "-O2", "-c", lib.resolve("sphere_mlink.f90").toString(), "-J", dir.toString()),
+            dir, 300, parentOf(compiler));
+        if (!link.ok()) {
+            AppLogger.warn("sphere_mlink.f90 did not compile with " + compiler + " (it is written for gfortran):\n" + link.output());
         }
         return dir;
     }
@@ -276,6 +312,9 @@ public final class Bridge {
         flags.add("-I" + dir);
         flags.add(dir.resolve("sphere_spx.o").toString());
         flags.add(dir.resolve("sphere_lhaglue.o").toString());
+        if (Files.isRegularFile(dir.resolve("sphere_mlink.o"))) {
+            flags.add(dir.resolve("sphere_mlink.o").toString());
+        }
         return flags;
     }
 

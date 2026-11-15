@@ -52,7 +52,7 @@ public final class TorchCommands {
     static void register() {
         CommandDefinitions.register(":torch", "PyTorch in Sphere: any model made a portable graph that Java and C++ run without PyTorch, their memory planned; what each command does", TorchCommands::help);
         CommandDefinitions.register(":torch status", "PyTorch, LibTorch (the C++ library its wheel carries), Keras and TensorFlow here; the graphs, the memory Sphere spares, the C++ compiler", TorchCommands::status);
-        CommandDefinitions.register(":torch export", "A PyTorch model made a graph: a script defining model and example (and feeds, name if it likes) exported by torch.export in a Python of its own, held to PyTorch at three batches it was not traced on. Usage: :torch export <script.py> [--name n] [--feeds particles|high_level]", TorchCommands::export);
+        CommandDefinitions.register(":torch export", "A PyTorch model made a graph: a script defining model and example (and feeds, name if it likes), or a TorchScript file, exported by torch.export in a Python of its own, held to PyTorch at three batches it was not traced on. Usage: :torch export <script.py|model.pt> [--shape 16,7;16] [--name n] [--feeds particles|high_level]", TorchCommands::export);
         CommandDefinitions.register(":torch models", "The graphs exported: what each holds, how its batch was freed, the memory a row takes", TorchCommands::models);
         CommandDefinitions.register(":torch check", "A graph run by Sphere's Java (and its C++ with --cpp) on numpy's reference: the difference, and the same to the bit in chunks and on threads. Usage: :torch check <graph> [--cpp]", TorchCommands::check);
         CommandDefinitions.register(":torch run", "A graph over a dataset of any size, streamed file to file in the chunks the memory affords, on threads; AUC and scores when it is labeled. Usage: :torch run <graph> <dataset> [--out name] [--engine java|c++] [--memory MB] [--threads n]", TorchCommands::run);
@@ -82,6 +82,10 @@ public final class TorchCommands {
             "  :torch audit <graph> <dataset>   a jet tagger refereed as physics would, in Java: particles' order, padding leaks,",
             "                                   collinear and infrared safety (exact splits, soft emissions, eps scanned), float32,",
             "                                   and the features it reacts to -- whatever framework made it",
+            "  :torch grad <script.py|graph>    PyTorch's own gradients and optimizer steps against Java's autograd (GraphAutograd)",
+            "  :torch gradcheck <graph>         Java's gradients against finite differences of its own forward: no Python",
+            "  :torch train <graph> <dataset>   the graph trained in Java: SGD, Adam, AdamW as torch.optim's, micro-batched to the",
+            "                                   memory, on threads; the best epoch written as a new graph Java and C++ run",
             "  :ml tag <graph>                  the graph on the jets of the loaded events (:fjet), in Java",
             "  :tf ...                          the same for Keras models, TensorFlow's API (:tf for its commands)",
             "Every graph is optimized by exact rewrites (common subexpressions, identities, mm+bias into addmm), each held to",
@@ -195,11 +199,13 @@ public final class TorchCommands {
     private static void export(String input, CommandExecutionContext ctx) {
         final MlCommands.Args a = MlCommands.Args.of(input, ":torch export");
         if (a.words().isEmpty()) {
-            Handlers.usage(":torch export <script.py> [--name n] [--feeds particles|high_level]  (the script defines model and example)");
+            Handlers.usage(":torch export <script.py|model.pt> [--shape 16,7;16] [--name n] [--feeds particles|high_level]  (a script defines model and example; a TorchScript says the rest by itself)");
             return;
         }
         final Path script = Handlers.resolve(a.word(0, "")).toPath().toAbsolutePath();
-        exportWith(a, script, "script", "PyTorch");
+        final String low = script.toString().toLowerCase(Locale.ROOT);
+        exportWith(a, script, low.endsWith(".pt") || low.endsWith(".pth") || low.endsWith(".ts") ? "torchscript" : "script",
+            low.endsWith(".py") ? "PyTorch" : "TorchScript, replayed");
     }
 
     private static void tfExport(String input, CommandExecutionContext ctx) {

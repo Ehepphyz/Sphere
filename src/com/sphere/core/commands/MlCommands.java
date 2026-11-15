@@ -47,7 +47,7 @@ public final class MlCommands {
         CommandDefinitions.register(":ml toy", "A toy dataset of jets, W-like two-prong against QCD-like, to try everything. Usage: :ml toy [jets] [name] [--points p]", MlCommands::toy);
         CommandDefinitions.register(":ml jets", "Add the jets of the loaded events (:fjet read/toy, the active definition) to a dataset, as a class; save it. Usage: :ml jets <class> [--points 64] [--ptmin GeV] [--njets n] | :ml jets save <name> | :ml jets clear", MlCommands::jets);
         CommandDefinitions.register(":ml table", "A dataset from ROOT trees, read by Sphere's own ROOT reader: one class per tree, the branches as features (the MLP trains on it). Usage: :ml table <name> <file.root>:<tree> <class> [<file.root>:<tree> <class> ...] --features a,b,c", MlCommands::table);
-        CommandDefinitions.register(":ml train","Train a network of the zoo on a dataset. Usage: :ml train <dataset> [mlp|deepsets|efn|particlenet|transformer] [torch|keras|tensorflow] [--epochs n] [--batch b] [--lr x] [--points p] [--k k] [--name n] [--precision float64] [--decorrelate mass[:lambda]]", MlCommands::train);
+        CommandDefinitions.register(":ml train","Train a network of the zoo on a dataset. Usage: :ml train <dataset> [mlp|deepsets|efn|particlenet|transformer|lorentznet|pelican] [torch|keras|tensorflow] [--epochs n] [--batch b] [--lr x] [--points p] [--k k] [--dim d] [--layers l] [--channels c] [--name n] [--precision float64] [--decorrelate mass[:lambda]]", MlCommands::train);
         CommandDefinitions.register(":ml models", "The trained networks, their architecture, framework and test AUC", MlCommands::models);
         CommandDefinitions.register(":ml crosscheck", "One network in PyTorch, Keras and Sphere's Java, in float64 and float32, held to numpy in float64 on the same jets: each difference judged by the rounding of its precision (same function, or not). Usage: :ml crosscheck <model> <dataset> [rows]", MlCommands::crosscheck);
         CommandDefinitions.register(":ml irc", "Infrared and collinear safety of a trained network, measured: its probabilities when each jet gains a particle of eps of its pt, and when its hardest particle splits in two eps apart, as eps goes to 0 -- safe if the change vanishes. Usage: :ml irc <model> <dataset> [jets]", MlCommands::irc);
@@ -57,6 +57,10 @@ public final class MlCommands {
         CommandDefinitions.register(":ml tag", "Run a trained network -- or a graph of any PyTorch or Keras model (:torch export, :tf export) -- in Sphere's Java on the jets of the loaded events; the scores to the Plots tab. Usage: :ml tag <model|graph> [--ptmin GeV] [--njets n] [--bins b]", MlCommands::tag);
         CommandDefinitions.register(":ml pyhf", "Fit a HistFactory model with pyhf on each backend it has (NumPy and JAX; PyTorch and TensorFlow up to pyhf 0.7, which 0.8 removed): best fit, CLs, 95% upper limit, and how the backends agree. Usage: :ml pyhf <signal> <background> <bkg-uncertainty> <observed> [backends...] | :ml pyhf <workspace.json|histfactory.xml> [backends...]", MlCommands::pyhf);
         CommandDefinitions.register(":ml bib", "Write the references of PyTorch, TensorFlow, Keras, JAX, pyhf and the zoo's networks. Usage: :ml bib <file.bib>", MlCommands::bib);
+        // the frontier: Java's autograd, the Lorentz networks, the differentiable analysis, the shared arena, the autopilot
+        LearnCommands.register();
+        // the frameworks for every program: ROOT macros, Geant4 applications, C++, Fortran, Julia, Python
+        MlLinkCommands.register();
     }
 
     /** The jets gathered by ':ml jets' until saved. */
@@ -170,7 +174,7 @@ public final class MlCommands {
         AppLogger.raw("  :ml jets <class> [--points 64]         the loaded events' jets as one class (:fjet read/toy first)");
         AppLogger.raw("  :ml jets save <name>                   the classes gathered, as bridge/<name>.spx");
         AppLogger.raw("  :ml table <name> <f.root>:<tree> <class> ... --features a,b   ROOT trees as a dataset (no ROOT needed)");
-        AppLogger.raw("  :ml train <dataset> [model] [backend]  mlp|deepsets|efn|particlenet|transformer on torch|keras|tensorflow:");
+        AppLogger.raw("  :ml train <dataset> [model] [backend]  mlp|deepsets|efn|particlenet|transformer|lorentznet|pelican on torch|keras|tensorflow:");
         AppLogger.raw("                                         AUC, rejection at 30/50/70 % signal, mass sculpting, ROC to Plots");
         AppLogger.raw("        --decorrelate mass[:lambda]      DisCo: a score that forgets the background's mass (no sculpted bump)");
         AppLogger.raw("        --precision float64              double precision throughout");
@@ -181,7 +185,18 @@ public final class MlCommands {
         AppLogger.raw("  :ml pareto <dataset> [model]           DisCo's trade-off: rejection against 1/JSD for each lambda, the front, the pick");
         AppLogger.raw("  :ml tag <model>                        the network in Java on the loaded events' jets: scores to Plots");
         AppLogger.raw("  :ml pyhf <s> <b> <db> <n> | <ws.json> | <histfactory.xml>   pyhf on NumPy, JAX (PyTorch, TensorFlow up to 0.7)");
+        AppLogger.raw("  :ml lorentz <model> <dataset>          its symmetries measured: random boosts and rotations, permuted particles");
+        AppLogger.raw("  :ml optimize <dataset> [model]         a network trained for the expected CLs through pyhf's model (normsys,");
+        AppLogger.raw("                                         histosys, staterror), against the same network trained to classify");
+        AppLogger.raw("  :ml optimize check <dataset> [model]   its gradient in PyTorch, JAX, TensorFlow; its CLs against pyhf's");
+        AppLogger.raw("  :ml shm probe | tag <model> <dataset>  Java's tensors read in place by numpy, PyTorch, JAX, TensorFlow");
+        AppLogger.raw("  :ml need [intent] [targets]            what a task needs, the engine that does it best, why; :ml auto runs it");
+        AppLogger.raw("  :torch grad | gradcheck | train        PyTorch's autograd and optimizers in Java, held to PyTorch's own");
         AppLogger.raw("  :ml models | status | cancel | stop | bib <file.bib>");
+        AppLogger.raw("  :ml link                               TensorFlow, PyTorch, pyhf for every program: ROOT, Geant4, C++, Fortran, Julia (:ml link for how)");
+        AppLogger.raw("  :ml xgrad                              PyTorch, TensorFlow and JAX in one differentiable computation, held to the analytic gradient");
+        AppLogger.raw("  :ml fuzz [--seed n] [--rounds 6]       every operation against PyTorch: NumPy, JAX, TensorFlow, Java, C++, values and gradients");
+        AppLogger.raw("  :ml twin <model> <framework> [--out f] a saved model trainable in another framework, written back in any format");
         AppLogger.raw("  In Python (scripts, notebooks Sphere starts): import sphere_ml as ml; ml.fit(...), ml.stats(...)");
         AppLogger.raw("  In C++ (ROOT macros, Geant4 programs): #include \"sphere_nn.hpp\"; sphere::nn::Network net(\"tagger\")");
     }
@@ -343,6 +358,7 @@ public final class MlCommands {
 
     public static void stop(String input, CommandExecutionContext ctx) {
         MlEngine.stopAll();
+        com.sphere.core.ml.MlLink.stop();
         AppLogger.info("learning engines stopped");
     }
 
@@ -520,7 +536,7 @@ public final class MlCommands {
     public static void train(String input, CommandExecutionContext ctx) {
         final Args a = Args.of(input, ":ml train");
         if (a.words().isEmpty()) {
-            Handlers.usage(":ml train <dataset> [mlp|deepsets|efn|particlenet|transformer] [torch|keras|tensorflow] [--epochs n]"
+            Handlers.usage(":ml train <dataset> [mlp|deepsets|efn|particlenet|transformer|lorentznet|pelican] [torch|keras|tensorflow] [--epochs n]"
                 + " [--batch b] [--lr x] [--points p] [--k k] [--name n] [--precision float64] [--decorrelate mass[:lambda]]");
             return;
         }
@@ -539,12 +555,13 @@ public final class MlCommands {
                 args.put("data", e.path(data));
                 args.put("model", model);
                 args.put("backend", backend);
-                for (String k : List.of("epochs", "batch", "points", "k", "seed", "patience")) {
+                for (String k : List.of("epochs", "batch", "points", "k", "seed", "patience", "dim", "msg", "layers", "channels",
+                    "hidden", "heads", "ffn", "pair", "fc")) {
                     if (a.flags().containsKey(k)) {
                         args.put(k, Integer.parseInt(a.flags().get(k)));
                     }
                 }
-                for (String k : List.of("lr", "val", "test")) {
+                for (String k : List.of("lr", "val", "test", "c", "scale")) {
                     if (a.flags().containsKey(k)) {
                         args.put(k, Double.parseDouble(a.flags().get(k)));
                     }

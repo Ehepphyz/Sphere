@@ -149,9 +149,115 @@ public final class G4Commands {
         SwingUtilities.invokeLater(() -> G4CodeFrame.show(folder, settings()));
     }
 
+    /** :g4 fastsim plan: what a learned fast simulation of a design should be, from the design and shower physics. */
+    public static void fastsimPlan(String input, CommandExecutionContext ctx) {
+        final List<String> w = words(input, ":g4 fastsim plan");
+        if (w.isEmpty()) {
+            Handlers.usage(":g4 fastsim plan <design.gdml>");
+            return;
+        }
+        final Geometry g = read(w.get(0));
+        if (g != null) {
+            AppLogger.raw(com.sphere.core.geant4.FastSimPlanner.plan(g, CppExport.Options.defaults(g).cppOnly()).describe());
+        }
+    }
+
+    /** :g4 fastsim run: from a design to a validated Geant4 application with a learned fast simulation. */
+    public static void fastsimRun(String input, CommandExecutionContext ctx) {
+        final MlCommands.Args a = MlCommands.Args.of(input, ":g4 fastsim run");
+        if (a.words().size() < 2) {
+            Handlers.usage(":g4 fastsim run <design.gdml> <folder> [--minutes 20]");
+            return;
+        }
+        final Geometry g = read(a.word(0, ""));
+        if (g == null) {
+            return;
+        }
+        final Path folder = local(a.word(1, ""));
+        final double minutes = Double.parseDouble(a.flags().getOrDefault("minutes", "20"));
+        MlCommands.background("g4-fastsim", () -> {
+            try {
+                final var r = com.sphere.core.geant4.FastSimPipeline.run(g, CppExport.Options.defaults(g), folder, settings(),
+                    new com.sphere.core.geant4.FastSimPipeline.Settings(minutes, 20261109L, 0, 4), AppLogger::raw);
+                if (r.validated()) {
+                    AppLogger.success(r.verdict());
+                } else {
+                    AppLogger.error(r.verdict() + " The application stays on its full physics.");
+                }
+            } catch (Exception e) {
+                AppLogger.error(":g4 fastsim run: " + e.getMessage());
+            }
+        });
+    }
+
+    /** :g4 model: the graphs a Geant4 application can take, as with G4code's Insert menu. */
+    public static void models(String input, CommandExecutionContext ctx) {
+        try {
+            final List<Path> graphs = com.sphere.core.ml.GraphCpp.graphs();
+            if (graphs.isEmpty()) {
+                AppLogger.info("No graph yet: :torch export <model.py|model.pt>, :tf export <model.keras>, :tf import <saved_model>");
+            }
+            for (Path p : graphs) {
+                AppLogger.raw("  " + p.getFileName().toString().replace(".sng.spx", ""));
+            }
+            AppLogger.raw(":g4 model cpp <graph> <application folder> [--name Class] [--batch 1]   the graph as C++ in the application");
+        } catch (java.io.IOException e) {
+            AppLogger.error("Cannot read the graphs: " + e.getMessage());
+        }
+    }
+
+    /** :g4 model cpp: a graph as a header of a Geant4 application, compiled and held to the interpreter first. */
+    public static void modelCpp(String input, CommandExecutionContext ctx) {
+        final MlCommands.Args a = MlCommands.Args.of(input, ":g4 model cpp");
+        if (a.words().size() < 2) {
+            Handlers.usage(":g4 model cpp <graph> <application folder> [--name Class] [--batch 1]");
+            return;
+        }
+        final Path graph = TorchCommands.graphPath(a.word(0, ""));
+        final Path folder = local(a.word(1, ""));
+        if (!Files.isRegularFile(graph) || !Files.isDirectory(folder)) {
+            AppLogger.error("Need a graph (" + graph + ") and an application folder (" + folder + ")");
+            return;
+        }
+        MlCommands.background("g4-model-cpp", () -> {
+            try {
+                final com.sphere.core.ml.NeuralGraph g = com.sphere.core.ml.NeuralGraph.load(graph);
+                final String name = a.flags().getOrDefault("name", com.sphere.core.ml.GraphCpp.classNameFor(g.name));
+                final Path existing = com.sphere.core.ml.GraphCpp.target(name, folder);
+                if (Files.exists(existing) && !com.sphere.core.ml.GraphCpp.generated(existing) && !a.flags().containsKey("force")) {
+                    AppLogger.error(existing + " exists and was not written by Sphere: give another --name, or --force to replace it");
+                    return;
+                }
+                final int batch = Integer.parseInt(a.flags().getOrDefault("batch", "1"));
+                final var t = com.sphere.core.ml.GraphCpp.transcribe(g, name, batch);
+                final String compiler = com.sphere.core.bridge.Bridge.cppCompiler(new SettingsManager());
+                if (compiler == null) {
+                    AppLogger.info("No C++ compiler here: the header is written unchecked");
+                } else {
+                    final var v = com.sphere.core.ml.GraphCpp.verify(t, compiler, com.sphere.core.bridge.Bridge.buildFolder().resolve("g4model"), AppLogger::raw);
+                    if (t.selfTest() && (!v.compiled() || !(v.error() <= 1e-9))) {
+                        AppLogger.error("Nothing written: " + v.detail());
+                        return;
+                    }
+                    AppLogger.info(v.detail());
+                }
+                final Path out = com.sphere.core.ml.GraphCpp.write(t, folder);
+                AppLogger.success("Written: " + out);
+                AppLogger.raw(t.report());
+                AppLogger.raw("#include \"" + t.fileName() + "\"");
+                AppLogger.raw(t.usage());
+            } catch (Exception e) {
+                AppLogger.error(":g4 model cpp: " + e.getMessage());
+            }
+        });
+    }
+
     public static void overview(String input, CommandExecutionContext ctx) {
         AppLogger.result("Geant4 in Sphere: G4editor (works without Geant4) and geant4-bridge (needs Geant4, not ROOT)");
         AppLogger.raw("  :g4code [folder|file]                Geant4 in C++, three columns: the code drawn live in 3D");
+        AppLogger.raw("  :g4 model cpp <graph> <folder>       a PyTorch or TensorFlow graph as C++ source in the application");
+        AppLogger.raw("  :g4 fastsim plan <design.gdml>       what a learned fast simulation of the detector should be");
+        AppLogger.raw("  :g4 fastsim run <design> <folder>    trained, written as C++, held to Geant4: a validated application");
         AppLogger.raw("  :g4code new <folder> [template]      a new Geant4 application from a template or a GDML design");
         AppLogger.raw("  :g4editor [design.gdml|geo.root]     the geometry editor: draw, dimension, analyze, run");
         AppLogger.raw("  :g4 convert <in> <out> [portable]    GDML <-> ROOT geometry (TGeoManager), without ROOT");

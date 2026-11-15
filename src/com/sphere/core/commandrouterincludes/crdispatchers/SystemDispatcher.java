@@ -90,6 +90,7 @@ public class SystemDispatcher implements CommandDispatcher {
 
                 pb.redirectErrorStream(true);
                 pb.directory(WorkingDirectory.get().toFile());
+                com.sphere.core.bridge.Bridge.reach(pb.environment());
 
                 Process process = pb.start();
                 

@@ -21,7 +21,7 @@ import java.util.function.Consumer;
  * the rename will change ("4 occurrences in loop()"), with what is wrong with the
  * name if anything. Enter renames, Escape leaves everything as it was.
  */
-final class RenameBox extends EditorWidgets.Card {
+public final class RenameBox extends EditorWidgets.Card {
 
     final EditorWidgets.FlatField field = new EditorWidgets.FlatField("New name");
     private final JLabel info = new JLabel();
@@ -29,7 +29,17 @@ final class RenameBox extends EditorWidgets.Card {
     private final LanguageSpec spec;
     private final String text;
 
-    RenameBox(SmartRename.Plan plan, LanguageSpec spec, String text, Consumer<String> rename, Runnable cancel) {
+    /** The field takes the keyboard, its text selected: typing replaces the old name. */
+    public void focusField() {
+        field.requestFocusInWindow();
+        field.selectAll();
+    }
+
+    /**
+     * @param text   where a new name already in use is looked for, between the plan's scopeFrom and scopeTo
+     * @param rename called with a valid new name on Enter
+     */
+    public RenameBox(SmartRename.Plan plan, LanguageSpec spec, String text, Consumer<String> rename, Runnable cancel) {
         super(new BorderLayout(0, 4), 8, 8);
         this.plan = plan;
         this.spec = spec;

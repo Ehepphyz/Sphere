@@ -132,6 +132,7 @@ public final class G4EditorFrame extends JFrame {
         bottom.addTab("Console", console);
         bottom.addTab("Analyses", analysis);
         bottom.addTab("Run in Geant4", Icons.run(14), runPanel);
+        bottom.addTab("Machine learning", new FastSimPanel(model, this.settings, s -> SwingUtilities.invokeLater(() -> console.print(s))));
         final JSplitPane center = new JSplitPane(JSplitPane.VERTICAL_SPLIT, vp, bottom);
         center.setResizeWeight(0.7);
         centerSplit = center;
@@ -1558,8 +1559,11 @@ public final class G4EditorFrame extends JFrame {
 
     private void exportCpp(Path dir) {
         try {
-            final CppExport ex = new CppExport(model.geometry, CppExport.Options.defaults(model.geometry));
-            final var files = ex.write(dir);
+            final java.util.Map<String, String> generated = new java.util.LinkedHashMap<>(
+                new CppExport(model.geometry, CppExport.Options.defaults(model.geometry)).files());
+            // the networks attached to detectors, transcribed and checked before anything is written
+            com.sphere.core.geant4.NetworkExport.apply(model.geometry, generated, console::print);
+            final var files = CppExport.write(dir, generated);
             console.ok("Geant4 application written to " + dir + " (" + files.size() + " files): build it with "
                 + "cmake -DGeant4_DIR=... and run ./" + CppExport.Options.defaults(model.geometry).appName());
             model.log("export cpp " + dir);

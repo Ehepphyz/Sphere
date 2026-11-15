@@ -192,6 +192,9 @@ public final class BridgeCommands {
             AppLogger.raw(f("  %-8s %s", engine.key(), engine.description()
                 + (cpp == null ? "" : "; C++ too, at " + cpp.prefix())));
         }
+        final Map<String, String> frameworks = com.sphere.core.ml.MlLink.detect();
+        AppLogger.raw(f("  %-8s %s", "ml link", frameworks.isEmpty() ? "nothing probed yet (':ml link status')"
+            : com.sphere.core.ml.MlLink.describe(frameworks) + ", from every engine above (':ml link')"));
     }
 
     private static String orMissing(String tool, String key) {

@@ -18,16 +18,27 @@ public final class SyntaxTokenizer {
         public final TokenKind kind;
         /** A string or comment that reached the end of its line or file unclosed. */
         public final boolean unterminated;
+        /**
+         * What a name is and how it is used, packed by {@link PySemantics} (role,
+         * modifiers, runtime family); 0 when only the kind is known. The kind stays
+         * the coarse class every other service reads.
+         */
+        public final int sem;
 
         public Span(int start, int end, TokenKind kind) {
-            this(start, end, kind, false);
+            this(start, end, kind, false, 0);
         }
 
         public Span(int start, int end, TokenKind kind, boolean unterminated) {
+            this(start, end, kind, unterminated, 0);
+        }
+
+        public Span(int start, int end, TokenKind kind, boolean unterminated, int sem) {
             this.start = start;
             this.end = end;
             this.kind = kind;
             this.unterminated = unterminated;
+            this.sem = sem;
         }
 
         public boolean sameAs(Span o, int shift) {
@@ -36,9 +47,36 @@ public final class SyntaxTokenizer {
     }
 
     private final LanguageSpec spec;
+    /** Live roles of names (a notebook's kernel), consulted by the Python lexer; null when none. */
+    private volatile java.util.function.Function<String, TokenKind> names;
+    /** What the rest of the notebook and the kernel know about module-level names; null outside a notebook. */
+    private volatile PySemantics.Context semanticContext;
+    private volatile boolean semanticEnabled = true;
+    /** The semantic analysis of the last Python scan: read right after tokenize() on the same thread. */
+    private volatile PySemantics.Result lastSemantic;
 
     public SyntaxTokenizer(LanguageSpec spec) {
         this.spec = spec == null ? LanguageSpec.NONE : spec;
+    }
+
+    /** What the running program says each name is; the lexer falls back on the text alone. */
+    public void setNameClassifier(java.util.function.Function<String, TokenKind> classifier) {
+        this.names = classifier;
+    }
+
+    /** The notebook around this text (other cells, kernel); null for a file on its own. */
+    public void setSemanticContext(PySemantics.Context context) {
+        this.semanticContext = context;
+    }
+
+    /** Scope analysis on or off; off, Python is colored by its grammar and the live kinds alone. */
+    public void setSemanticEnabled(boolean enabled) {
+        this.semanticEnabled = enabled;
+    }
+
+    /** The semantic analysis the last tokenize() produced, or null (other languages, or switched off). */
+    public PySemantics.Result lastSemantic() {
+        return lastSemantic;
     }
 
     /**
@@ -50,6 +88,12 @@ public final class SyntaxTokenizer {
     public boolean tokenize(String text, boolean insideComment, List<Span> out) {
         if (spec.isPlain() || text == null || text.isEmpty()) {
             return insideComment;
+        }
+        if (spec == LanguageSpec.PYTHON) {
+            // Python has no block comments: the whole buffer is lexed in one pass,
+            // then its names are resolved scope by scope (PySemantics).
+            lastSemantic = PythonLexer.lex(text, out, names, semanticEnabled ? semanticContext : null, semanticEnabled);
+            return false;
         }
         switch (spec.dialect) {
             case MARKDOWN: markdown(text, out); return false;

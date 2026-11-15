@@ -19,8 +19,12 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.font.GlyphVector;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
+import java.awt.geom.RoundRectangle2D;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Map;
@@ -115,9 +119,11 @@ public final class CodeTextUI extends BasicTextAreaUI {
                 i++;
             }
             TokenKind kind;
+            int sem = 0;
             int segEnd;
             if (i < n && h.spanStart(i) <= pos) {
                 kind = h.spanKind(i);
+                sem = h.spanSem(i);
                 segEnd = Math.min(h.spanEnd(i), p1);
             } else {
                 kind = TokenKind.DEFAULT;
@@ -127,14 +133,97 @@ public final class CodeTextUI extends BasicTextAreaUI {
                 segEnd = p1;
             }
             doc.getText(pos, segEnd - pos, seg);
-            g.setColor(styles.color(kind));
-            Font font = styles.font(kind);
-            g.setFont(font);
-            x = drawRun(g, font, fm, seg, x, y, expander, pos);
+            if (sem != 0) {
+                // A resolved name: its role's hue, a face for how it is bound, strokes for how it is used,
+                // and behind it a chip in the color of what the kernel holds under it.
+                SemanticStyle.Look look = SemanticStyle.look(sem);
+                if ((look.decorations() & SemanticStyle.D_CAP) != 0 && look.cap() != null) {
+                    chip(g, look, x, x + runWidth(fm, seg), y, fm);
+                }
+                g.setColor(look.color());
+                Font font = styles.fontFor(look.fontStyle());
+                g.setFont(font);
+                float x0 = x;
+                x = drawRun(g, font, fm, seg, x, y, expander, pos);
+                if (look.decorations() != 0) {
+                    decorate(g, look, x0, x, y, fm);
+                }
+            } else {
+                g.setColor(styles.color(kind));
+                Font font = styles.font(kind);
+                g.setFont(font);
+                x = drawRun(g, font, fm, seg, x, y, expander, pos);
+            }
             pos = segEnd;
         }
         g.setFont(styles.base);
         return x;
+    }
+
+    /**
+     * The strokes of a resolved name, under or over its glyphs: a line when it is
+     * bound more than once, dashes when it hides a builtin, dots when the kernel's
+     * value is stale, faint dots when nothing defines it, and a cap in the color of
+     * its runtime family.
+     */
+    static void decorate(Graphics2D g, SemanticStyle.Look look, float x0, float x1, float y, FontMetrics fm) {
+        if (x1 - x0 < 1f) {
+            return;
+        }
+        int deco = look.decorations();
+        Object aa = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Color before = g.getColor();
+        float under = y + Math.max(1.6f, Math.min(2.6f, fm.getDescent() * 0.5f));
+        float w = x1 - x0;
+        if ((deco & SemanticStyle.D_UNDERLINE) != 0) {
+            g.setColor(EditorTheme.alpha(look.color(), 175));
+            g.fill(new Rectangle2D.Float(x0, under, w, 1f));
+        }
+        float low = (deco & SemanticStyle.D_UNDERLINE) != 0 ? under + 2f : under;
+        if ((deco & SemanticStyle.D_DASHED) != 0) {
+            g.setColor(EditorTheme.warningSquiggle());
+            for (float x = x0; x < x1; x += 4.5f) {
+                g.fill(new Rectangle2D.Float(x, low, Math.min(2.6f, x1 - x), 1.2f));
+            }
+        } else if ((deco & SemanticStyle.D_DOTTED) != 0) {
+            g.setColor(SemanticStyle.staleColor());
+            for (float x = x0 + 0.5f; x < x1; x += 3f) {
+                g.fill(new Ellipse2D.Float(x, low - 0.2f, 1.6f, 1.6f));
+            }
+        } else if ((deco & SemanticStyle.D_UNRESOLVED) != 0) {
+            g.setColor(EditorTheme.alpha(EditorTheme.errorSquiggle(), 150));
+            for (float x = x0 + 0.5f; x < x1; x += 3f) {
+                g.fill(new Rectangle2D.Float(x, low, 1.1f, 1.1f));
+            }
+        }
+        g.setColor(before);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, aa == null ? RenderingHints.VALUE_ANTIALIAS_DEFAULT : aa);
+    }
+
+    /**
+     * The chip behind a live variable, in its runtime family's color: inside the
+     * name's own line box, so it can never be read as belonging to the line above.
+     */
+    static void chip(Graphics2D g, SemanticStyle.Look look, float x0, float x1, float y, FontMetrics fm) {
+        Object aa = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Color before = g.getColor();
+        float top = y - fm.getAscent() + 1.5f;
+        float height = fm.getAscent() + fm.getDescent() - 3f;
+        g.setColor(look.cap());
+        g.fill(new RoundRectangle2D.Float(x0 - 2f, top, (x1 - x0) + 4f, height, 7f, 7f));
+        g.setColor(before);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, aa == null ? RenderingHints.VALUE_ANTIALIAS_DEFAULT : aa);
+    }
+
+    /** The width a run of a name takes on the view's grid (names hold no tabs). */
+    private static float runWidth(FontMetrics fm, Segment seg) {
+        float w = 0;
+        for (int k = 0; k < seg.count; k++) {
+            w += fm.charWidth(seg.array[seg.offset + k]);
+        }
+        return w;
     }
 
     /** Draws a piece of a line, each glyph at the x the view's metrics give it. */
@@ -197,6 +286,8 @@ public final class CodeTextUI extends BasicTextAreaUI {
         final LanguageSpec spec;
         final Map<TokenKind, Color> colors = new EnumMap<>(TokenKind.class);
         final Map<TokenKind, Font> fonts = new EnumMap<>(TokenKind.class);
+        /** Plain, bold, italic, bold italic: the faces of resolved names. */
+        private final Font[] faces = new Font[4];
 
         private Styles(Font base, ThemePalette palette, LanguageSpec spec, JTextComponent c) {
             this.base = base;
@@ -207,6 +298,10 @@ public final class CodeTextUI extends BasicTextAreaUI {
             }
             Font bold = boldOf(base, c);
             Font italic = base.deriveFont(Font.ITALIC);
+            faces[Font.PLAIN] = base;
+            faces[Font.BOLD] = bold;
+            faces[Font.ITALIC] = italic;
+            faces[Font.BOLD | Font.ITALIC] = bold == base ? italic : bold.deriveFont(Font.BOLD | Font.ITALIC);
             fonts.put(TokenKind.COMMENT, italic);
             if (spec != null && spec.dialect == LanguageSpec.Dialect.MARKDOWN) {
                 fonts.put(TokenKind.KEYWORD, bold);
@@ -232,6 +327,12 @@ public final class CodeTextUI extends BasicTextAreaUI {
 
         Font font(TokenKind kind) {
             Font f = fonts.get(kind);
+            return f == null ? base : f;
+        }
+
+        /** The face for a java.awt.Font style of a resolved name. */
+        Font fontFor(int style) {
+            Font f = style >= 0 && style < faces.length ? faces[style] : null;
             return f == null ? base : f;
         }
 

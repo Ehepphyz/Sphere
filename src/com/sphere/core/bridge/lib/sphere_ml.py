@@ -62,9 +62,35 @@ def _dist_version(name):
 _KERAS_TRAINABLE = ("tensorflow", "jax", "torch")
 
 
+def _tensorflow_version():
+    """TensorFlow under any of the distributions that hold it."""
+    for name in ("tensorflow", "tensorflow-cpu", "tensorflow-intel", "tf-nightly", "tf-nightly-cpu"):
+        version = _dist_version(name)
+        if version:
+            return version
+    return None
+
+
+def _keras_version():
+    """The Keras that imports. keras and keras-nightly install the same package over each other, TensorFlow's release
+    candidates asking for the second: both then have metadata, and only the package's own version file says which of
+    them `import keras` gives. Read, not imported: the backend is taken once, at the first import."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("keras")
+        with open(os.path.join(os.path.dirname(spec.origin), "src", "version.py"), encoding="utf-8") as fh:
+            import re
+            found = re.search(r"""__version__\s*=\s*["']([^"']+)["']""", fh.read())
+        if found:
+            return found.group(1)
+    except Exception:
+        pass
+    return _dist_version("keras") or _dist_version("keras-nightly")
+
+
 def _keras_installed(backend):
     if backend == "tensorflow":
-        return bool(_dist_version("tensorflow") or _dist_version("tensorflow-cpu") or _dist_version("tensorflow-intel"))
+        return bool(_tensorflow_version())
     return bool(_dist_version(backend))
 
 
@@ -92,7 +118,7 @@ def _keras_choice():
     the same on every backend (':ml crosscheck' holds them to 1e-16), so the fastest is taken by default."""
     chosen = os.environ.get("KERAS_BACKEND")
     if chosen:
-        return chosen, "KERAS_BACKEND"
+        return chosen, "installed" if chosen == _keras_pinned else "KERAS_BACKEND"
     for backend in _KERAS_TRAINABLE:
         if _keras_installed(backend):
             return backend, "installed"
@@ -104,9 +130,24 @@ def _keras_backend():
     return _keras_choice()[0]
 
 
+_keras_pinned = None
+
+
+def _pin_keras_backend():
+    """Writes _keras_choice's answer into the environment. Keras takes its backend once, at its first import, and
+    TensorFlow imports it as soon as it is imported itself: asking TensorFlow for its devices was enough for Keras to
+    follow keras.json after all, and for ':ml train ... tensorflow' to be refused until the engine was restarted."""
+    global _keras_pinned
+    if not os.environ.get("KERAS_BACKEND"):
+        backend = _keras_choice()[0]
+        if backend:
+            os.environ["KERAS_BACKEND"] = _keras_pinned = backend
+
+
 def frameworks(devices=False):
     """The frameworks installed, by their distributions (nothing is imported unless devices are asked)."""
-    tf = _dist_version("tensorflow") or _dist_version("tensorflow-cpu") or _dist_version("tensorflow-intel")
+    tf = _tensorflow_version()
+    keras_version = _keras_version()
     out = {
         "python": "%d.%d.%d" % sys.version_info[:3],
         "executable": sys.executable,
@@ -114,10 +155,10 @@ def frameworks(devices=False):
         "numpy": np.__version__ if np is not None else None,
         "torch": _dist_version("torch"),
         "tensorflow": tf,
-        "keras": _dist_version("keras"),
-        "keras_backend": _keras_backend() if _dist_version("keras") else None,
-        "keras_backend_from": _keras_choice()[1] if _dist_version("keras") else None,
-        "keras_json": _keras_json_backend() if _dist_version("keras") else None,
+        "keras": keras_version,
+        "keras_backend": _keras_backend() if keras_version else None,
+        "keras_backend_from": _keras_choice()[1] if keras_version else None,
+        "keras_json": _keras_json_backend() if keras_version else None,
         "jax": _dist_version("jax"),
         "pyhf": _dist_version("pyhf"),
         "sklearn": _dist_version("scikit-learn"),
@@ -131,6 +172,7 @@ def frameworks(devices=False):
 
 def _devices(have):
     found = {}
+    _pin_keras_backend()
     if have.get("torch"):
         try:
             import torch
@@ -425,7 +467,13 @@ MODELS = {
                    " features (Qu, Gouskos 2020)",
     "transformer": "Particle Transformer: attention over the particles, biased by the pairs' Delta, kT, z and"
                    " m^2, then a class token (Qu, Li, Qian 2022)",
+    "lorentznet": "LorentzNet: Lorentz group equivariant blocks, messages from Minkowski products, run on the jet's"
+                  " Gram matrix itself -- invariant by construction (Gong, Meng, Zhang et al. 2022)",
+    "pelican": "PELICAN: a permutation-equivariant network of the Minkowski products of all pairs, its 15 equivariant"
+               " aggregations of 2-tensors, Lorentz invariant by construction (Bogatskiy, Hoffman, Miller, Offermann 2022)",
 }
+
+LORENTZ = ("lorentznet", "pelican")   # the networks that see the jet through Lorentz invariants only
 
 
 def make_spec(model, data, **kw):
@@ -455,6 +503,17 @@ def make_spec(model, data, **kw):
         spec["layers"] = int(kw.get("layers", 2))
         spec["ffn"] = int(kw.get("ffn", 128))
         spec["pair"] = int(kw.get("pair", 16))
+    elif model == "lorentznet":
+        spec["dim"] = int(kw.get("dim", 32))         # the particles' scalars h
+        spec["msg"] = int(kw.get("msg", 32))         # the pairs' messages m_ij
+        spec["layers"] = int(kw.get("layers", 3))
+        spec["c"] = float(kw.get("c", 1e-3))         # how far a block moves the four-vectors
+        spec["scale"] = float(kw.get("scale", 100.0))   # GeV: the products are in its square
+    elif model == "pelican":
+        spec["channels"] = int(kw.get("channels", 12))
+        spec["layers"] = int(kw.get("layers", 2))
+        spec["hidden"] = int(kw.get("hidden", 32))
+        spec["scale"] = float(kw.get("scale", 100.0))
     return spec
 
 
@@ -511,6 +570,28 @@ def param_shapes(spec):
         s["cls.token"] = (1, 1, D)
         norm("head.n", D)
         dense("head", D, C)
+    elif m == "lorentznet":
+        D, Dm = spec["dim"], spec["msg"]
+        dense("lz.emb", 2, D)                         # from <p_i, J> and m_J^2, the particle's invariants
+        for l in range(spec["layers"]):
+            p = "lz%d" % l
+            dense(p + ".e0", 2 * D + 2, Dm)           # phi_e on (h_i, h_j, psi|x_i - x_j|^2, psi<x_i, x_j>)
+            dense(p + ".e1", Dm, Dm)
+            dense(p + ".m", Dm, 1)                    # the message's weight w_ij
+            if l < spec["layers"] - 1:                # the last block moves no four-vector: nothing reads them after it
+                dense(p + ".x0", Dm, Dm)              # phi_x: how much x_j moves x_i
+                dense(p + ".x1", Dm, 1)
+            dense(p + ".h0", D + Dm, D)               # phi_h
+            dense(p + ".h1", D, D)
+        dense("lz.out.0", D, D)
+        dense("lz.out.1", D, C)
+    elif m == "pelican":
+        Cn = spec["channels"]
+        dense("pe.in", 2, Cn)                         # psi(<p_i, p_j>) and psi of it over m_J^2 / N^2
+        for l in range(spec["layers"]):
+            dense("pe%d" % l, 15 * Cn, Cn)            # the 15 linear maps of an Eq2to2 layer, side by side
+        dense("pe.out.0", 2 * Cn, spec["hidden"])
+        dense("pe.out.1", spec["hidden"], C)
     return s
 
 
@@ -544,6 +625,8 @@ class NumpyOps:
     exp, log, sqrt, sin, cos, sinh, cosh, abs = (staticmethod(f) for f in (np.exp, np.log, np.sqrt, np.sin, np.cos,
                                                                              np.sinh, np.cosh, np.abs))
     minimum, maximum = staticmethod(np.minimum), staticmethod(np.maximum)
+    sign = staticmethod(np.sign)
+    eye_like = staticmethod(lambda n, ref: np.eye(n, dtype=np.asarray(ref).dtype))
     concat = staticmethod(lambda xs, axis: np.concatenate(xs, axis=axis))
     stack = staticmethod(lambda xs, axis: np.stack(xs, axis=axis))
     reshape = staticmethod(lambda x, shape: np.reshape(x, shape))
@@ -587,6 +670,8 @@ def _torch_ops():
         exp, log, sqrt, sin, cos, sinh, cosh, abs = (torch.exp, torch.log, torch.sqrt, torch.sin, torch.cos, torch.sinh,
                                                      torch.cosh, torch.abs)
         minimum, maximum = staticmethod(torch.minimum), staticmethod(torch.maximum)
+        sign = staticmethod(torch.sign)
+        eye_like = staticmethod(lambda n, ref: torch.eye(n, dtype=ref.dtype, device=ref.device))
         concat = staticmethod(lambda xs, axis: torch.cat(xs, dim=axis))
         stack = staticmethod(lambda xs, axis: torch.stack(xs, dim=axis))
         reshape = staticmethod(lambda x, shape: torch.reshape(x, shape))
@@ -607,6 +692,7 @@ def _torch_ops():
 
 
 def _keras_ops():
+    import keras
     from keras import ops
 
     class KerasOps:
@@ -615,6 +701,9 @@ def _keras_ops():
         relu = staticmethod(ops.relu)
         exp, log, sqrt, sin, cos, sinh, cosh, abs = ops.exp, ops.log, ops.sqrt, ops.sin, ops.cos, ops.sinh, ops.cosh, ops.abs
         minimum, maximum = staticmethod(ops.minimum), staticmethod(ops.maximum)
+        sign = staticmethod(ops.sign)
+        # Keras's eye is float32 whatever is around it, which TensorFlow will not multiply with float64
+        eye_like = staticmethod(lambda n, ref: ops.eye(n, dtype=keras.backend.standardize_dtype(ref.dtype)))
         concat = staticmethod(lambda xs, axis: ops.concatenate(xs, axis=axis))
         stack = staticmethod(lambda xs, axis: ops.stack(xs, axis=axis))
         reshape = staticmethod(lambda x, shape: ops.reshape(x, shape))
@@ -728,6 +817,74 @@ def _pairs(O, pt, eta, phi, mask, eps=1e-8):
     return u * pm
 
 
+def _psi(O, x):
+    """sgn(x) log(1 + |x|): the compression LorentzNet gives Minkowski products, whose range is the jet's."""
+    return O.sign(x) * O.log(1.0 + O.abs(x))
+
+
+def gram(O, pt, eta, phi, mask, scale):
+    """The Minkowski products <p_i, p_j> of a jet's particles (massless, its axis at eta = phi = 0), in units of
+    scale^2: 2 pt_i pt_j (cosh deta - cos dphi), written 4 pt_i pt_j (sinh^2(deta/2) + sin^2(dphi/2)) / 2 so that
+    no digit is lost to the cancellation of two nearly equal terms -- the particles of a jet are close. A product
+    is a Lorentz invariant: what a network computes from these alone is invariant under any boost or rotation."""
+    q = pt / scale
+    sh = O.sinh(0.5 * (O.expand(eta, 2) - O.expand(eta, 1)))
+    sn = O.sin(0.5 * (O.expand(phi, 2) - O.expand(phi, 1)))
+    return 2.0 * O.expand(q, 2) * O.expand(q, 1) * (sh * sh + sn * sn) * (O.expand(mask, 2) * O.expand(mask, 1))
+
+
+def _lgeb(O, P, name, h, G, pm, mask, c, n, last=False):
+    """One Lorentz group equivariant block of LorentzNet -- on the Gram matrix G_ij = <x_i, x_j> of its four-vectors
+    instead of their components. The block moves x_i to x_i + c sum_j phi_x(m_ij) x_j: x' = A x with A = 1 + c Phi,
+    so the products become G' = A G A^T, and |x_i - x_j|^2 = G_ii + G_jj - 2 G_ij. The same network as with
+    four-vectors, but only invariants are ever computed: invariant by construction, with no rounding of a boosted
+    component to break it."""
+    D = h.shape[-1]
+    eye = O.eye_like(n, G)
+    diag = O.sum(G * eye, 2)
+    norm = O.expand(diag, 2) + O.expand(diag, 1) - 2.0 * G
+    W = P[name + ".e0.W"]
+    wi, wj, wn, wg = W[:D], W[D:2 * D], W[2 * D:2 * D + 1], W[2 * D + 1:]
+    # phi_e's first layer is linear in (h_i, h_j, ...): h_i W_i and h_j W_j computed per particle, then paired
+    e = (O.expand(O.matmul(h, wi), 2) + O.expand(O.matmul(h, wj), 1)
+         + O.expand(_psi(O, norm), -1) * wn + O.expand(_psi(O, G), -1) * wg + P[name + ".e0.b"])
+    msg = O.relu(O.dense(O.relu(e), P[name + ".e1.W"], P[name + ".e1.b"]))
+    w = 1.0 / (1.0 + O.exp(-O.dense(msg, P[name + ".m.W"], P[name + ".m.b"])))
+    agg = O.sum(msg * w * O.expand(pm, -1), 2)
+    h = h + O.dense(O.relu(O.dense(O.concat([h, agg], -1), P[name + ".h0.W"], P[name + ".h0.b"])),
+                    P[name + ".h1.W"], P[name + ".h1.b"])
+    h = h * O.expand(mask, -1)
+    if last:
+        return h, G
+    phi = O.dense(O.relu(O.dense(msg, P[name + ".x0.W"], P[name + ".x0.b"])), P[name + ".x1.W"], P[name + ".x1.b"])
+    A = eye + c * O.reshape(phi, (-1, n, n)) * pm
+    return h, O.matmul(O.matmul(A, G), O.transpose(A, (0, 2, 1)))
+
+
+def _eq2to2(O, P, name, T, M, nreal, n):
+    """A PELICAN layer: the 15 linear maps of 2-tensors that commute with permuting the particles (Maron et al.
+    2019) -- T_ij itself, T_ji, the diagonal, the rows' and columns' means, the total, each placed on the diagonal,
+    along rows, along columns or everywhere -- each with its own weights, then ReLU. A map is linear: it is applied
+    to the small tensors (a row mean, [B, P, C]) before they are broadcast, never to the 15 copies of T."""
+    C = T.shape[-1]
+    W, b = P[name + ".W"], P[name + ".b"]
+    w = [W[k * C:(k + 1) * C] for k in range(15)]
+    eye = O.expand(O.expand(O.eye_like(n, T), 0), -1)
+    nr = O.expand(nreal, -1)
+    d = O.sum(T * eye, 2)                     # T_ii
+    r = O.sum(T, 2) / nr                      # row means
+    c = O.sum(T, 1) / nr                      # column means
+    sd = O.sum(d, 1) / nreal                  # the diagonal's mean
+    sa = O.sum(r, 1) / nreal                  # the whole mean
+    out = O.matmul(T, w[0]) + O.matmul(O.transpose(T, (0, 2, 1, 3)), w[1])
+    on_diag = O.matmul(d, w[2]) + O.matmul(r, w[4]) + O.matmul(c, w[5]) + O.expand(O.matmul(sd, w[3]) + O.matmul(sa, w[6]), 1)
+    rows = O.matmul(c, w[7]) + O.matmul(r, w[8]) + O.matmul(d, w[11])
+    cols = O.matmul(c, w[9]) + O.matmul(r, w[10]) + O.matmul(d, w[12])
+    every = O.matmul(sd, w[13]) + O.matmul(sa, w[14]) + b
+    out = out + O.expand(on_diag, 2) * eye + O.expand(rows, 2) + O.expand(cols, 1) + O.expand(O.expand(every, 1), 1)
+    return O.relu(out) * O.expand(M, -1)
+
+
 def forward(O, spec, P, inputs):
     """The logits of a batch: inputs are x (standardized particles), mask, pts (their eta, phi), pt (their
     pt in GeV) and hl (standardized high-level features), as prepare() makes them."""
@@ -766,6 +923,29 @@ def forward(O, spec, P, inputs):
         km = O.concat([O.ones_like(mask[:, :1]), mask], 1)
         cls = _block(O, P, "cls", cls, kv, km, H)
         return O.dense(_norm(O, P, "head.n", cls[:, 0, :]), P["head.W"], P["head.b"])
+    if m in LORENTZ:
+        G = gram(O, inputs["pt"], inputs["pts"][..., 0], inputs["pts"][..., 1], mask, spec["scale"])
+        if m == "lorentznet":
+            pm = O.expand(mask, 2) * O.expand(mask, 1) * (1.0 - O.eye_like(n, G))   # the pairs of two particles
+            J = O.sum(G, 2)                                                     # <p_i, J>, J the jet
+            mJ = O.sum(J, 1, True) * O.ones_like(J)                             # m_J^2
+            h = O.relu(O.dense(O.stack([_psi(O, J), _psi(O, mJ)], -1), P["lz.emb.W"], P["lz.emb.b"])) * O.expand(mask, -1)
+            for l in range(spec["layers"]):
+                h, G = _lgeb(O, P, "lz%d" % l, h, G, pm, mask, spec["c"], n, last=l == spec["layers"] - 1)
+            g = _masked_mean(O, h, mask)
+            return O.dense(O.relu(O.dense(g, P["lz.out.0.W"], P["lz.out.0.b"])), P["lz.out.1.W"], P["lz.out.1.b"])
+        M = O.expand(mask, 2) * O.expand(mask, 1)                               # the pairs, the diagonal included
+        nreal = O.maximum(O.sum(mask, 1, True), O.ones_like(O.sum(mask, 1, True)))
+        mJ = O.sum(O.sum(G, 2), 1, True)
+        rel = G * O.expand(nreal * nreal / (mJ + 1e-12), -1)                  # <p_i, p_j> over the jet's mean pair
+        T = O.relu(O.dense(O.stack([_psi(O, G), _psi(O, rel)], -1), P["pe.in.W"], P["pe.in.b"])) * O.expand(M, -1)
+        for l in range(spec["layers"]):
+            T = _eq2to2(O, P, "pe%d" % l, T, M, nreal, n)
+        eye = O.expand(O.expand(O.eye_like(n, T), 0), -1)
+        sd = O.sum(O.sum(T * eye, 2), 1) / nreal                               # 2 -> 0: the diagonal's mean,
+        sa = O.sum(O.sum(T, 2), 1) / (nreal * nreal)                           # and the whole mean
+        g = O.concat([sd, sa], -1)
+        return O.dense(O.relu(O.dense(g, P["pe.out.0.W"], P["pe.out.0.b"])), P["pe.out.1.W"], P["pe.out.1.b"])
     raise ValueError("no model " + m + " for " + str(C) + " classes")
 
 
@@ -989,6 +1169,13 @@ def _activations_per_jet(spec):
         pairs = n * n * (4 + 2 * p + H)                              # the pairs' kinematics through their MLP: the bias
         layer = 3 * H * n * n + n * (8 * d + 2 * f)                  # scores, softmax, weighted sum; q, k, v, norms, ffn
         return float(2 * n * d + pairs + (L + 1) * layer)
+    if m == "lorentznet":
+        d, dm, L = spec["dim"], spec["msg"], spec["layers"]
+        layer = n * n * (6 * dm + 8) + n * (6 * d + 2 * dm)          # the pairs' messages, weights, phi_x; A, G'
+        return float(6 * n * n + 2 * n * d + L * layer + 2 * d)
+    if m == "pelican":
+        ch, L = spec["channels"], spec["layers"]
+        return float(n * n * (8 + 4 * ch) + L * (n * n * 7 * ch + n * 12 * ch) + 2 * spec["hidden"])
     return 1.0e4
 
 
@@ -1294,7 +1481,9 @@ def _torch_net(spec, params, precision="float32"):
             return forward(O, spec, P, inputs)
 
         def weights(self):
-            return {k: self.p[_san(k)].detach().cpu().double().numpy() for k in self.names}
+            # copied: .double() of a float64 tensor is that tensor, .numpy() shares its memory, and a snapshot of the best
+            # epoch would go on training with the network
+            return {k: self.p[_san(k)].detach().cpu().double().numpy().copy() for k in self.names}
 
     return Net()
 
@@ -1440,9 +1629,7 @@ def _keras(require_tensorflow=False):
         if require_tensorflow:
             os.environ.setdefault("KERAS_BACKEND", "tensorflow")
         else:
-            backend = _keras_backend()
-            if backend:
-                os.environ.setdefault("KERAS_BACKEND", backend)
+            _pin_keras_backend()
         os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
         import keras
         if hasattr(keras.config, "set_x64_mode") and keras.config.backend() in ("jax", "torch", "numpy"):
@@ -1514,7 +1701,7 @@ def _keras_net(spec, params, precision="float32"):
             return forward(O, spec, self.v, inputs)
 
         def weights_np(self):
-            return {k: np.asarray(keras.ops.convert_to_numpy(self.v[k]), dtype=np.float64) for k in self.names}
+            return {k: np.array(keras.ops.convert_to_numpy(self.v[k]), dtype=np.float64) for k in self.names}   # a copy: a snapshot
 
         def load(self, values):
             for k, val in values.items():
@@ -1838,6 +2025,12 @@ def export(name, spec, weights):
     elif m == "transformer":
         for key in ("dim", "heads", "layers", "ffn", "pair"):
             meta[key.capitalize()] = spec[key]
+    elif m == "lorentznet":
+        meta.update({"Dim": spec["dim"], "Msg": spec["msg"], "Layers": spec["layers"], "Coef": repr(float(spec["c"])),
+                     "Scale": repr(float(spec["scale"]))})
+    elif m == "pelican":
+        meta.update({"Channels": spec["channels"], "Layers": spec["layers"], "Hidden": spec["hidden"],
+                     "Scale": repr(float(spec["scale"]))})
     sections = [("spec", json.dumps(_finite(spec), allow_nan=False))]
     for key, values in spec.get("norm", {}).items():
         sections.append(("norm." + key, np.asarray(values, dtype=np.float64)))
@@ -2136,6 +2329,75 @@ def irc(model, data, rows=64, eps=IRC_EPS, seed=1):
 # ---------------------------------------------------------------------------
 # The audit: a trained tagger refereed as a physics analysis would
 # ---------------------------------------------------------------------------
+
+def lorentz_transform(rng, rapidity):
+    """A random proper orthochronous Lorentz transformation: a rotation (Haar-random), then a boost of rapidity up
+    to `rapidity` along a random direction. Its columns are orthonormal for the metric diag(1, -1, -1, -1)."""
+    q, r = np.linalg.qr(rng.standard_normal((3, 3)))
+    q = q @ np.diag(np.sign(np.diag(r)))
+    if np.linalg.det(q) < 0:
+        q[:, 0] = -q[:, 0]
+    R = np.eye(4)
+    R[1:, 1:] = q
+    u = rng.standard_normal(3)
+    u /= np.linalg.norm(u)
+    y = rng.uniform(-rapidity, rapidity)
+    B = np.eye(4)
+    B[0, 0] = math.cosh(y)
+    B[0, 1:] = B[1:, 0] = math.sinh(y) * u
+    B[1:, 1:] = np.eye(3) + (math.cosh(y) - 1.0) * np.outer(u, u)
+    return B @ R
+
+
+def lorentz(model, data, rows=64, transforms=6, rapidity=2.0, seed=5):
+    """A network's symmetries measured: its logits on jets boosted and rotated by random Lorentz transformations
+    (rapidity up to `rapidity`, along any direction) and on jets whose particles are shuffled, against its logits
+    on the jets as they are -- float64, relative to the logits' scale. The massless particles' four-momenta are
+    built in the jet's frame (its axis at eta = phi = 0), transformed, and given back to the network as the
+    pt, eta, phi it reads. LorentzNet and PELICAN are invariant by construction: they move by float64's rounding
+    through the boost; the other networks, which read angles and momenta, are not."""
+    spec, weights = load(model)
+    ds = dataset(data)
+    n = min(int(rows), len(ds))
+    if spec["model"] == "mlp":
+        raise ValueError("the MLP reads high-level features, not particles: nothing to boost")
+    inp = prepare(spec, spec["norm"], dtype=np.float64, **_rows(ds, np.arange(n)))
+    base = np.asarray(forward(NumpyOps, spec, weights, inp))
+    scale = max(float(np.max(np.abs(base))), 1e-300)
+    rng = np.random.default_rng(seed)
+    pt, eta, phi, m = inp["pt"], inp["pts"][..., 0], inp["pts"][..., 1], inp["mask"]
+    p4 = np.stack([pt * np.cosh(eta), pt * np.cos(phi), pt * np.sin(phi), pt * np.sinh(eta)], -1)
+    worst, gammas = 0.0, []
+    for _ in range(int(transforms)):
+        L = lorentz_transform(rng, rapidity)
+        gammas.append(float(L[0, 0]))
+        q = p4 @ L.T
+        qpt = np.hypot(q[..., 1], q[..., 2])
+        qeta = np.arcsinh(q[..., 3] / np.maximum(qpt, 1e-300))
+        qphi = np.arctan2(q[..., 2], q[..., 1])
+        moved = dict(inp, pt=qpt * m, pts=np.stack([qeta, qphi], -1) * m[..., None])
+        worst = max(worst, float(np.max(np.abs(np.asarray(forward(NumpyOps, spec, weights, moved)) - base))) / scale)
+    shuffled = 0.0
+    for _ in range(2):
+        perm = {k: np.array(v) for k, v in inp.items()}
+        for i in range(n):
+            k = int(m[i].sum())
+            p = rng.permutation(k)
+            for key in ("x", "pts", "pt", "mask"):
+                if key in perm:
+                    perm[key][i, :k] = inp[key][i, :k][p]
+        shuffled = max(shuffled, float(np.max(np.abs(np.asarray(forward(NumpyOps, spec, weights, perm)) - base))) / scale)
+    by_construction = spec["model"] in LORENTZ
+    tol = 1e-9
+    verdict = ("Lorentz invariant to %.1e of the logits' scale -- float64's rounding through boosts of gamma up to %.1f"
+               % (worst, max(gammas))) if worst < tol else (
+        "not Lorentz invariant: a boost moves the logits by %.2g of their scale%s" % (
+            worst, "" if not by_construction else " -- which LorentzNet and PELICAN must not do: a bug"))
+    return {"model": spec["model"], "name": spec.get("name", ""), "jets": n, "transforms": int(transforms),
+            "rapidity": float(rapidity), "max_gamma": max(gammas), "lorentz": worst, "permutation": shuffled,
+            "invariant": worst < tol, "permutation_invariant": shuffled < tol, "by_construction": by_construction,
+            "verdict": verdict}
+
 
 def _auc_error(auc, n_signal, n_background):
     """The statistical error of an AUC from n_signal and n_background jets (Hanley, McNeil, Radiology 143
@@ -2588,9 +2850,29 @@ def pyhf_backends():
             present = importlib.util.find_spec(module) is not None
         except ImportError:
             present = False
-        if present and have.get(dist):
-            out.append(backend)
+        if present and have.get(dist) and (backend != "tensorflow" or importlib.util.find_spec("tensorflow_probability")):
+            out.append(backend)      # pyhf's TensorFlow backend needs tensorflow_probability as well, and says so only when used
     return out
+
+
+def framework_state():
+    """Keeps what a pyhf backend changes for the whole process. Its PyTorch backend in 64 bits makes float64 PyTorch's
+    default dtype, and pyhf.set_backend("numpy") does not take it back: every network built afterwards by this engine
+    was float64 against float32 inputs, ':ml unfold' stopping on 'mat1 and mat2 must have the same dtype'."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def scope():
+        torch = sys.modules.get("torch")
+        kept = torch.get_default_dtype() if torch is not None else None
+        try:
+            yield
+        finally:
+            torch = sys.modules.get("torch")
+            if torch is not None:
+                torch.set_default_dtype(kept if kept is not None else torch.float32)
+
+    return scope()
 
 
 def stats(spec, backends=None, mu_max=None, points=41, report=None):
@@ -2599,6 +2881,11 @@ def stats(spec, backends=None, mu_max=None, points=41, report=None):
     the best-fit signal strength, CLs at mu = 1 (observed and the expected band) and the 95 % CL upper
     limit. The backends' answers are compared: the same statistics on other engines, the agreement says
     how far to trust each."""
+    with framework_state():
+        return _stats(spec, backends, mu_max, points, report)
+
+
+def _stats(spec, backends, mu_max, points, report):
     import pyhf
     report = report or (lambda message: None)
     available = pyhf_backends()
@@ -2728,8 +3015,8 @@ def graph_status():
                                  "cmake": cmake if os.path.isdir(cmake) else ""}})
     except Exception as e:
         out.update({"torch": None, "torch_error": "%s: %s" % (type(e).__name__, e)})
-    out["keras"] = version("keras")
-    out["tensorflow"] = version("tensorflow") or version("tensorflow-cpu") or version("tensorflow-intel")
+    out["keras"] = _keras_version()
+    out["tensorflow"] = _tensorflow_version()
     out["backends"] = {name: importlib.util.find_spec(mod) is not None for name, mod in
                        (("tensorflow", "tensorflow"), ("jax", "jax"), ("torch", "torch"))}
     import sphere_graph
@@ -2769,7 +3056,7 @@ def graph_export(a, note=None):
         for line in proc.stdout:
             tail.append(line.rstrip())
             del tail[:-40]
-            if note and line.strip() and "Warning" not in line:
+            if note and line.strip() and not any(noise in line for noise in ("Warning", "oneDNN custom operations", "absl::InitializeLog")):
                 note(line.rstrip()[:200])
 
     reader = threading.Thread(target=read, daemon=True)
@@ -2832,6 +3119,7 @@ class Server:
     def __init__(self):
         self.out = sys.stdout
         sys.stdout = sys.stderr
+        _pin_keras_backend()
         self.lock = threading.Lock()
         self.requests = queue.Queue()
         self.canceled = set()
@@ -2915,6 +3203,92 @@ class Server:
             return crosscheck(a["model"], a["data"], int(a.get("rows", 256)))
         if cmd == "irc":
             return irc(a["model"], a["data"], int(a.get("rows", 64)))
+        if cmd == "lorentz":
+            return lorentz(a["model"], a["data"], int(a.get("rows", 64)), int(a.get("transforms", 6)),
+                           float(a.get("rapidity", 2.0)))
+        if cmd in ("shm_probe", "shm_predict", "shm_detach"):
+            import sphere_mlshm
+            if cmd == "shm_probe":
+                return sphere_mlshm.attach(a["path"]).probe(a.get("slot", 0), tuple(a.get("frameworks") or
+                                                                                    ("numpy", "torch", "jax")))
+            if cmd == "shm_detach":
+                return sphere_mlshm.detach(a["path"])
+            return sphere_mlshm.predict(a["path"], a["model"], a.get("x"), a.get("mask"), a.get("hl"), a.get("out", "logits"),
+                                        a.get("engine", "torch"), a.get("precision", "float32"))
+        if cmd in ("dana_optimize", "dana_check"):
+            import sphere_dana
+
+            def report(kind, epoch, h):
+                progress(0.0, "  %s epoch %d: loss %.5f%s%s" % (kind, epoch, h["loss"], ", held-out %.5f" % h["val_loss"]
+                                                               if "val_loss" in h else "", " (best)" if h.get("best") else ""))
+
+            keys = ("model", "target", "signal", "background", "norm", "jes", "bins", "bandwidth", "epochs", "pretrain",
+                    "batch", "lr", "seed", "points", "rows", "fd", "engine")
+            kw = {k: a[k] for k in keys if k in a and a[k] is not None}
+            if cmd == "dana_check":
+                kw.pop("epochs", None), kw.pop("pretrain", None), kw.pop("batch", None), kw.pop("lr", None), kw.pop("engine", None)
+                return sphere_dana.crosscheck(a["data"], backends=tuple(a.get("backends") or ("torch", "jax", "tensorflow")), **kw)
+            kw.pop("rows", None), kw.pop("fd", None)
+            r = sphere_dana.optimize(a["data"], report=report, canceled=canceled, **kw)
+            name = a.get("name") or "%s_%s_%s" % (os.path.splitext(os.path.basename(a["data"]))[0], r["model"], r["target"])
+            spec = dict(r.pop("spec"), name=name, trained_with="sphere_dana (%s, pyhf model: normsys %.2g, histosys jes %.2g, "
+                        "staterror)" % (r["target"], r["norm"], r["jes"]), dataset=r["dataset"])
+            spec["analysis"] = {k: v for k, v in r["analysis"].items() if k != "history"}
+            r["path"] = export(name, spec, r.pop("weights"))
+            r["name"] = name
+            return r
+        if cmd == "xgrad_check":
+            import sphere_xgrad
+            return sphere_xgrad.check(report=lambda m: progress(0.0, m))
+        if cmd == "xf_fuzz":
+            import sphere_xf
+            return sphere_xf.fuzz(seed=int(a.get("seed", 7)), rounds=int(a.get("rounds", 6)), gradients=bool(a.get("gradients", True)),
+                                  folder=a.get("folder"), only=a.get("only"), report=lambda m: progress(0.0, m))
+        if cmd == "twin":
+            import sphere_xf
+            return sphere_xf.twin_command(a["model"], a.get("to", "torch"), a.get("out"), a.get("shapes"), report=lambda m: progress(0.0, m))
+        if cmd in ("xf_check", "flow_nle", "flow_fastsim"):
+            def note(text):
+                progress(0.0, text)
+
+            if cmd == "xf_check":
+                import sphere_xf
+                return sphere_xf.check(a["graph"], data=a.get("data"), rows=int(a.get("rows", 8)),
+                                       engines=tuple(a.get("engines") or ("torch", "jax", "tensorflow")),
+                                       exports=bool(a.get("exports", True)), bench=bool(a.get("bench", True)),
+                                       folder=a.get("folder") or models_folder(), report=note)
+            import sphere_flows
+            keys = ("samples", "epochs", "layers", "bins", "hidden", "experiments", "events", "calibration", "seed",
+                    "jets", "frameworks")
+            kw = {k: a[k] for k in keys if a.get(k) is not None}
+            if cmd == "flow_nle":
+                kw.pop("jets", None)
+                return sphere_flows.nle(report=note, canceled=canceled, **kw)
+            for k in ("samples", "experiments", "events", "calibration"):
+                kw.pop(k, None)
+            return sphere_flows.fastsim(report=note, canceled=canceled, **kw)
+        if cmd in ("sbi_run", "unfold_run", "automl_check", "automl_search"):
+            def note(text):
+                progress(0.0, text)
+
+            if cmd == "sbi_run":
+                import sphere_sbi
+                keys = ("samples", "epochs", "width", "depth", "alpha", "ensemble", "experiments", "events",
+                        "template_events", "calibration", "seed")
+                kw = {k: a[k] for k in keys if a.get(k) is not None}
+                if a.get("estimators"):
+                    kw["estimators"] = tuple(a["estimators"])
+                return sphere_sbi.run(report=note, canceled=canceled, **kw)
+            if cmd == "unfold_run":
+                import sphere_unfold
+                keys = ("jets", "iterations", "epochs", "later", "bins", "closure", "seed")
+                return sphere_unfold.run(report=note, canceled=canceled, **{k: a[k] for k in keys if a.get(k) is not None})
+            import sphere_automl
+            if cmd == "automl_check":
+                return sphere_automl.check(seeds=int(a.get("seeds", 3)), report=note)
+            keys = ("model", "trials", "epochs", "max_dcorr", "max_params", "max_latency_us", "seed", "name")
+            return sphere_automl.search(a["data"], report=note, canceled=canceled,
+                                        **{k: a[k] for k in keys if a.get(k) is not None})
         if cmd == "audit":
             return audit(a["model"], a["data"], int(a.get("rows", 2000)), int(a.get("irc_rows", 64)),
                          float(a.get("jes", 0.02)))
@@ -2941,7 +3315,10 @@ class Server:
             return graph_export(a, note=lambda text: progress(0.0, text))
         if cmd == "commands":
             return {"commands": ["ping", "frameworks", "dataset", "toy", "models", "train", "predict", "crosscheck",
-                                 "irc", "audit", "calibrate", "pareto", "stats", "graph_status", "graph_export", "quit"]}
+                                 "irc", "lorentz", "audit", "calibrate", "pareto", "stats", "graph_status", "graph_export",
+                                 "shm_probe", "shm_predict", "shm_detach", "dana_optimize", "dana_check", "sbi_run",
+                                 "unfold_run", "automl_check", "automl_search", "xf_check", "flow_nle", "flow_fastsim",
+                                 "xgrad_check", "twin", "xf_fuzz", "commands", "quit"]}
         if cmd == "quit":
             raise SystemExit
         raise ValueError("unknown command '%s'; 'commands' lists them" % cmd)

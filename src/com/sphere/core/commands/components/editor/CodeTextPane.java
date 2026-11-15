@@ -213,6 +213,29 @@ public final class CodeTextPane extends JTextArea {
         repaint();
     }
 
+    /** The occurrences of one resolved symbol, {start, end, 1 for a binding}: shown instead of the textual ones. */
+    private List<int[]> symbolMarks = List.of();
+
+    /**
+     * Marks the occurrences of a symbol, as a scope analysis found them (the same
+     * name in another scope is left out); an empty list goes back to the word under
+     * the caret.
+     */
+    public void setSymbolMarks(List<int[]> marks) {
+        List<int[]> now = marks == null ? List.of() : List.copyOf(marks);
+        if (now.isEmpty() && symbolMarks.isEmpty()) {
+            return;
+        }
+        boolean same = now.size() == symbolMarks.size();
+        for (int i = 0; same && i < now.size(); i++) {
+            same = java.util.Arrays.equals(now.get(i), symbolMarks.get(i));
+        }
+        if (!same) {
+            symbolMarks = now;
+            repaint();
+        }
+    }
+
     public void setScrollBeyondLastLine(boolean value) {
         this.scrollBeyondLastLine = value;
         revalidate();
@@ -572,6 +595,19 @@ public final class CodeTextPane extends JTextArea {
             return;
         }
         Document doc = getDocument();
+        if (!symbolMarks.isEmpty()) {
+            int length = doc.getLength();
+            int from = lineStartOffset(lines[0]);
+            int to = lineEndOffset(lines[1]);
+            for (int[] m : symbolMarks) {
+                if (m.length < 2 || m[1] > length || m[1] < from || m[0] > to) {
+                    continue;
+                }
+                paintRange(g2, m[0], m[1], m.length > 2 && m[2] == 1 ? EditorTheme.occurrenceWrite() : EditorTheme.occurrence(),
+                           null);
+            }
+            return;
+        }
         int from = lineStartOffset(lines[0]);
         int to = lineEndOffset(lines[1]);
         String visible;

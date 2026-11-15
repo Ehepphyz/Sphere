@@ -33,6 +33,8 @@ public final class EditorTheme {
     private static final Color SEED_OPERATOR     = new Color(180, 184, 192);
     private static final Color SEED_VARIABLE     = new Color(156, 220, 254);
     private static final Color SEED_CONSTANT     = new Color( 79, 193, 255);
+    /** Modules: the one hue (amber) no other token wears, so np. reads apart from a variable. */
+    private static final Color SEED_NAMESPACE    = new Color(232, 168,  92);
 
     /** Bracket pairs by depth, the three hues VS Code settled on. */
     private static final Color SEED_BRACKET_1    = new Color(255, 215,   0);
@@ -330,20 +332,41 @@ public final class EditorTheme {
 
     // ---- Tokens
 
+    /** The token seeds solved together, so that each reads and no two look alike. */
+    private static final Color[] TOKEN_SEEDS = {
+        SEED_KEYWORD, SEED_TYPE, SEED_FUNCTION, SEED_NUMBER, SEED_STRING, SEED_COMMENT,
+        SEED_PREPROCESSOR, SEED_OPERATOR, SEED_VARIABLE, SEED_CONSTANT, SEED_NAMESPACE };
+    /** Below this OKLab distance two token colors are pulled apart (the dark seeds are 0.067 at closest). */
+    private static final double TOKEN_DISTINCT = 0.06;
+    private static volatile Color[] tokenPalette;
+    private static volatile Color tokenBackground;
+
+    private static Color[] tokens() {
+        Color bg = background();
+        Color[] p = tokenPalette;
+        if (p == null || !bg.equals(tokenBackground)) {
+            p = com.sphere.theme.Contrast.palette(TOKEN_SEEDS, bg, com.sphere.theme.Contrast.AA, TOKEN_DISTINCT);
+            tokenPalette = p;
+            tokenBackground = bg;
+        }
+        return p;
+    }
+
     public static Color token(TokenKind kind) {
         switch (kind) {
-            case KEYWORD:      return readable(SEED_KEYWORD);
-            case TYPE:         return readable(SEED_TYPE);
-            case FUNCTION:     return readable(SEED_FUNCTION);
-            case DECORATOR:    return readable(SEED_FUNCTION);
-            case NUMBER:       return readable(SEED_NUMBER);
-            case STRING:       return readable(SEED_STRING);
-            case CHARACTER:    return readable(SEED_STRING);
-            case COMMENT:      return readable(SEED_COMMENT);
-            case PREPROCESSOR: return readable(SEED_PREPROCESSOR);
-            case OPERATOR:     return readable(SEED_OPERATOR);
-            case VARIABLE:     return readable(SEED_VARIABLE);
-            case CONSTANT:     return readable(SEED_CONSTANT);
+            case KEYWORD:      return tokens()[0];
+            case TYPE:         return tokens()[1];
+            case FUNCTION:     return tokens()[2];
+            case DECORATOR:    return tokens()[2];
+            case NUMBER:       return tokens()[3];
+            case STRING:       return tokens()[4];
+            case CHARACTER:    return tokens()[4];
+            case COMMENT:      return tokens()[5];
+            case PREPROCESSOR: return tokens()[6];
+            case OPERATOR:     return tokens()[7];
+            case VARIABLE:     return tokens()[8];
+            case CONSTANT:     return tokens()[9];
+            case NAMESPACE:    return tokens()[10];
             case BRACKET_1:    return readable(SEED_BRACKET_1);
             case BRACKET_2:    return readable(SEED_BRACKET_2);
             case BRACKET_3:    return readable(SEED_BRACKET_3);
@@ -357,10 +380,30 @@ public final class EditorTheme {
     // Color arithmetic
     // =======================================================================
 
-    /** Darkens a seed stated for a dark surface when the surface turns light. */
+    /**
+     * A seed that reads on the current background: its WCAG contrast reaches 4.5
+     * (AA), moving only its OKLab lightness, so the hue stays the one chosen. A
+     * seed that already reads is returned as is. The former rule darkened every
+     * seed by 45% on a light surface and left a dark one alone, which put
+     * function names at 2.6:1 on white and could not see a seed failing on dark.
+     */
     public static Color readable(Color seed) {
-        return isDarkSurface() ? seed : shift(seed, -0.45f);
+        Color bg = background();
+        Color cached = READABLE_CACHE.get(seed);
+        if (cached != null && bg.equals(readableBackground)) {
+            return cached;
+        }
+        if (!bg.equals(readableBackground)) {
+            READABLE_CACHE.clear();
+            readableBackground = bg;
+        }
+        Color c = com.sphere.theme.Contrast.readable(seed, bg, com.sphere.theme.Contrast.AA);
+        READABLE_CACHE.put(seed, c);
+        return c;
     }
+
+    private static final java.util.Map<Color, Color> READABLE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+    private static volatile Color readableBackground;
 
     /** Moves a color toward white for a positive amount, toward black otherwise. */
     public static Color shift(Color base, float amount) {

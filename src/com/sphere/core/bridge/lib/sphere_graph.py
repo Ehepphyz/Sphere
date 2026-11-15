@@ -114,14 +114,21 @@ def _positional(model, n):
     return wrapper
 
 
-def export(model, example, name, feeds=None, dynamic_batch=True, folder=None, framework=None, check=True):
+def export(model, example, name, feeds=None, dynamic_batch=True, folder=None, framework=None, check=True,
+           trainable=True):
     """The model as a graph: models/<name>.sng.spx, and the graph itself (a dict). example is the tuple of
     the model's inputs (tensors) for the trace; with dynamic_batch, their first dimension is left free.
     feeds says what the inputs are, for Sphere's commands to feed them: "particles" (Sphere's raw particle
     features [B, P, F] and their mask [B, P], as ':ml jets' writes them), "high_level" ([B, H]), or None.
 
     A model whose own code fixes its batch -- Keras's, on its torch backend, does -- cannot be traced with a
-    free one; it is traced at two batches instead, and the two graphs made one of any batch (_differential)."""
+    free one; it is traced at two batches instead, and the two graphs made one of any batch (_differential).
+
+    trainable keeps the model's parameters (those that require a gradient) as the weights PyTorch trains: what
+    the model computes from them alone -- a Linear's weight transposed -- stays in the graph instead of being
+    folded, and each is written with its name in the model (the section "params"). Java's autograd
+    (GraphAutograd) then trains the graph in the parametrization PyTorch would: the same gradients, the same
+    optimizer steps. The values computed are the same either way, to the bit."""
     import copy
     import torch
     try:
@@ -139,7 +146,8 @@ def export(model, example, name, feeds=None, dynamic_batch=True, folder=None, fr
     names = []
     for i, e in enumerate(example):
         names.append("x" if i == 0 else "mask" if i == 1 and feeds == "particles" else "input%d" % i)
-    about = {"name": name, "feeds": feeds or "", "framework": framework or "torch " + torch.__version__}
+    about = {"name": name, "feeds": feeds or "", "framework": framework or "torch " + torch.__version__,
+             "trainable": bool(trainable)}
     if not dynamic_batch:
         graph = _trace(m, example, names, False, about)
         graph["batch"] = "fixed"
@@ -148,7 +156,7 @@ def export(model, example, name, feeds=None, dynamic_batch=True, folder=None, fr
             graph = _trace(m, example, names, True, about)
             graph["batch"] = "symbolic"
         except Exception as e:
-            if "Constraints violated" not in str(e) and "specialized" not in str(e):
+            if not any(t in str(e) for t in ("Constraints violated", "specialized", "symbolic sizes")):
                 raise
             graph = _differential(m, example, names, about)
     graph["example_shapes"] = [list(e.shape) if torch.is_tensor(e) else [] for e in example]
@@ -170,7 +178,205 @@ def export(model, example, name, feeds=None, dynamic_batch=True, folder=None, fr
     return graph
 
 
-def _trace(m, example, names, dynamic, about):
+def export_program(program, example, name, folder=None, trainable=False):
+    """A program torch.export already made (a .pt2 file), as a graph: of the batch it was exported for, unless it was
+    exported with a free one. The trace, without tracing."""
+    import torch
+    names = ["x" if i == 0 else "input%d" % i for i in range(len(example))]
+    graph = _trace(None, example, names, False, {"name": name, "feeds": "", "framework": "torch " + torch.__version__, "trainable": trainable},
+                   program=program)
+    graph["batch"] = "fixed"
+    graph["example_shapes"] = [list(e.shape) for e in example]
+    graph["precision"] = "mixed" if any(nd["dtype"] in ("float32", "float16", "bfloat16") for nd in graph["nodes"]) else "float64"
+    arrays = _arrays(graph, list(example))
+    graph["optimized"] = optimize(graph, [arrays[i] for i in graph["inputs"]])
+    if not graph.get("_short"):
+        _shorten(graph)
+    graph["path"] = save(graph, folder)
+    return graph
+
+
+_SCALAR_OPS = {"add": operator.add, "sub": operator.sub, "mul": operator.mul, "div": operator.truediv,
+               "floordiv": operator.floordiv, "remainder": operator.mod, "pow": operator.pow, "neg": operator.neg,
+               "eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le, "gt": operator.gt, "ge": operator.ge,
+               "abs": abs, "min": min, "max": max, "__not__": operator.not_, "__and__": operator.and_, "__or__": operator.or_}
+
+
+def torchscript_module(script):
+    """A TorchScript module as a plain nn.Module of the same computation, which torch.export can follow where it cannot
+    follow TorchScript: the frozen, inlined graph is replayed node by node through torch.ops.aten, each by its own schema,
+    the weights Parameters again (those the module had as parameters; its buffers stay buffers). What TorchScript computes
+    on Python numbers -- sizes, list indices -- is computed in Python, and its branches and loops are run: a condition on
+    shapes is settled at the trace, as tracing a module would, and export's check holds the graph to the module at batches
+    the trace did not see. A condition on the data cannot be followed, and is refused."""
+    import torch
+    was = {"self." + k for k, _ in script.named_parameters()}
+    frozen = torch.jit.freeze(script.eval(), optimize_numerics=False)   # no folding of a BatchNorm into its convolution: both stay trainable
+    ir = frozen.inlined_graph
+
+    class Replay(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self._numbers, self._weights = {}, {}
+            for k, n in enumerate(ir.findAllNodes("prim::Constant", True)):
+                value = n.output().toIValue()
+                name = n.output().debugName()
+                if torch.is_tensor(value):
+                    attr = "w%d" % k
+                    if name in was and value.is_floating_point():
+                        self.register_parameter(attr, torch.nn.Parameter(value.clone().detach()))
+                    else:
+                        self.register_buffer(attr, value.clone().detach())
+                    self._weights[name] = attr
+                else:
+                    self._numbers[name] = value
+
+        def forward(self, *inputs):
+            env = dict(self._numbers)
+            env.update((k, getattr(self, a)) for k, a in self._weights.items())
+            env.update(zip([i.debugName() for i in list(ir.inputs())[1:]], inputs))
+            self._nodes(ir.nodes(), env)
+            out = [env[o.debugName()] for o in ir.outputs()]
+            return out[0] if len(out) == 1 else tuple(out)
+
+        def _nodes(self, nodes, env):
+            for n in nodes:
+                if n.kind() != "prim::Constant":
+                    self._node(n, env)
+
+        def _block(self, block, env, values=()):
+            env.update(zip([i.debugName() for i in block.inputs()], values))
+            self._nodes(block.nodes(), env)
+            return [env[o.debugName()] for o in block.outputs()]
+
+        def _node(self, n, env):
+            kind = n.kind()
+            args = [env[i.debugName()] for i in n.inputs()]
+            outs = [o.debugName() for o in n.outputs()]
+            domain, _, name = kind.partition("::")
+            if domain == "prim":
+                if name == "If":
+                    env.update(zip(outs, self._block(list(n.blocks())[0 if bool(args[0]) else 1], env)))
+                elif name == "Loop":
+                    body, values, trip, go = next(iter(n.blocks())), list(args[2:]), 0, bool(args[1])
+                    while go and trip < int(args[0]):
+                        back = self._block(body, env, [trip] + values)
+                        go, values, trip = bool(back[0]), list(back[1:]), trip + 1
+                    env.update(zip(outs, values))
+                elif name in ("ListConstruct", "TupleConstruct"):
+                    env[outs[0]] = list(args) if name == "ListConstruct" else tuple(args)
+                elif name in ("ListUnpack", "TupleUnpack"):
+                    env.update(zip(outs, args[0]))
+                elif name == "NumToTensor":
+                    env[outs[0]] = torch.as_tensor(args[0])
+                elif name == "unchecked_cast":
+                    env[outs[0]] = args[0]
+                elif name == "dtype":
+                    env[outs[0]] = args[0].dtype
+                elif name == "device":
+                    env[outs[0]] = args[0].device
+                elif name == "Uninitialized":
+                    env[outs[0]] = None
+                elif name in ("RaiseException", "Print"):
+                    pass
+                else:
+                    raise GraphError("TorchScript's prim::%s cannot be replayed" % name)
+                return
+            if domain != "aten":
+                raise GraphError("TorchScript's %s cannot be replayed" % kind)
+            env.update(zip(outs, self._aten(n, name, args, len(outs))))
+
+        @staticmethod
+        def _aten(n, name, args, count):
+            tensors = any(torch.is_tensor(a) for a in args)
+            if name in ("Int", "IntImplicit"):
+                return [int(args[0])]
+            if name in ("Float", "FloatImplicit"):
+                return [float(args[0])]
+            if name in ("Bool", "ScalarImplicit"):
+                return [bool(args[0]) if name == "Bool" else args[0].item()]
+            if name == "size":
+                return [args[0].shape[args[1]] if len(args) == 2 else list(args[0].shape)]
+            if name == "dim":
+                return [args[0].dim()]
+            if name == "len":
+                return [len(args[0])]
+            if name == "__getitem__":
+                return [args[0][args[1]]]
+            if name in ("__is__", "__isnot__"):
+                same = args[0] is args[1] or (args[0] is None and args[1] is None)
+                return [same if name == "__is__" else not same]
+            if not tensors and name in _SCALAR_OPS:
+                return [_SCALAR_OPS[name](*args)]
+            if name == "_convolution":      # its internal form, which a symbolic batch cannot go through; the arguments agree
+                return [torch.ops.aten.convolution.default(*args[:9])]
+            head = n.schema().split("(")[0]
+            overload = head.split(".")[1] if "." in head else "default"
+            try:
+                fn = getattr(getattr(torch.ops.aten, name), overload)
+            except AttributeError:
+                raise GraphError("TorchScript's aten::%s has no operator to replay" % name)
+            pos, kw = [], {}
+            for a, v in zip(fn._schema.arguments, args):
+                if a.kwarg_only:
+                    kw[a.name] = v
+                else:
+                    pos.append(v)
+            r = fn(*pos, **kw)
+            return [r] if count == 1 else list(r)
+
+    return Replay()
+
+
+def _torchscript_shapes(script):
+    """The shapes of a TorchScript module's inputs, rows without their batch. A file reloaded does not remember them, but its
+    weights say what it takes: the first layer an input reaches gives the width of its rows (a Linear's weight, a convolution's
+    channels), and the module itself says whether a shape will do, by running on it. None if nothing does."""
+    import itertools
+    import torch
+    frozen = torch.jit.freeze(script.eval(), optimize_numerics=False)
+    inputs = list(frozen.inlined_graph.inputs())[1:]
+    known = [i.type().sizes() if isinstance(i.type(), torch._C.TensorType) else None for i in inputs]
+    if all(known):
+        return [[int(s) for s in k[1:]] for k in known]
+
+    def weight_of(node):
+        w = node.inputsAt(1)
+        return w.toIValue() if w.node().kind() == "prim::Constant" else None
+
+    def guesses(value):
+        """Row shapes to try for this input, likeliest first: from the first layer it reaches, breadth first."""
+        seen, front = set(), [value]
+        for _ in range(12):
+            nxt = []
+            for v in front:
+                for use in v.uses():
+                    n = use.user
+                    if n.kind() == "aten::linear" and torch.is_tensor(weight_of(n)):
+                        d = int(weight_of(n).shape[1])
+                        return [[d]] + [[p, d] for p in (2, 8, 16, 32, 64, 128)]
+                    if n.kind() == "aten::_convolution" and torch.is_tensor(weight_of(n)):
+                        c, nd = int(weight_of(n).shape[1]), weight_of(n).dim() - 2
+                        return [[c] + [s] * nd for s in (8, 16, 28, 32, 64, 128, 224)]
+                    if id(n) not in seen:
+                        seen.add(id(n))
+                        nxt.extend(n.outputs())
+            front = nxt
+        return [[d] for d in range(1, 33)]
+
+    dtype = next((p.dtype for p in script.parameters() if p.is_floating_point()), torch.float32)
+    choices = [[[int(s) for s in k[1:]]] if k else guesses(i) for i, k in zip(inputs, known)]
+    with torch.no_grad():
+        for rows in itertools.islice(itertools.product(*choices), 512):
+            try:
+                frozen(*[torch.zeros([2] + r, dtype=dtype) for r in rows])
+                return [list(r) for r in rows]
+            except Exception:
+                continue
+    return None
+
+
+def _trace(m, example, names, dynamic, about, program=None):
     """torch.export of the model on these inputs -- their first dimension symbolic, if dynamic -- decomposed to
     core ATen: the graph of its weights and its nodes, their arguments encoded; folded and pruned."""
     import torch
@@ -180,12 +386,13 @@ def _trace(m, example, names, dynamic, about):
         b = Dim("batch", min=1, max=1 << 24)
         shapes = tuple({0: b} if torch.is_tensor(e) and e.dim() > 0 else None for e in example)
     with torch.no_grad():
-        ep = torch.export.export(m, tuple(example), dynamic_shapes=shapes)
+        ep = program if program is not None else torch.export.export(m, tuple(example), dynamic_shapes=shapes)
         core = ep.run_decompositions()
     sig = core.graph_signature
-    consts, inputs, kinds = {}, [], {}
+    consts, inputs, kinds, trained = {}, [], {}, {}
     params = dict(core.state_dict)
     params.update(getattr(core, "constants", {}) or {})
+    learns = {k: bool(p.requires_grad) for k, p in m.named_parameters()} if m is not None else {}
     user = iter(names)
     for s in sig.input_specs:
         kind = s.kind.name
@@ -194,8 +401,20 @@ def _trace(m, example, names, dynamic, about):
             kinds[s.arg.name] = next(user, s.arg.name)
         elif kind in ("PARAMETER", "BUFFER", "CONSTANT_TENSOR"):
             consts[s.arg.name] = np.asarray(params[s.target].detach().cpu().double().numpy(), dtype=np.float64)
+            if kind == "PARAMETER" and learns.get(s.target, True):
+                trained[s.arg.name] = s.target   # a weight the optimizer moves, by its name in the model
         else:
             raise GraphError("an input of kind %s (%s)" % (kind, s.arg.name))
+    # Keras on its torch backend hands its variables over as constants lifted from its Parameters, which then feed nothing:
+    # the same numbers, and the weights an optimizer would move
+    free = [k for k in trained]
+    for k, v in consts.items():
+        if k in trained:
+            continue
+        twin = next((p for p in free if consts[p].shape == v.shape and v.size and np.array_equal(consts[p], v)), None)
+        if twin is not None:
+            free.remove(twin)
+            trained[k] = trained[twin]
     outputs = [s.arg.name for s in sig.output_specs if s.kind.name == "USER_OUTPUT"]
     nodes, tensors, missing = [], set(inputs) | set(consts), {}
     for n in core.graph.nodes:
@@ -224,9 +443,11 @@ def _trace(m, example, names, dynamic, about):
         nd["enc"] = [_encode(a, tensors) for a in nd["args"]]
     graph = {"name": about["name"], "inputs": inputs, "input_names": [kinds[i] for i in inputs], "outputs": outputs,
              "consts": consts, "shapes": {k: list(v.shape) for k, v in consts.items()}, "nodes": nodes,
-             "feeds": about["feeds"], "framework": about["framework"]}
+             "feeds": about["feeds"], "framework": about["framework"],
+             "params": trained if about.get("trainable") else {}}
     _fold(graph)
     _prune(graph)
+    graph["params"] = {k: v for k, v in graph["params"].items() if k in graph["consts"]}
     return graph
 
 
@@ -305,8 +526,11 @@ def _refs(enc):
 
 def _fold(graph):
     """What depends on the weights alone, computed once -- unless it would grow (an expand of a weight stays an
-    expand): the graph a model leaves is the weights transposed, reshaped, scaled, once and for all."""
+    expand): the graph a model leaves is the weights transposed, reshaped, scaled, once and for all. A weight to
+    be trained (graph["params"]) is not folded into what it feeds: its gradient is the model's."""
     known = dict(graph["consts"])
+    for p in graph.get("params") or {}:
+        known.pop(p, None)
     kept = []
     for nd in graph["nodes"]:
         refs = _refs(nd["enc"])
@@ -585,6 +809,7 @@ def _shorten(graph):
     if blocks:
         graph["blocks"] = renamed
     graph["inputs"] = [m[i] for i in graph["inputs"]]
+    graph["params"] = {m[k]: v for k, v in (graph.get("params") or {}).items() if k in graph["consts"]}
     graph["consts"] = {m[k]: v for k, v in graph["consts"].items()}
     graph["shapes"] = {m[k]: v for k, v in graph["shapes"].items()}
     graph["outputs"] = [m[o] for o in graph["outputs"]]
@@ -626,9 +851,17 @@ def save(graph, folder=None):
             "Precision": graph.get("precision", "float64"), "Nodes": len(graph["nodes"]),
             "ExampleShapes": ";".join(",".join(str(s) for s in sh) for sh in graph.get("example_shapes", [])),
             "RowsIndependent": 1 if graph.get("rows_independent") else 0, "Batch": graph.get("batch", "symbolic")}
+    params = {k: v for k, v in (graph.get("params") or {}).items() if k in graph["consts"]}
+    meta["Trainable"] = 1 if params else 0
+    meta["Params"] = len(params)
+    for key in ("trained_from", "trained_with"):
+        if graph.get(key):
+            meta[key.title().replace("_", "")] = graph[key]
     from sphere_ml import write_spx
-    sections = [("graph", text(graph))] + [("w." + k, np.asarray(v, dtype=np.float64).ravel())
-                                           for k, v in graph["consts"].items()]
+    sections = [("graph", text(graph))]
+    if params:   # the weights the optimizer moves, each by its name in the model: "w3<TAB>encoder.0.weight"
+        sections.append(("params", "".join("%s\t%s\n" % kv for kv in params.items())))
+    sections += [("w." + k, np.asarray(v, dtype=np.float64).ravel()) for k, v in graph["consts"].items()]
     write_spx(path, graph["name"], sections, meta)
     return path
 
@@ -644,7 +877,12 @@ def load(name, folder=None):
              "rows_independent": meta.get("RowsIndependent", "0") == "1",
              # a scalar input's shape is empty, and kept: two of them are ";"
              "example_shapes": [[int(s) for s in sh.split(",") if s] for sh in meta.get("ExampleShapes", "").split(";")]
-             if meta.get("ExampleShapes", "") else []}
+             if meta.get("ExampleShapes", "") else [], "params": {}}
+    if "params" in f:
+        for line in f.text("params").splitlines():
+            if "\t" in line:
+                k, v = line.split("\t", 1)
+                graph["params"][k] = v
     block = None   # the block being read, between begin and end
     for line in f.text("graph").splitlines():
         if not line or line.startswith("#"):
@@ -971,7 +1209,7 @@ def _expand(x, sizes):
 
 def _reduce(f):
     def op(x, dims=None, keepdim=False, dtype=None):
-        if dims is None or (isinstance(dims, list) and not dims):
+        if dims is None or (isinstance(dims, list) and not dims) or x.ndim == 0:
             return np.asarray(f(x, axis=None, keepdims=keepdim))
         return np.asarray(f(x, axis=_dims(dims, x.ndim), keepdims=keepdim))
     return op
@@ -1002,12 +1240,10 @@ def _layer_norm(x, shape, w, b, eps):
 
 def _batch_norm(x, w, b, mean, var, momentum, eps):
     shape = [1, -1] + [1] * (x.ndim - 2)
-    y = (x - mean.reshape(shape)) / np.sqrt(var.reshape(shape) + eps)
-    if w is not None:
-        y = y * w.reshape(shape)
-    if b is not None:
-        y = y + b.reshape(shape)
-    return (y, np.zeros(0), np.zeros(0))
+    # as PyTorch computes it, a linear and a constant term: the same number, and the same NaN from an infinite weight
+    alpha = (1.0 if w is None else w.reshape(shape)) / np.sqrt(var.reshape(shape) + eps)
+    beta = (0.0 if b is None else b.reshape(shape)) - mean.reshape(shape) * alpha
+    return (x * alpha + beta, np.zeros(0), np.zeros(0))
 
 
 def _softmax(x, dim, half=False):
@@ -1031,10 +1267,24 @@ def _slice(x, dim=0, start=None, end=None, step=1):
     return _c(x[tuple(idx)])
 
 
+def _order(x, dim, descending):
+    """The permutation of PyTorch's sort: stable, NaN greater than everything (first when descending; -x would put it last)."""
+    return np.lexsort((-x, ~np.isnan(x)), axis=dim) if descending else np.argsort(x, axis=dim, kind="stable")
+
+
+def _lifted(op):
+    """An operation along a dimension, on a 0-d tensor too: PyTorch takes one as a vector of one element."""
+    def f(x, d=None, *rest, **kw):
+        if np.ndim(x) > 0:
+            return op(x, d, *rest, **kw)
+        out = op(np.reshape(x, (1,)), None if d is None else 0, *rest, **kw)
+        return tuple(np.reshape(o, ()) for o in out) if isinstance(out, tuple) else np.reshape(out, ())
+    return f
+
+
 def _topk(x, k, dim=-1, largest=True, sorted=True):
     dim = dim % x.ndim
-    key = -x if largest else x
-    idx = np.argsort(key, axis=dim, kind="stable")
+    idx = _order(x, dim, largest)
     idx = np.take(idx, np.arange(int(k)), axis=dim)
     return (np.take_along_axis(x, idx, axis=dim), idx.astype(np.float64))
 
@@ -1226,13 +1476,13 @@ OPS = {
     "sin.default": np.sin, "cos.default": np.cos, "sinh.default": np.sinh, "cosh.default": np.cosh,
     "atan.default": np.arctan, "asin.default": np.arcsin, "acos.default": np.arccos,
     "log1p.default": np.log1p, "expm1.default": np.expm1, "log2.default": np.log2, "log10.default": np.log10,
-    "erf.default": _erf, "reciprocal.default": lambda x: 1.0 / x, "sign.default": np.sign,
+    "erf.default": _erf, "reciprocal.default": lambda x: 1.0 / x,
+    "sign.default": lambda x: np.where(np.isnan(x), 0.0, np.sign(x)),   # PyTorch's sign of NaN is 0
     "floor.default": np.floor, "ceil.default": np.ceil, "round.default": np.round, "trunc.default": np.trunc,
     "silu.default": lambda x: x / (1.0 + np.exp(-x)),
     "leaky_relu.default": lambda x, s=0.01: np.where(x > 0, x, s * x),
     "hardtanh.default": lambda x, lo=-1.0, hi=1.0: np.clip(x, lo, hi),
-    "elu.default": lambda x, alpha=1.0, scale=1.0, input_scale=1.0: scale * np.where(x > 0, x, alpha * (np.exp(
-        input_scale * x) - 1.0)),
+    "elu.default": lambda x, alpha=1.0, scale=1.0, input_scale=1.0: scale * np.where(x > 0, x, alpha * np.expm1(input_scale * x)),
     "softplus.default": lambda x, beta=1.0, threshold=20.0: np.where(beta * x > threshold, x, np.log1p(np.exp(
         beta * x)) / beta),
     "clamp.default": lambda x, lo=None, hi=None: np.clip(x, -np.inf if lo is None else lo, np.inf if hi is None else hi),
@@ -1250,7 +1500,7 @@ OPS = {
     "rsub.Scalar": lambda a, b, alpha=1: b - alpha * _b(a), "rsub.Tensor": lambda a, b, alpha=1: _b(b) - alpha * _b(a),
     "mul.Tensor": lambda a, b: _b(a) * _b(b), "mul.Scalar": lambda a, b: _b(a) * b,
     "div.Tensor": lambda a, b: _b(a) / _b(b), "div.Scalar": lambda a, b: _b(a) / b,
-    "div.Tensor_mode": lambda a, b, mode=None: np.floor(_b(a) / _b(b)) if mode == "floor" else
+    "div.Tensor_mode": lambda a, b, mode=None: np.floor_divide(_b(a), _b(b)) if mode == "floor" else
     np.trunc(_b(a) / _b(b)) if mode == "trunc" else _b(a) / _b(b),
     "remainder.Scalar": lambda a, b: np.mod(a, b), "remainder.Tensor": lambda a, b: np.mod(a, b),
     "fmod.Scalar": lambda a, b: np.fmod(a, b),
@@ -1268,24 +1518,24 @@ OPS = {
     "sum.dim_IntList": _reduce(np.sum), "sum.default": lambda x, dtype=None: np.asarray(np.sum(x)),
     "mean.dim": _reduce(np.mean), "mean.default": lambda x, dtype=None: np.asarray(np.mean(x)),
     "amax.default": _reduce(np.max), "amin.default": _reduce(np.min),
-    "prod.dim_int": lambda x, d, keepdim=False, dtype=None: np.prod(x, axis=d % x.ndim, keepdims=keepdim),
-    "max.dim": lambda x, d, keepdim=False: (np.max(x, axis=d % x.ndim, keepdims=keepdim),
-                                            np.argmax(x, axis=d % x.ndim, keepdims=keepdim).astype(np.float64)),
-    "min.dim": lambda x, d, keepdim=False: (np.min(x, axis=d % x.ndim, keepdims=keepdim),
-                                            np.argmin(x, axis=d % x.ndim, keepdims=keepdim).astype(np.float64)),
+    "prod.dim_int": _lifted(lambda x, d, keepdim=False, dtype=None: np.prod(x, axis=d % x.ndim, keepdims=keepdim)),
+    "max.dim": _lifted(lambda x, d, keepdim=False: (np.max(x, axis=d % x.ndim, keepdims=keepdim),
+                                                    np.argmax(x, axis=d % x.ndim, keepdims=keepdim).astype(np.float64))),
+    "min.dim": _lifted(lambda x, d, keepdim=False: (np.min(x, axis=d % x.ndim, keepdims=keepdim),
+                                                    np.argmin(x, axis=d % x.ndim, keepdims=keepdim).astype(np.float64))),
     "max.default": lambda x: np.asarray(np.max(x)), "min.default": lambda x: np.asarray(np.min(x)),
-    "argmax.default": lambda x, d=None, keepdim=False: np.argmax(x, axis=None if d is None else d % x.ndim,
+    "argmax.default": lambda x, d=None, keepdim=False: np.argmax(x, axis=None if d is None or x.ndim == 0 else d % x.ndim,
                                                                   keepdims=keepdim).astype(np.float64),
-    "argmin.default": lambda x, d=None, keepdim=False: np.argmin(x, axis=None if d is None else d % x.ndim,
+    "argmin.default": lambda x, d=None, keepdim=False: np.argmin(x, axis=None if d is None or x.ndim == 0 else d % x.ndim,
                                                                   keepdims=keepdim).astype(np.float64),
     "var.correction": lambda x, dims=None, correction=None, keepdim=False: np.var(
-        x, axis=None if dims is None else _dims(dims, x.ndim), ddof=1 if correction is None else correction,
+        x, axis=None if dims is None or not list(dims) or x.ndim == 0 else _dims(dims, x.ndim), ddof=1 if correction is None else correction,
         keepdims=keepdim),
-    "any.dim": lambda x, d, keepdim=False: np.any(x != 0, axis=d % x.ndim, keepdims=keepdim).astype(np.float64),
+    "any.dim": _lifted(lambda x, d, keepdim=False: np.any(x != 0, axis=d % x.ndim, keepdims=keepdim).astype(np.float64)),
     "any.default": lambda x: np.asarray(np.any(x != 0), dtype=np.float64),
-    "cumsum.default": lambda x, d, dtype=None: np.cumsum(x, axis=d % x.ndim),
+    "cumsum.default": _lifted(lambda x, d, dtype=None: np.cumsum(x, axis=d % x.ndim)),
     # normalizations, softmax
-    "_softmax.default": _softmax, "_log_softmax.default": _log_softmax,
+    "_softmax.default": _lifted(_softmax), "_log_softmax.default": _lifted(_log_softmax),
     "native_layer_norm.default": _layer_norm,
     "_native_batch_norm_legit_no_training.default": _batch_norm,
     # gathering
@@ -1295,9 +1545,8 @@ OPS = {
     "embedding.default": lambda w, idx, *rest: w[np.asarray(idx).astype(np.int64)],
     "index.Tensor": _index,
     "topk.default": _topk,
-    "sort.default": lambda x, d=-1, descending=False: (lambda i: (np.take_along_axis(x, i, d % x.ndim),
-                                                                  i.astype(np.float64)))(
-        np.argsort(-x if descending else x, axis=d % x.ndim, kind="stable")),
+    "sort.default": _lifted(lambda x, d=-1, descending=False: (lambda i: (np.take_along_axis(x, i, d % x.ndim),
+                                                                          i.astype(np.float64)))(_order(x, d % x.ndim, descending))),
     # images
     "convolution.default": _conv,
     "max_pool2d_with_indices.default": lambda x, k, s=(), p=(0,), d=(1,), ceil=False: (
@@ -1368,6 +1617,176 @@ def reference(graph, inputs, name=None):
     return path
 
 
+# ---------------------------------------------------------------------------
+# Gradients: PyTorch's own, and its optimizers' steps, for Java's autograd to be held to
+# ---------------------------------------------------------------------------
+
+OPTIMIZERS = {   # what Sphere's Java optimizers (GraphTrainer) implement, with the hyperparameters of the reference
+    "adam": {"lr": 1e-3, "betas": (0.9, 0.999), "eps": 1e-8, "weight_decay": 0.0},
+    "adamw": {"lr": 1e-3, "betas": (0.9, 0.999), "eps": 1e-8, "weight_decay": 1e-2},
+    "sgd": {"lr": 1e-2, "momentum": 0.9, "nesterov": True, "weight_decay": 1e-4, "dampening": 0.0},
+}
+
+
+def loss_kind(out):
+    """The loss a model's first output takes, by its shape -- as GraphTrainer decides it: logits of two or more
+    classes [B, C], cross entropy; one logit a row ([B] or [B, 1]), binary cross entropy with logits; else the mean
+    squared error to a target."""
+    shape = tuple(out.shape)
+    if len(shape) == 2 and shape[1] >= 2:
+        return "cross_entropy"
+    if len(shape) == 1 or len(shape) == 2 and shape[1] == 1:
+        return "bce"
+    return "mse"
+
+
+def _loss(torch, kind, z, y, t):
+    import torch.nn.functional as F
+    if kind == "cross_entropy":
+        return F.cross_entropy(z, y)
+    if kind == "bce":
+        return F.binary_cross_entropy_with_logits(z.reshape(-1), y.to(z.dtype))
+    return F.mse_loss(z, t)
+
+
+def gradients(model, graph, example, rows=8, steps=3, seed=0, name=None):
+    """PyTorch's own gradients of a loss of the model's first output with respect to the weights the graph trains
+    (graph["params"]), on the first rows of the example, and the weights each optimizer of OPTIMIZERS leaves after
+    steps steps on them: bridge/ml/<name>.gradref.spx, which ':torch grad' holds Sphere's Java autograd and
+    optimizers to. The model computes in float64 as the graph does (its float32 casts, if it has any, aside)."""
+    import copy
+    import torch
+    graph = load(graph) if isinstance(graph, str) else graph
+    params = graph.get("params") or {}
+    if not params:
+        raise GraphError(graph["name"] + " has no trainable weights recorded: export it again (trainable=True)")
+
+    def fresh():
+        m = copy.deepcopy(model)
+        m = m.eval()
+        try:
+            if "keras" not in type(model).__module__:
+                m = m.double()
+        except Exception:
+            pass
+        return _positional(m, len(example))
+
+    xs = []
+    for e in example:
+        if torch.is_tensor(e) and e.dim() > 0:
+            e = e[:rows]
+        if torch.is_tensor(e) and e.is_floating_point():
+            e = e.double()
+        xs.append(e)
+    m = fresh()
+    by_name = dict(m.named_parameters())
+    missing = [fqn for fqn in params.values() if fqn not in by_name]
+    if missing:
+        raise GraphError("the graph's weights %s are not parameters of the model" % ", ".join(missing[:4]))
+    out = m(*xs)
+    out = out[0] if isinstance(out, (list, tuple)) else out
+    kind = loss_kind(out)
+    rng = np.random.default_rng(seed)
+    n = int(out.shape[0]) if out.dim() else 1
+    if kind == "cross_entropy":
+        y = torch.as_tensor(rng.integers(0, int(out.shape[1]), n), dtype=torch.int64)
+    else:
+        y = torch.as_tensor(rng.integers(0, 2, n), dtype=torch.int64)
+    t = torch.as_tensor(rng.standard_normal(tuple(out.shape)), dtype=out.dtype)
+    loss = _loss(torch, kind, out, y, t)
+    m.zero_grad()
+    loss.backward()
+    sections, meta = [], {"Kind": "sphere-grad-reference", "Graph": graph["name"], "Loss": kind, "Rows": n,
+                          "Steps": int(steps), "Params": len(params), "Inputs": len(xs),
+                          "Torch": torch.__version__, "LossValue": repr(float(loss))}
+    for k, x in enumerate(xs):
+        v = np.asarray(x.detach().cpu().double().numpy() if torch.is_tensor(x) else x, dtype=np.float64)
+        sections.append(("in.%d" % k, v.ravel()))
+        meta["Shape.in.%d" % k] = ",".join(str(s) for s in v.shape)
+    sections.append(("out.0", out.detach().double().numpy().ravel()))
+    meta["Shape.out.0"] = ",".join(str(s) for s in out.shape)
+    sections.append(("y", y.double().numpy()))
+    sections.append(("t", t.detach().double().numpy().ravel()))
+    sections.append(("loss", np.array([float(loss)])))
+    norm = 0.0
+    for w, fqn in params.items():
+        g = by_name[fqn].grad
+        g = np.zeros(by_name[fqn].shape) if g is None else g.detach().double().numpy()
+        norm += float(np.sum(g * g))
+        sections.append(("g." + w, g.ravel()))
+    # second order, for Java's curvature (GraphUncertainty) to be held to: along a random direction v, the Hessian's
+    # product H v (double backward) and the generalized Gauss-Newton's G v = J^T H_out J v (J the Jacobian of the
+    # outputs, H_out the loss's Hessian in them: diag(p) - p p^T over the rows for cross entropy, by two vjps)
+    try:
+        m3 = fresh()
+        named3 = dict(m3.named_parameters())
+        plist = [named3[fqn] for fqn in params.values()]
+        vs = [torch.as_tensor(rng.standard_normal(tuple(p.shape)), dtype=p.dtype) for p in plist]
+        z3 = m3(*xs)
+        z3 = z3[0] if isinstance(z3, (list, tuple)) else z3
+        l3 = _loss(torch, kind, z3, y, t)
+        g3 = torch.autograd.grad(l3, plist, create_graph=True, allow_unused=True)
+        gv = sum(((gi * vi).sum() for gi, vi in zip(g3, vs) if gi is not None), torch.zeros((), dtype=z3.dtype))
+        hv = torch.autograd.grad(gv, plist, allow_unused=True, retain_graph=True)   # the forward's graph serves G v next
+        if kind == "cross_entropy":
+            w0 = torch.zeros_like(z3, requires_grad=True)
+            jt = torch.autograd.grad(z3, plist, grad_outputs=w0, create_graph=True, allow_unused=True)
+            jtv = sum(((ji * vi).sum() for ji, vi in zip(jt, vs) if ji is not None), torch.zeros((), dtype=z3.dtype))
+            jv = torch.autograd.grad(jtv, w0)[0]
+            p3 = torch.softmax(z3.detach(), -1)
+            u = (p3 * jv - p3 * (p3 * jv).sum(-1, keepdim=True)) / z3.shape[0]
+            ggn = torch.autograd.grad(z3, plist, grad_outputs=u, allow_unused=True)
+        else:
+            ggn = [None] * len(plist)
+        for (w, fqn), vi, hi, gi in zip(params.items(), vs, hv, ggn):
+            sections.append(("v." + w, vi.detach().double().numpy().ravel()))
+            sections.append(("hv." + w, (np.zeros(vi.shape) if hi is None else hi.detach().double().numpy()).ravel()))
+            if kind == "cross_entropy":
+                sections.append(("ggn." + w, (np.zeros(vi.shape) if gi is None else gi.detach().double().numpy()).ravel()))
+        second = True
+    except Exception as e:   # an operation without a double backward in PyTorch: the first order is checked alone
+        second = "unavailable: %s" % e
+    spec = []
+    for opt, hp in OPTIMIZERS.items():
+        m2 = fresh()
+        named = dict(m2.named_parameters())
+        trained = [named[fqn] for fqn in params.values()]
+        if opt == "adam":
+            o = torch.optim.Adam(trained, lr=hp["lr"], betas=hp["betas"], eps=hp["eps"], weight_decay=hp["weight_decay"],
+                                 foreach=False)
+        elif opt == "adamw":
+            o = torch.optim.AdamW(trained, lr=hp["lr"], betas=hp["betas"], eps=hp["eps"], weight_decay=hp["weight_decay"],
+                                  foreach=False)
+        else:
+            o = torch.optim.SGD(trained, lr=hp["lr"], momentum=hp["momentum"], nesterov=hp["nesterov"],
+                                weight_decay=hp["weight_decay"], dampening=hp["dampening"], foreach=False)
+        for _ in range(int(steps)):
+            o.zero_grad()
+            z = m2(*xs)
+            z = z[0] if isinstance(z, (list, tuple)) else z
+            _loss(torch, kind, z, y, t).backward()
+            o.step()
+        for w, fqn in params.items():
+            sections.append(("%s.%s" % (opt, w), named[fqn].detach().double().numpy().ravel()))
+        flat = {}
+        for k, v in hp.items():   # betas as beta1, beta2: one number a key, for Java to read
+            if k == "betas":
+                flat["beta1"], flat["beta2"] = v
+            else:
+                flat[k] = float(v)
+        spec.append("%s:%s" % (opt, ",".join("%s=%r" % (k, float(v)) for k, v in flat.items())))
+    meta["Optimizers"] = ";".join(spec)
+    meta["SecondOrder"] = "1" if second is True else "0"
+    if second is not True:
+        meta["SecondOrderError"] = str(second)[:300].replace("\n", " ")
+    path = os.path.join(spx.bridge_folder(), "ml", (name or graph["name"]) + ".gradref.spx")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    from sphere_ml import write_spx
+    write_spx(path, "gradient reference", sections, meta)
+    return {"path": path, "loss": float(loss), "kind": kind, "rows": n, "steps": int(steps), "params": len(params),
+            "grad_norm": math.sqrt(norm), "weights": int(sum(by_name[f].numel() for f in params.values()))}
+
+
 def describe(graph):
     graph = load(graph) if isinstance(graph, str) else graph
     ops = {}
@@ -1429,6 +1848,16 @@ def _run_job(job):
         name = name or scope.get("name") or os.path.splitext(os.path.basename(job["script"]))[0]
         feeds = feeds or scope.get("feeds")
         framework = scope.get("framework")
+    elif kind == "torchscript":
+        script = torch.jit.load(job["path"], map_location="cpu")
+        shapes = job.get("shapes") or _torchscript_shapes(script)
+        if not shapes:
+            raise GraphError("%s does not say the shapes of its inputs: give them (--shape 16,7;16)" % job["path"])
+        rng = np.random.default_rng(0)
+        example = tuple(torch.tensor(rng.normal(size=[8] + [int(s) for s in row]), dtype=torch.float32) for row in shapes)
+        model = torchscript_module(script)
+        name = name or os.path.splitext(os.path.basename(job["path"]))[0]
+        framework = "TorchScript, torch %s, from %s" % (torch.__version__, os.path.basename(job["path"]))
     elif kind == "keras":
         import keras
         if keras.backend.backend() != "torch":
@@ -1443,13 +1872,17 @@ def _run_job(job):
         example = (example,)
     import gc
     gc.collect()   # what the script left in reference cycles (a Keras training leaves many) freed before the trace
-    g = export(model, tuple(example), name, feeds=feeds, framework=framework)
+    g = export(model, tuple(example), name, feeds=feeds, framework=framework, trainable=job.get("trainable", True), folder=job.get("folder"))
     ref = reference(g, [e[:8] if torch.is_tensor(e) and e.dim() else e for e in example])
     d = describe(g)
-    return {"name": name, "path": g["path"], "reference": ref, "nodes": d["nodes"], "weights": d["weights"], "ops": d["ops"],
-            "inputs": d["inputs"], "feeds": d["feeds"], "precision": d["precision"], "framework": d["framework"],
-            "batch": g.get("batch"), "rows_independent": bool(g.get("rows_independent")), "memory": g.get("memory"),
-            "check": g.get("check"), "example_shapes": g.get("example_shapes"), "optimized": g.get("optimized")}
+    out = {"name": name, "path": g["path"], "reference": ref, "nodes": d["nodes"], "weights": d["weights"], "ops": d["ops"],
+           "inputs": d["inputs"], "feeds": d["feeds"], "precision": d["precision"], "framework": d["framework"],
+           "batch": g.get("batch"), "rows_independent": bool(g.get("rows_independent")), "memory": g.get("memory"),
+           "check": g.get("check"), "example_shapes": g.get("example_shapes"), "optimized": g.get("optimized"),
+           "params": len(g.get("params") or {})}
+    if job.get("gradients") and g.get("params"):
+        out["gradients"] = gradients(model, g, tuple(example), rows=int(job.get("rows", 8)), steps=int(job.get("steps", 3)))
+    return out
 
 
 def _job(path):

@@ -600,19 +600,8 @@ public class ContextMenuBuilder {
 
         // Intercept and load Jupyter Notebook format targets via standalone view instance
         if (fileNameLower.endsWith(".ipynb")) {
-            SwingUtilities.invokeLater(() -> {
-                try {
-                    com.sphere.core.python.jupyterlab.JupylabXeditor editor = 
-                        new com.sphere.core.python.jupyterlab.JupylabXeditor(file.toPath());
-                    
-                    // Let the internal window handler manage validation via dispose()
-                    editor.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-                    editor.setVisible(true);
-                    editor.toFront();
-                } catch (Exception ex) {
-                    JOptionPane.showMessageDialog(null, "Error opening Jupyter Notebook editor: " + ex.getMessage());
-                }
-            });
+            // Jupylab, as :jlab opens it: a window already showing this notebook comes to the front
+            com.sphere.core.python.jupyterlab.JupylabXeditor.open(file.toPath());
         }
         // Keep the dedicated standalone window setup specifically for Markdown files
         else if (fileNameLower.endsWith(".md")) {

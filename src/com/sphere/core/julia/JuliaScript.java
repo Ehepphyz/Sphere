@@ -60,13 +60,16 @@ public final class JuliaScript {
         # The bridge to Sphere's other engines: SphereSPX reads the PDF sets,
         # events and jets Sphere exports, and publishes results back to it. It is
         # a module, so the Variables tab does not list it.
+        # SphereMLink reaches TensorFlow, PyTorch and pyhf through the gateway.
         let lib = get(ENV, "SPHERE_BRIDGE_LIB", "")
-            file = joinpath(lib, "SphereSPX.jl")
-            if !isempty(lib) && isfile(file)
-                try
-                    Base.include(Main, file)
-                catch failure
-                    println(stderr, "SphereSPX could not be loaded: ", failure)
+            for name in ("SphereSPX.jl", "SphereMLink.jl")
+                file = joinpath(lib, name)
+                if !isempty(lib) && isfile(file)
+                    try
+                        Base.include(Main, file)
+                    catch failure
+                        println(stderr, name, " could not be loaded: ", failure)
+                    end
                 end
             end
         end

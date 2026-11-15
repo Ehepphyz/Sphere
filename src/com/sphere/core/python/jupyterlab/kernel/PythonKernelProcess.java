@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * stopped; this holds the state, streams the output as it comes and answers an
  * interrupt.
  */
-public final class PythonKernelProcess {
+public final class PythonKernelProcess implements KernelClient {
 
     /** Everything the kernel says, already sorted by kind. */
     public interface Listener {
@@ -39,6 +39,44 @@ public final class PythonKernelProcess {
         void onCompletion(int execId, int start, List<String> matches);
         void onVariables(int execId, List<Map<String, Object>> items);
         void onExit(String reason);
+
+        // ---- What a Jupyter kernel adds; the stdio driver never sends these ----
+
+        /** A display that names itself, so a later update_display_data can replace it in place. */
+        default void onDisplay(int execId, Map<String, Object> bundle, String displayId) {
+            onDisplay(execId, bundle);
+        }
+
+        default void onUpdateDisplay(String displayId, Map<String, Object> bundle) {
+        }
+
+        /** clear_output: wait=true clears when the next output arrives, as progress bars expect. */
+        default void onClearOutput(int execId, boolean wait) {
+        }
+
+        /** Completion with what each candidate is (function, module, keyword...), when the kernel says. */
+        default void onCompletion(int execId, int start, int end, List<String> matches, List<String> types) {
+            onCompletion(execId, start, matches);
+        }
+
+        default void onInspect(int execId, boolean found, Map<String, Object> bundle) {
+        }
+
+        /** busy, idle, starting. */
+        default void onStatus(String state) {
+        }
+
+        /** Per cell: undefined names and the live kinds of the names it uses. */
+        default void onAnalysis(int execId, List<Map<String, Object>> cells) {
+        }
+
+        /** What a value looks like (sphere_kernel_tools.peek): one map, in a list as the tools send it. */
+        default void onPeek(int execId, List<Map<String, Object>> items) {
+        }
+
+        /** The content of a usage_reply: kernel_memory (bytes), kernel_cpu (%), host_virtual_memory... */
+        default void onUsage(int execId, Map<String, Object> usage) {
+        }
     }
 
     private final SettingsManager settings;
@@ -58,6 +96,16 @@ public final class PythonKernelProcess {
 
     public boolean isRunning() {
         return running && process != null && process.isAlive();
+    }
+
+    private Path workingDirectory;
+
+    /**
+     * The folder the interpreter starts in: the notebook's, as in Jupyter, so
+     * open("data.csv") finds the file beside the notebook rather than Sphere's own folder.
+     */
+    public void setWorkingDirectory(Path directory) {
+        this.workingDirectory = directory;
     }
 
     /** Execution id of the cell currently running, or -1. */
@@ -92,10 +140,14 @@ public final class PythonKernelProcess {
         }
         Path script = KernelScript.materialize();
         KernelScript.materializeShm();
+        KernelScript.materializeTools();
 
         ProcessBuilder builder = new ProcessBuilder(executable, "-u",
                                                     script.toAbsolutePath().toString());
         builder.redirectErrorStream(false);
+        if (workingDirectory != null && java.nio.file.Files.isDirectory(workingDirectory)) {
+            builder.directory(workingDirectory.toFile());
+        }
         // Tells the kernel which region to map. Without it the kernel starts
         // normally and simply has no shared-memory module.
         final RootBackend backend = RootBackend.getInstance();
@@ -129,15 +181,50 @@ public final class PythonKernelProcess {
         if (live != null) {
             try {
                 if (!live.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                    live.destroyForcibly();
+                    destroyTree(live);
                 }
             } catch (InterruptedException ex) {
-                live.destroyForcibly();
+                destroyTree(live);
                 Thread.currentThread().interrupt();
             }
         }
         process = null;
         busyWith = -1;
+    }
+
+    /**
+     * Ends a process and everything it started. A venv's python.exe is a launcher
+     * that runs the real interpreter as its child: killing the launcher alone left
+     * that interpreter, and every variable it held, running after the notebook closed.
+     */
+    static void destroyTree(Process live) {
+        try {
+            live.descendants().forEach(ProcessHandle::destroyForcibly);
+        } catch (RuntimeException unsupported) {
+            // a platform that cannot list children still gets the process itself killed
+        }
+        live.destroyForcibly();
+    }
+
+    @Override
+    public int inspect(String code, int cursor) {
+        return -1; // the stdio driver has no documentation lookup; the ipykernel path does
+    }
+
+    @Override
+    public int analyze(List<String> cells) {
+        int id = nextId.getAndIncrement();
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("op", "analyze");
+        message.put("id", id);
+        message.put("cells", cells);
+        send(message);
+        return id;
+    }
+
+    @Override
+    public String describe() {
+        return pythonVersion.isEmpty() ? "Sphere driver" : "Python " + pythonVersion + " · Sphere driver";
     }
 
     public synchronized void restart() throws IOException {
@@ -168,9 +255,15 @@ public final class PythonKernelProcess {
 
     public int complete(String code, int cursor) {
         int id = nextId.getAndIncrement();
-        send(Map.of("op", "complete", "id", id, "code", code, "cursor", cursor));
+        // Python counts code points, Java UTF-16 units: an emoji before the caret shifted the word
+        completionText = code;
+        send(Map.of("op", "complete", "id", id, "code", code,
+                    "cursor", code.codePointCount(0, Math.max(0, Math.min(cursor, code.length())))));
         return id;
     }
+
+    /** The text of the last completion asked for, to turn the answer's offset back into UTF-16. */
+    private volatile String completionText = "";
 
     public int variables() {
         int id = nextId.getAndIncrement();
@@ -190,7 +283,7 @@ public final class PythonKernelProcess {
             return;
         }
         try {
-            out.write(encode(message));
+            out.write(Json.encode(message));
             out.write("\n");
             out.flush();
         } catch (IOException ex) {
@@ -267,9 +360,13 @@ public final class PythonKernelProcess {
                                 intOf(message.get("ms"), 0));
             }
             case "input" -> listener.onInputRequest(id, String.valueOf(message.get("prompt")));
-            case "complete" -> listener.onCompletion(id, intOf(message.get("start"), 0),
-                                                     stringsOf(message.get("matches")));
+            case "complete" -> {
+                String text = completionText;
+                int points = Math.max(0, Math.min(intOf(message.get("start"), 0), text.codePointCount(0, text.length())));
+                listener.onCompletion(id, text.offsetByCodePoints(0, points), stringsOf(message.get("matches")));
+            }
             case "vars" -> listener.onVariables(id, itemsOf(message.get("items")));
+            case "analysis" -> listener.onAnalysis(id, itemsOf(message.get("cells")));
             case "shm_alloc" -> answerShmAlloc(message);
             case "shm_release" -> answerShmRelease(message);
             default -> { }
@@ -339,49 +436,5 @@ public final class PythonKernelProcess {
             }
         }
         return out;
-    }
-
-    /** Minimal encoder: the kernel only ever receives flat objects. */
-    private static String encode(Map<String, Object> message) {
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (Map.Entry<String, Object> entry : message.entrySet()) {
-            if (!first) {
-                sb.append(',');
-            }
-            first = false;
-            sb.append('"').append(entry.getKey()).append("\":");
-            Object value = entry.getValue();
-            if (value instanceof Number || value instanceof Boolean) {
-                sb.append(value);
-            } else {
-                sb.append('"').append(escape(String.valueOf(value))).append('"');
-            }
-        }
-        return sb.append('}').toString();
-    }
-
-    private static String escape(String text) {
-        StringBuilder sb = new StringBuilder(text.length() + 16);
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            switch (c) {
-                case '"'  -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                case '\b' -> sb.append("\\b");
-                case '\f' -> sb.append("\\f");
-                default -> {
-                    if (c < 0x20) {
-                        sb.append(String.format("\\u%04x", (int) c));
-                    } else {
-                        sb.append(c);
-                    }
-                }
-            }
-        }
-        return sb.toString();
     }
 }

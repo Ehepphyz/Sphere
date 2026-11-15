@@ -17,6 +17,8 @@ public enum TokenKind {
     VARIABLE,
     /** Named constants: CMake's PUBLIC / REQUIRED, ON / OFF, true / false. */
     CONSTANT,
+    /** A module or package: what an import names, or what a live kernel says is a module. */
+    NAMESPACE,
     /** Brackets, colored by depth so a nesting reads at a glance. */
     BRACKET_1,
     BRACKET_2,

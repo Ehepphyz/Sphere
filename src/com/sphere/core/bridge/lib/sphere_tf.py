@@ -2261,6 +2261,14 @@ def load(path, name=None, inputs=None, outputs=None, shapes=None, feeds=None, fo
         "fixed": {key: v.tolist() for key, v in pinned.values()}, "flags": [b.names[k] for k in flags],
         "flags_unbatch": bool(flags) and len(flags) < len(row_shapes) and all(
             s and s[0] in (-1, None) for k, s in enumerate(row_shapes) if k not in flags)}
+    # the weights a framework would train: the constants that are one of the model's variables, by their values
+    graph["params"] = {}
+    for variable, value in values.items():
+        v = np.asarray(value, dtype=np.float64)
+        for k, c in graph["consts"].items():
+            if k not in graph["params"] and np.shape(c) == v.shape and np.size(c) and np.array_equal(np.asarray(c, dtype=np.float64), v):
+                graph["params"][k] = variable
+                break
     path_ = sg.save(graph, folder)
     graph["path"] = path_
     graph["reference"] = sg.reference(graph, [a[:rows] if np.ndim(a) and batched else a for a in probe[0]])

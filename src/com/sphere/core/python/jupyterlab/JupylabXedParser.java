@@ -133,7 +133,19 @@ public class JupylabXedParser {
         if (num.contains(".") || num.contains("e") || num.contains("E")) {
             return Double.parseDouble(num);
         }
-        return Integer.parseInt(num);
+        // Integer.parseInt alone refused anything past 2^31: a Colab notebook
+        // (its metadata stores millisecond timestamps) or a kernel reply carrying a
+        // 64-bit offset then failed to open at all.
+        if (num.length() < 10) {
+            return Integer.parseInt(num);
+        }
+        long wide;
+        try {
+            wide = Long.parseLong(num);
+        } catch (NumberFormatException beyondLong) {
+            return new java.math.BigInteger(num);
+        }
+        return wide >= Integer.MIN_VALUE && wide <= Integer.MAX_VALUE ? (Number) (int) wide : (Number) wide;
     }
 
     private void skipWs() {

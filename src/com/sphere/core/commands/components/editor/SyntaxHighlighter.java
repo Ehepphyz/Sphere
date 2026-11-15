@@ -64,10 +64,22 @@ public final class SyntaxHighlighter implements DocumentListener {
         public final int[] bracketPartner;
         public final int[] bracketDepth;
         public final int bracketCount;
+        /** Packed semantic role of each span (see {@link PySemantics}); 0 where only the kind is known. */
+        public final int[] sems;
+        /** The scope analysis behind the sems, for tooltips and the notebook; null outside Python. */
+        public final PySemantics.Result semantic;
 
         Snapshot(long revision, LanguageSpec spec, String text, int[] starts, int[] ends,
                  TokenKind[] kinds, boolean[] unterminated, int count, int[] bracketPos,
                  char[] bracketChar, int[] bracketPartner, int[] bracketDepth, int bracketCount) {
+            this(revision, spec, text, starts, ends, kinds, unterminated, count, bracketPos, bracketChar,
+                 bracketPartner, bracketDepth, bracketCount, new int[count], null);
+        }
+
+        Snapshot(long revision, LanguageSpec spec, String text, int[] starts, int[] ends,
+                 TokenKind[] kinds, boolean[] unterminated, int count, int[] bracketPos,
+                 char[] bracketChar, int[] bracketPartner, int[] bracketDepth, int bracketCount,
+                 int[] sems, PySemantics.Result semantic) {
             this.revision = revision;
             this.spec = spec;
             this.text = text;
@@ -81,11 +93,19 @@ public final class SyntaxHighlighter implements DocumentListener {
             this.bracketPartner = bracketPartner;
             this.bracketDepth = bracketDepth;
             this.bracketCount = bracketCount;
+            this.sems = sems;
+            this.semantic = semantic;
         }
 
         static Snapshot empty(LanguageSpec spec, String text) {
             return new Snapshot(0, spec, text, NO_INTS, NO_INTS, NO_KINDS, new boolean[0], 0,
                                 NO_INTS, new char[0], NO_INTS, NO_INTS, 0);
+        }
+
+        /** The packed semantic role at offset, 0 when none. */
+        public int semAt(int offset) {
+            int i = spanAt(offset);
+            return i < 0 || i >= sems.length ? 0 : sems[i];
         }
 
         /** Index of the span covering offset, or -1. */
@@ -174,6 +194,7 @@ public final class SyntaxHighlighter implements DocumentListener {
     private int[] starts = NO_INTS;
     private int[] ends = NO_INTS;
     private TokenKind[] kinds = NO_KINDS;
+    private int[] sems = NO_INTS;
     private int count;
 
     private volatile Snapshot snapshot;
@@ -206,9 +227,51 @@ public final class SyntaxHighlighter implements DocumentListener {
         listeners.remove(l);
     }
 
+    /** Live roles of names, from a running kernel; null to go back to the text alone. */
+    private volatile java.util.function.Function<String, TokenKind> nameClassifier;
+
+    /**
+     * What a running program knows about names: np is a module, model an object,
+     * list rebound to a variable. Read by the Python lexer on its next scan.
+     */
+    public void setNameClassifier(java.util.function.Function<String, TokenKind> classifier) {
+        this.nameClassifier = classifier;
+        this.tokenizer.setNameClassifier(classifier);
+        rehighlightAll();
+    }
+
+    private volatile PySemantics.Context semanticContext;
+    private volatile boolean semanticEnabled = true;
+
+    /**
+     * The notebook around this text: what the other cells bind and read, and
+     * what the kernel holds. Read by the Python scope analysis on its next scan.
+     */
+    public void setSemanticContext(PySemantics.Context context) {
+        this.semanticContext = context;
+        this.tokenizer.setSemanticContext(context);
+        rehighlightAll();
+    }
+
+    /** Semantic colors on or off (scopes, roles, modifiers); the grammar's colors stay. */
+    public void setSemanticEnabled(boolean enabled) {
+        if (enabled != semanticEnabled) {
+            semanticEnabled = enabled;
+            tokenizer.setSemanticEnabled(enabled);
+            rehighlightAll();
+        }
+    }
+
+    public boolean isSemanticEnabled() {
+        return semanticEnabled;
+    }
+
     public void setLanguage(LanguageSpec newSpec) {
         this.spec = newSpec == null ? LanguageSpec.NONE : newSpec;
         this.tokenizer = new SyntaxTokenizer(this.spec);
+        this.tokenizer.setNameClassifier(nameClassifier);
+        this.tokenizer.setSemanticContext(semanticContext);
+        this.tokenizer.setSemanticEnabled(semanticEnabled);
         if (pane instanceof CodeTextPane p) {
             p.setLanguage(this.spec);
         }
@@ -277,6 +340,11 @@ public final class SyntaxHighlighter implements DocumentListener {
 
     public TokenKind spanKind(int i) {
         return kinds[i];
+    }
+
+    /** The packed semantic role of span i (PySemantics), 0 when only its kind is known. */
+    public int spanSem(int i) {
+        return i < sems.length ? sems[i] : 0;
     }
 
     /** Index of the first span ending after offset (count when none). */
@@ -395,6 +463,7 @@ public final class SyntaxHighlighter implements DocumentListener {
         starts = Arrays.copyOf(s.starts, s.count);
         ends = Arrays.copyOf(s.ends, s.count);
         kinds = Arrays.copyOf(s.kinds, s.count);
+        sems = Arrays.copyOf(s.sems, s.count);
         count = s.count;
         snapshot = s;
         pane.repaint();
@@ -411,8 +480,10 @@ public final class SyntaxHighlighter implements DocumentListener {
     static Snapshot analyze(long stamp, LanguageSpec spec, SyntaxTokenizer tokenizer,
                             String text, boolean colorize) {
         List<SyntaxTokenizer.Span> spans = new ArrayList<>();
+        PySemantics.Result semantic = null;
         if (colorize) {
             tokenizer.tokenize(text, false, spans);
+            semantic = spec == LanguageSpec.PYTHON ? tokenizer.lastSemantic() : null;
         }
 
         // Brackets.
@@ -502,6 +573,7 @@ public final class SyntaxHighlighter implements DocumentListener {
         int[] ends = new int[total];
         TokenKind[] kinds = new TokenKind[total];
         boolean[] unterminated = new boolean[total];
+        int[] sems = new int[total];
         int out = 0;
         int ti = 0;
         int bi = 0;
@@ -523,12 +595,14 @@ public final class SyntaxHighlighter implements DocumentListener {
                 ends[out] = s.end;
                 kinds[out] = s.kind;
                 unterminated[out] = s.unterminated;
+                sems[out] = s.sem;
                 out++;
             }
         }
         return new Snapshot(stamp, spec, text, starts, ends, kinds, unterminated, out,
                             Arrays.copyOf(bPos, bCount), Arrays.copyOf(bChar, bCount),
-                            Arrays.copyOf(bPartner, bCount), Arrays.copyOf(bDepth, bCount), bCount);
+                            Arrays.copyOf(bPartner, bCount), Arrays.copyOf(bDepth, bCount), bCount,
+                            Arrays.copyOf(sems, out), semantic);
     }
 
     private static TokenKind bracketKind(boolean unmatched, int depth, LanguageSpec spec) {

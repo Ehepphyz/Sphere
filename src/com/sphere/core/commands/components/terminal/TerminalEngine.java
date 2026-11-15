@@ -157,6 +157,7 @@ public class TerminalEngine {
                     .redirectErrorStream(true);
             builder.environment().putAll(ConfigLoader.environment());
             builder.environment().putAll(extraEnvironment);
+            com.sphere.core.bridge.Bridge.reach(builder.environment());
             starting = true;
             process = builder.start();
 

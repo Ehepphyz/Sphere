@@ -26,24 +26,58 @@ import com.sphere.fonts.FontLoader;
  */
 public class JupyLabMarkdown {
 
-    public static String toHtml(String md) {
-        String sanitizedMd = sanitizeTreeStructures(md);
+    /**
+     * The colors of a rendered cell, taken from the theme and made to read on the
+     * surface the preview is painted on (the notebook's background). The former
+     * page hard-coded a dark body, a grey code block that held its light text at
+     * 1.9:1, and quotes at 2.4:1; on the light theme every Markdown cell was a dark
+     * box in a light window.
+     */
+    record Colors(String text, String muted, String codeBackground, String code, String rule, String link) {
 
-        if (sanitizedMd == null || sanitizedMd.trim().isEmpty()) {
-            return "<html><body style='font-family:Inter, sans-serif; font-size:14px; color:#DFE1E5; background-color:#1E1F22; line-height:1.5; margin:12px;'></body></html>";
+        static Colors current() {
+            ThemePalette p = ThemeManager.getCurrentPalette();
+            java.awt.Color bg = p.getBackgroundMain();
+            java.awt.Color text = com.sphere.theme.Contrast.readable(p.getTextPrimary(), bg, 7.0);
+            java.awt.Color muted = com.sphere.theme.Contrast.readable(p.getTextSecondary(), bg,
+                                                                      com.sphere.theme.Contrast.AA);
+            java.awt.Color codeBg = mix(text, bg, 0.08f);
+            java.awt.Color code = com.sphere.theme.Contrast.readable(p.getTextPrimary(), codeBg, 7.0);
+            java.awt.Color rule = mix(text, bg, 0.30f);
+            java.awt.Color link = com.sphere.theme.Contrast.readable(p.getAccent(), bg, com.sphere.theme.Contrast.AA);
+            return new Colors(hex(text), hex(muted), hex(codeBg), hex(code), hex(rule), hex(link));
         }
-        
+
+        private static java.awt.Color mix(java.awt.Color a, java.awt.Color b, float r) {
+            return new java.awt.Color(Math.round(a.getRed() * r + b.getRed() * (1 - r)),
+                                      Math.round(a.getGreen() * r + b.getGreen() * (1 - r)),
+                                      Math.round(a.getBlue() * r + b.getBlue() * (1 - r)));
+        }
+
+        private static String hex(java.awt.Color c) {
+            return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
+        }
+    }
+
+    public static String toHtml(String md) {
+        Colors c = Colors.current();
+        return "<html><body style='font-family:Inter, sans-serif; font-size:14px; color:" + c.text()
+               + "; line-height:1.5; margin:12px;'>" + body(md) + "</body></html>";
+    }
+
+    /** The rendered fragment alone, for a Markdown or LaTeX output inside another page. */
+    public static String body(String md) {
+        String sanitizedMd = sanitizeTreeStructures(md);
+        if (sanitizedMd == null || sanitizedMd.trim().isEmpty()) {
+            return "";
+        }
         StringBuilder out = new StringBuilder();
-        out.append("<html><body style='font-family:Inter, sans-serif; font-size:14px; color:#DFE1E5; background-color:#1E1F22; line-height:1.5; margin:12px;'>");
-        
         MarkdownStreamParser parser = new MarkdownStreamParser(new StringReader(sanitizedMd), out);
         try {
             parser.parse();
         } catch (IOException e) {
             // Runtime parsing exception handled safely
         }
-        
-        out.append("</body></html>");
         return out.toString();
     }
 
@@ -52,6 +86,7 @@ public class JupyLabMarkdown {
 
         private final Reader in;
         private final Appendable out;
+        private final Colors colors = Colors.current();
 
         private boolean inUnorderedList = false;
         private boolean inOrderedList = false;
@@ -89,7 +124,7 @@ public class JupyLabMarkdown {
 
             if (trimmed.startsWith("```")) {
                 if (inCodeBlock) {
-                    write("<pre style='background:#a0a2a6; padding:8px; border-radius:4px; font-family:Inter, sans-serif; font-size:13px;'><code>");
+                    write("<pre style='background:" + colors.codeBackground() + "; color:" + colors.code() + "; padding:8px; font-family:monospace; font-size:12px;'><code>");
                     write(HtmlEscaper.escape(codeBlockBuffer.toString()));
                     write("</code></pre>");
                     codeBlockBuffer.setLength(0);
@@ -135,7 +170,7 @@ public class JupyLabMarkdown {
 
             if (line.startsWith("> ")) {
                 closeListsIfOpen();
-                write("<blockquote style='border-left:4px solid #4A90E2; padding-left:10px; margin:6px 0; color:#555;'>");
+                write("<blockquote style='border-left:4px solid " + colors.link() + "; padding-left:10px; margin:6px 0; color:" + colors.muted() + ";'>");
                 write(InlineParser.processInlineStyles(line.substring(2)));
                 write("</blockquote>");
                 return;
@@ -204,7 +239,7 @@ public class JupyLabMarkdown {
                 write("<tr>");
                 for (String c : cols) {
                     if (!c.trim().isEmpty()) {
-                        write("<td style='border:1px solid #ccc; padding:4px 8px;'>" + InlineParser.processInlineStyles(c.trim()) + "</td>");
+                        write("<td style='border:1px solid " + colors.rule() + "; padding:4px 8px;'>" + InlineParser.processInlineStyles(c.trim()) + "</td>");
                     }
                 }
                 write("</tr>");
@@ -247,7 +282,7 @@ public class JupyLabMarkdown {
                 inMathBlock = false;
             }
             if (inCodeBlock) {
-                write("<pre style='background:#f5f5f5; padding:8px; border-radius:4px; font-family:\"Noto Sans Mono\", monospace; font-size:13px;'><code>");
+                write("<pre style='background:" + colors.codeBackground() + "; color:" + colors.code() + "; padding:8px; font-family:monospace; font-size:12px;'><code>");
                 write(HtmlEscaper.escape(codeBlockBuffer.toString()));
                 write("</code></pre>");
                 inCodeBlock = false;
@@ -313,7 +348,7 @@ public class JupyLabMarkdown {
             processedText = RegexUtil.replaceWithRegex(processedText, BOLD_PATTERN, "<b>$1</b>");
             processedText = RegexUtil.replaceWithRegex(processedText, ITALIC_PATTERN, "<i>$1</i>");
             processedText = RegexUtil.replaceWithRegex(processedText, LINK_PATTERN,
-                    "<a href='$2'>$1</a>");
+                    "<a href='$2' style='color:" + Colors.current().link() + "'>$1</a>");
 
             processedText = processedText.replaceAll("!\\[([^\\]]*)\\]\\(([^\\)]+)\\)", "<img src='$2' alt='$1' style='max-width:100%; margin:6px 0;'/>");
 

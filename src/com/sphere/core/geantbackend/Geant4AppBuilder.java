@@ -419,6 +419,9 @@ public final class Geant4AppBuilder {
         throws IOException {
         log.accept("$ " + String.join(" ", cmd));
         final ProcessBuilder pb = new ProcessBuilder(cmd).directory(dir.toFile()).redirectErrorStream(true);
+        // What the other engines have: an application can #include "sphere_spx.hpp" and "sphere_mlink.hpp", reach
+        // TensorFlow, PyTorch and pyhf, publish to the Plots tab -- inside WSL too, through WSLENV
+        com.sphere.core.bridge.Bridge.environment(pb.environment());
         pb.environment().putAll(env);
         // A tool from MSYS2 (cmake, g++, mingw32-make) needs its own bin directory on the PATH
         final Path exe = Path.of(cmd.get(0));
