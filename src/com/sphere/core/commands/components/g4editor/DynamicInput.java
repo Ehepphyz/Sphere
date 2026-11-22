@@ -23,12 +23,28 @@ final class DynamicInput {
         final String label;
         final Units.Category category;
         double mouse;
+        /**
+         * What the mouse value stands for when the drawing assistant matched it (see Inference): a variable's
+         * name, written into the model instead of the number so the design stays parametric; null otherwise.
+         */
+        String mouseExpr;
+        /** Why the mouse value is what it is ("= Rin", "= Tube_s radius"), shown beside it; null when plain. */
+        String hint;
         String typed;
         boolean locked;
+        /** A count: also takes "x5", "*5" (that many in a row) and "/5" (the gap divided), read by the tool. */
+        boolean counts;
 
         Field(String label, Units.Category category) {
             this.label = label;
             this.category = category;
+        }
+
+        /** Sets the mouse value, plain: no inference behind it. */
+        void mouse(double v) {
+            mouse = v;
+            mouseExpr = null;
+            hint = null;
         }
     }
 
@@ -105,9 +121,10 @@ final class DynamicInput {
             if (e.isControlDown() || e.isAltDown()) {
                 return false;
             }
-            // Typing starts with a digit, a sign, a point, a parenthesis or '='; then anything.
+            // Typing starts with a digit, a sign, a point, a parenthesis or '='; then anything. A count also
+            // starts with x, * or / ("x5": five in a row, "/5": the gap divided in five)
             if (f.typed == null && !(Character.isDigit(c) || c == '-' || c == '+' || c == '.' || c == '('
-                || c == '=')) {
+                || c == '=' || (f.counts && (c == 'x' || c == 'X' || c == '*' || c == '/')))) {
                 return false;
             }
             if (f.typed == null) {
@@ -140,6 +157,9 @@ final class DynamicInput {
         final Field f = fields.get(i);
         if (f.typed != null && !f.typed.isBlank()) {
             return normalize(f.typed, f.category, lengthUnit);
+        }
+        if (f.mouseExpr != null) {
+            return f.mouseExpr;
         }
         return format(f.mouse, f.category, lengthUnit);
     }
@@ -212,6 +232,9 @@ final class DynamicInput {
         if (f.typed != null) {
             return f.typed + (i == active ? "|" : "");
         }
-        return Units.best(f.mouse, f.category);
+        if (f.counts) {
+            return Units.num(f.mouse);
+        }
+        return Units.best(f.mouse, f.category) + (f.hint != null ? "   " + f.hint : "");
     }
 }

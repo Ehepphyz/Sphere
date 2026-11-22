@@ -64,6 +64,11 @@ final class RunPanel extends JPanel {
     private final Consumer<String> console;
     private Geant4Bridge bridge;
     private String loadedRevision;
+    /** Told each run's answer, on the event thread: Physics Live compares it with its prediction. */
+    Consumer<Map<String, Object>> onResult = r -> {
+    };
+    /** The design when the last run started (SphereLive.designKey): its answer holds for that design only. */
+    private String runDesign = "";
 
     private final JLabel status = new JLabel("geant4-bridge: not started");
     private final JComboBox<String> physics = new JComboBox<>(new String[] {"FTFP_BERT", "FTFP_BERT_EMZ", "QGSP_BERT",
@@ -183,7 +188,18 @@ final class RunPanel extends JPanel {
         return row + 1;
     }
 
-    private void restoreGun() {
+    /** Runs the design's gun as it is now (Physics Live's beam), with the events and physics set here. */
+    void runNow() {
+        restoreGun();
+        run();
+    }
+
+    String runDesign() {
+        return runDesign;
+    }
+
+    /** Shows the design's gun again (Physics Live may have aimed it). */
+    void restoreGun() {
         final Map<String, String> s = model.geometry.settings();
         particle.setSelectedItem(s.getOrDefault("gun.particle", "e-"));
         energy.setText(s.getOrDefault("gun.energy", "1 GeV").replace("*", " "));
@@ -354,6 +370,7 @@ final class RunPanel extends JPanel {
         runButton.setEnabled(false);
         cancelButton.setEnabled(true);
         progress.setValue(0);
+        runDesign = SphereLive.designKey(model.geometry);
         model.log("run " + args.get("events") + " " + args.get("particle") + " " + energy.getText().replace(" ", ""));
         background(() -> {
             try {
@@ -441,6 +458,7 @@ final class RunPanel extends JPanel {
                 + (a.fixes().isEmpty() ? "" : "  Console: " + String.join("  |  ", a.fixes().stream()
                 .map(Advisor.Fix::command).toList())));
         }
+        onResult.accept(r);
     }
 
     // ------------------------------------------------------------------

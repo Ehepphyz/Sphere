@@ -100,9 +100,45 @@ final class Viewport extends JComponent {
     private static final double GHOST_PX = 12;
     WorkPlane plane = WorkPlane.xy(0);
     Tools.Tool tool;
+    /** The drawing assistant: snaps, guides, lengths matched to the design (see Inference). */
+    final Inference inference = new Inference(this);
+    /** Previews say where they will go and whether they would overlap (see LiveCheck). */
+    boolean liveCheck = true;
+    /** Ctrl held: the assistant steps aside, points are taken as they are. */
+    private boolean ctrlHeld;
+    /**
+     * drawDrag: the press took a drawing tool's point; drawGesture: it was the first point, so a drag takes
+     * the next one at the release; drawMoved: the drag went far enough for that; toolGrab: a tool took the
+     * press itself (a stroke, a face pushed, a volume dragged).
+     */
+    private boolean drawDrag, drawGesture, drawMoved, toolGrab;
+    /** How far a drag from a first point goes before its release takes the next point: a trembling click is no drag. */
+    private static final double DRAG_DRAW_PX = 8;
 
     // View options
     boolean gridSnap = true, vertexSnap = true, showGrid = true, autoTransparent = true, faceSnapPlane = true;
+    /** Creo's datum planes (FRONT, TOP, RIGHT) and the world's coordinate system; the spin center. */
+    boolean showDatums = true, showSpin = true;
+    /** Creo's display styles: 0 shading with edges, 1 shading, 2 wireframe. */
+    int displayStyle;
+    static final String[] DISPLAY_STYLES = {"Shading with edges", "Shading", "Wireframe"};
+    /** Told when the tool changes (null: back to selecting), so the window shows the tool's dashboard. */
+    private Consumer<Tools.Tool> toolListener = t -> { };
+
+    void setToolListener(Consumer<Tools.Tool> l) {
+        toolListener = l == null ? t -> { } : l;
+    }
+
+    /** OK, as Creo's dashboard and its middle click have it: what Enter does for the tool at work. */
+    void toolAccept() {
+        if (tool == null) {
+            return;
+        }
+        tool.key(new KeyEvent(this, KeyEvent.KEY_PRESSED, System.currentTimeMillis(), 0, KeyEvent.VK_ENTER, '\n'));
+        updateStatus();
+        repaint();
+        requestFocusInWindow();
+    }
     boolean section;
     int sectionAxis = 1;           // 0 x, 1 y, 2 z
     double sectionOffset;
@@ -180,6 +216,10 @@ final class Viewport extends JComponent {
         addKeyListener(new Keys());
         model.addListener(new EditorModel.Listener() {
             public void selectionChanged() {
+                if (dimsPv != null && !model.selection().contains(dimsPv)) {
+                    dimsPv = null;
+                    closeDimEditor();
+                }
                 sceneVersion++;
                 repaint();
             }
@@ -214,12 +254,20 @@ final class Viewport extends JComponent {
             tool.cancel();
         }
         tool = t;
+        inference.reset();
+        if (t != null) {
+            dimsPv = null;
+            closeDimEditor();
+        }
+        drawDrag = false;
+        toolGrab = false;
         if (t != null) {
             t.activate();
             setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
         } else {
             setCursor(Cursor.getDefaultCursor());
         }
+        toolListener.accept(t);
         updateStatus();
         requestFocusInWindow();
         repaint();
@@ -227,10 +275,18 @@ final class Viewport extends JComponent {
 
     void updateStatus() {
         if (tool != null) {
-            status = tool.hint();
+            // while drawing the left button only draws: how to turn and move the view, and to draw free
+            status = tool.hint() + (tool.usesPlane() ? creoMouse
+                ? "      [middle drag: spin, Shift+middle: pan, middle click: OK, right click: menu, Ctrl: no snap]"
+                : "      [middle drag: orbit, right drag: pan, Ctrl: no snap]" : "");
         } else {
-            status = "Select: click a volume (Ctrl adds), drag to orbit, right-drag to pan, wheel to zoom, "
-                + "double-click to frame. B box, T tube, S sphere, C cone, P extrude, V revolve, M move, R rotate";
+            status = creoMouse
+                ? "Select: click a volume (Ctrl adds or removes), drag a box (left to right: wholly inside, right to"
+                + " left: touched), double-click: its dimensions. Middle drag spins, Shift+middle pans, Ctrl+middle"
+                + " zooms and turns, wheel zooms. Q sketch, E push/pull, B box, T tube, S sphere, C cone, M move"
+                : "Select: click a volume (Ctrl adds), drag to orbit, right-drag to pan, wheel to zoom, "
+                + "double-click to frame. Q sketch freehand, E push/pull a face, B box, T tube, S sphere, C cone,"
+                + " P extrude, V revolve, M move (drag it; Ctrl copies), R rotate";
         }
         statusSink.accept(status);
     }
@@ -546,7 +602,7 @@ final class Viewport extends JComponent {
                             double fovY, int width, int height, Object instances, long version, int looks,
                             PhysicalVolume hover, boolean section, int sectionAxis, double sectionOffset, boolean dark,
                             boolean grid, boolean glass, WorkPlane plane, int tracks, Object lastTrack, double minPx,
-                            double scale, Object scheme, Object isolated, boolean xray) {
+                            double scale, Object scheme, Object isolated, boolean xray, int style, boolean datums) {
     }
 
     private SceneKey sceneKey(double minPx, double scale) {
@@ -559,7 +615,33 @@ final class Viewport extends JComponent {
         return new SceneKey(camera.target, camera.distance, camera.right, camera.up, camera.back, camera.perspective,
             camera.fovY, getWidth(), getHeight(), model.geometry.instances(), sceneVersion, looks, shownHover, section,
             sectionAxis, sectionOffset, darkTheme, showGrid, autoTransparent, plane, tracks.size(),
-            tracks.isEmpty() ? null : tracks.get(tracks.size() - 1), minPx, scale, scheme(), isolated, xray);
+            tracks.isEmpty() ? null : tracks.get(tracks.size() - 1), minPx, scale, scheme(), isolated, xray, displayStyle,
+            showDatums);
+    }
+
+    /** The instance list the datum planes were sized for, and their half size: the model's, a little more. */
+    private Object datumFor;
+    private double datumHalf = 100;
+
+    private double datumHalf(List<Geometry.Instance> list) {
+        if (datumFor != list) {
+            datumFor = list;
+            double h = 0;
+            if (!list.isEmpty()) {
+                for (Geometry.Instance c : model.geometry.childrenOf(list.get(0))) {
+                    final BBox b = Geometry.worldBox(c);
+                    if (!b.isEmpty()) {
+                        h = Math.max(h, Math.max(Math.max(Math.abs(b.minX()), Math.abs(b.maxX())),
+                            Math.max(Math.max(Math.abs(b.minY()), Math.abs(b.maxY())), Math.max(Math.abs(b.minZ()), Math.abs(b.maxZ())))));
+                    }
+                }
+                if (h == 0 && list.get(0).lv().solid() != null && list.get(0).lv().solid().error() == null) {
+                    h = list.get(0).lv().solid().extent().diagonal() / 6;
+                }
+            }
+            datumHalf = Math.max(h * 1.15, 50);
+        }
+        return datumHalf;
     }
 
     /** True while the view moves and its full frames are slow: frames are lighter until it stops. */
@@ -642,7 +724,8 @@ final class Viewport extends JComponent {
                          List<Geometry.Instance> list, double radius, boolean dark, Vec3 cutN, double cutD,
                          java.util.Set<PhysicalVolume> sel, PhysicalVolume hover, Tools.Tool tool, boolean glass,
                          boolean grid, WorkPlane plane, double gridStep, List<float[]> tracks, List<Integer> trackColors,
-                         ColorScheme scheme, java.util.Set<PhysicalVolume> isolated, boolean xray, List<Solid> solids) {
+                         ColorScheme scheme, java.util.Set<PhysicalVolume> isolated, boolean xray, List<Solid> solids,
+                         int style, double datums, boolean yUp) {
     }
 
     /** The instance list the mesh cache was last pruned for (event thread). */
@@ -675,7 +758,8 @@ final class Viewport extends JComponent {
         }
         return new Scene(key, camera.copy(), Math.max(1, getWidth()), Math.max(1, getHeight()), minPx, scale, light, list,
             radius, darkTheme, cutN, cutD, sel, shownHover, tool, autoTransparent, showGrid, plane, gridStep(),
-            new ArrayList<>(tracks), new ArrayList<>(trackColors), scheme(), isolated, xray, solids);
+            new ArrayList<>(tracks), new ArrayList<>(trackColors), scheme(), isolated, xray, solids, displayStyle,
+            showDatums ? datumHalf(list) : 0, yUp);
     }
 
     /** Asks the render thread for a frame; one asked for before it began is dropped for this one. */
@@ -781,11 +865,9 @@ final class Viewport extends JComponent {
         final int w = sc.w(), h = sc.h();
         final double scale = sc.scale();
         final int rw = Math.max(1, (int) Math.round(w * scale)), rh = Math.max(1, (int) Math.round(h * scale));
-        if (sc.dark()) {
-            raster.setColors(0xFF1D232C, 0xFF3A4352, 0xFF35D07F, 0xFFF6D860, 0xFF0D0F12);
-        } else {
-            raster.setColors(0xFF97A9C4, 0xFFF1F4F9, 0xFF1FAE5F, 0xFFE8B923, 0xFF1D2128);
-        }
+        // Creo's graphics area: its gradient, green for the selection, cyan for what the mouse is on
+        final SphereCreo.Palette cp = sc.dark() ? SphereCreo.DARK : SphereCreo.LIGHT;
+        raster.setColors(cp.graphicsTop(), cp.graphicsBottom(), cp.select(), cp.preselect(), cp.edge());
         raster.begin(cam, rw, rh, sc.radius());
         raster.setOrthoBias((float) (cam.pixelSize() / scale * 1.5));
         if (sc.cutN() != null) {
@@ -867,7 +949,10 @@ final class Viewport extends JComponent {
                     flags);
                 continue;
             }
-            if (lv.wireframe()) {
+            if (sc.style() == 1) {
+                flags |= Raster.FLAG_NO_EDGES; // Creo's "Shading": no edges but the selection's
+            }
+            if (lv.wireframe() || sc.style() == 2) {
                 flags |= Raster.FLAG_WIRE;
             } else if (sc.glass() && childShown[i] && !selected[i]) {
                 // An envelope would hide what it holds: draw it as glass. When nothing it holds is
@@ -879,9 +964,10 @@ final class Viewport extends JComponent {
                     flags |= Raster.FLAG_WIRE;
                 }
             }
-            if (tl != null && !(tl instanceof Tools.MoveTool) && !selected[i]) {
-                // While drawing, existing volumes recede a little
-                color = ((int) (((color >>> 24) & 0xFF) * 0.85) << 24) | (color & 0xFFFFFF);
+            if (tl != null && !(tl instanceof Tools.MoveTool) && !(tl instanceof SmartTools.PushPullTool) && !selected[i]) {
+                // While drawing, existing volumes recede a little: paler, not see-through. A translucent volume
+                // leaves no depth, and its faces could then be neither drawn on nor snapped to as seen
+                color = (color & 0xFF000000) | (Raster.mix(color, sc.dark() ? 0xFF1D232C : 0xFFF1F4F9, 0.22) & 0xFFFFFF);
             }
             raster.mesh(meshFor(lv.solid(), lod(size[i] * scale)), in.world(), color, in.id(), flags);
         }
@@ -889,11 +975,14 @@ final class Viewport extends JComponent {
             grid(sc, raster);
         }
         axes(sc, raster);
+        if (sc.datums() > 0) {
+            datums(sc, raster);
+        }
         for (int i = 0; i < sc.tracks().size(); i++) {
             raster.lines(sc.tracks().get(i), null, sc.trackColors().get(i), 1, true);
         }
         if (tl != null) {
-            tl.preview(raster);
+            tl.previewFrame(raster);
         }
         final long tEnd = System.nanoTime();
         raster.end();
@@ -1051,6 +1140,35 @@ final class Viewport extends JComponent {
         raster.backgroundLines(java.util.Arrays.copyOf(majorL, b), null, (0x48 << 24) | (gc & 0xFFFFFF), 1);
     }
 
+    /** Creo's datum planes through the origin (FRONT, TOP, RIGHT): outlines the model hides where it is in front. */
+    private static void datums(Scene sc, Raster raster) {
+        final double s = sc.datums();
+        final int c = ((sc.dark() ? 0xB4 : 0xD0) << 24) | ((sc.dark() ? SphereCreo.DARK : SphereCreo.LIGHT).datum() & 0xFFFFFF);
+        for (int k = 0; k < 3; k++) {
+            final Vec3 a = Vec3.axis((k + 1) % 3), b = Vec3.axis((k + 2) % 3);
+            final Vec3[] q = {a.mul(-s).add(b.mul(-s)), a.mul(s).add(b.mul(-s)), a.mul(s).add(b.mul(s)), a.mul(-s).add(b.mul(s))};
+            final float[] seg = new float[24];
+            int i = 0;
+            for (int e = 0; e < 4; e++) {
+                for (Vec3 p : new Vec3[] {q[e], q[(e + 1) % 4]}) {
+                    seg[i++] = (float) p.x();
+                    seg[i++] = (float) p.y();
+                    seg[i++] = (float) p.z();
+                }
+            }
+            raster.lines(seg, null, c, 1, true);
+        }
+    }
+
+    /** The name of the datum plane normal to an axis: Creo's, which follow the view's up axis. */
+    String datumName(int normalAxis) {
+        return switch (normalAxis) {
+            case 0 -> "RIGHT";
+            case 1 -> yUp ? "TOP" : "FRONT";
+            default -> yUp ? "FRONT" : "TOP";
+        };
+    }
+
     private static void axes(Scene sc, Raster raster) {
         final double len = Math.max(sc.cam().halfHeight() * 0.25, 1);
         raster.lines(new float[] {0, 0, 0, (float) len, 0, 0}, null, 0xC0D84040, 2, true);
@@ -1085,7 +1203,7 @@ final class Viewport extends JComponent {
         final Boolean drew = fromShown(f -> g.drawImage(f.scale() < 1 ? f.raster().scaledTo(w, h) : f.raster().image(), 0, 0, null));
         if (drew == null) {
             // nothing drawn yet: the background, until the first frame
-            g.setColor(new Color(darkTheme ? 0x1D232C : 0x97A9C4));
+            g.setColor(new Color((darkTheme ? SphereCreo.DARK : SphereCreo.LIGHT).graphicsBottom()));
             g.fillRect(0, 0, w, h);
         }
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -1104,22 +1222,37 @@ final class Viewport extends JComponent {
     // Overlays: navigation cube, triad, gizmo, snap marker, dynamic input
     // ------------------------------------------------------------------
 
-    private static final Font LABEL = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
-    private static final Font LABEL_B = new Font(Font.SANS_SERIF, Font.BOLD, 12);
-    private static final Font CUBE_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 9);
+    private static final Font LABEL = SphereCreo.UI;
+    private static final Font LABEL_B = SphereCreo.UI_BOLD;
+    private static final Font CUBE_FONT = SphereCreo.SMALL.deriveFont(Font.BOLD, 9f);
     private Polygon[] cubeFaces = new Polygon[0];
     private String[] cubeNames = new String[0];
 
     private void overlay(Graphics2D g) {
-        navCube(g);
-        triad(g);
+        if (!bare) {
+            datumTags(g);
+            spinCenter(g);
+            navCube(g);
+            triad(g);
+        }
+        legendBottom = 0;
         legend(g);
+        drawDims(g);
+        selectionBox(g);
+        if (!bare) {
+            graphicsToolbar(g);
+        }
+        if (live != null) {
+            // below the color legend, and below the graphics toolbar (laid out just now) where a narrow view brings
+            // them together
+            live.paint(g, Math.max(legendBottom, toolbarBottom(12, 12 + 304)));
+        }
         if (isolated != null) {
             banner(g, "Isolated: " + isolated.size() + (isolated.size() > 1 ? " placements" : " placement")
                 + (xray ? ", the rest as outlines" : "") + "   -   I shows everything again");
         }
         if (clashBanner != null) {
-            banner(g, clashBanner, isolated != null ? 42 : 10, new Color(206, 58, 58, 232), Color.WHITE);
+            banner(g, clashBanner, isolated != null ? 76 : 44, new Color(206, 58, 58, 232), Color.WHITE);
         }
         for (Clashes.Clash c : clashes) {
             clashMarker(g, c);
@@ -1142,13 +1275,20 @@ final class Viewport extends JComponent {
             gizmo(g, mt.rotate);
         }
         if (tool != null) {
+            assistant(g);
             tool.overlay(g);
         }
         if (snap != null && tool != null && tool.usesPlane() && mouseX >= 0) {
             snapMarker(g);
+            if (snap.label() != null && !"free".equals(snap.kind())) {
+                tag(g, mouseX + 16, mouseY - 34, snap.label(), new Color(kindColor(snap.kind()), true));
+            }
         }
-        if (tool != null && !tool.input.isEmpty() && mouseX >= 0) {
+        if (tool != null && mouseX >= 0 && (!tool.hud().isEmpty() || tool.verdict() != null)) {
             dynamicInput(g);
+        }
+        if (bare) {
+            return;
         }
         // Frame time and scale, bottom right
         g.setFont(LABEL);
@@ -1158,6 +1298,267 @@ final class Viewport extends JComponent {
         final FontMetrics fm = g.getFontMetrics();
         g.setColor(darkTheme ? new Color(220, 226, 236, 200) : new Color(30, 38, 52, 200));
         g.drawString(info, getWidth() - fm.stringWidth(info) - 10, getHeight() - 8);
+    }
+
+    // ------------------------------------------------------------------
+    // Creo's graphics area: datum tags, spin center, graphics toolbar
+    // ------------------------------------------------------------------
+
+    /** The names of the datum planes at a corner of each, and the world's coordinate system, as Creo tags them. */
+    private void datumTags(Graphics2D g0) {
+        if (!showDatums) {
+            return;
+        }
+        final Graphics2D g = (Graphics2D) g0.create();
+        final SphereCreo.Palette p = darkTheme ? SphereCreo.DARK : SphereCreo.LIGHT;
+        final Color c = new Color(p.datum() & 0xFFFFFF);
+        final double s = datumHalf(model.geometry.instances());
+        g.setFont(SphereCreo.SMALL.deriveFont(Font.BOLD));
+        final FontMetrics fm = g.getFontMetrics();
+        for (int k = 0; k < 3; k++) {
+            final Vec3 a = Vec3.axis((k + 1) % 3), b = Vec3.axis((k + 2) % 3);
+            // the tag on the highest corner in sight (or the middle of a side, for a plane larger than the view)
+            double[] best = null;
+            for (double[] q : new double[][] {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}, {0, -1}, {1, 0}, {0, 1}, {-1, 0}}) {
+                final double[] sp = screenOf(a.mul(q[0] * s).add(b.mul(q[1] * s)));
+                final boolean corner = q[0] != 0 && q[1] != 0;
+                if (sp == null || sp[0] < 8 || sp[0] > getWidth() - 90 || sp[1] < 42 || sp[1] > getHeight() - 24) {
+                    continue;
+                }
+                if (best == null || (corner && best[3] == 0) || (corner == (best[3] != 0)
+                    && (sp[1] < best[1] - 0.5 || (Math.abs(sp[1] - best[1]) <= 0.5 && sp[0] < best[0])))) {
+                    best = new double[] {sp[0], sp[1], sp[2], corner ? 1 : 0};
+                }
+            }
+            if (best == null) {
+                continue;
+            }
+            final String name = datumName(k);
+            final int x = (int) best[0] + 4, y = (int) best[1] + 4;
+            g.setColor(SphereCreo.alpha(p.title(), 170));
+            g.fillRoundRect(x - 3, y, fm.stringWidth(name) + 6, fm.getHeight(), 4, 4);
+            g.setColor(c);
+            g.drawString(name, x, y + fm.getAscent());
+        }
+        // the coordinate system: its axes' letters, its name
+        final double len = Math.max(camera.halfHeight() * 0.25, 1);
+        final String[] ln = {"X", "Y", "Z"};
+        final Color[] lc = {new Color(0xE05555), new Color(0x4CC266), new Color(0x5B86F0)};
+        for (int k = 0; k < 3; k++) {
+            final double[] e = screenOf(Vec3.axis(k).mul(len * 1.08));
+            if (e != null) {
+                g.setColor(lc[k]);
+                g.drawString(ln[k], (int) e[0] - 3, (int) e[1] + 4);
+            }
+        }
+        final double[] o = screenOf(Vec3.ZERO);
+        if (o != null) {
+            g.setColor(SphereCreo.alpha(c, 170));
+            g.drawString("WORLD_CSYS", (int) o[0] + 6, (int) o[1] + 14);
+        }
+        g.dispose();
+    }
+
+    /** The spin center: where the view turns about, Creo's small tripod. */
+    private void spinCenter(Graphics2D g0) {
+        if (!showSpin) {
+            return;
+        }
+        final double[] o = screenOf(camera.target);
+        if (o == null) {
+            return;
+        }
+        final Graphics2D g = (Graphics2D) g0.create();
+        final double len = camera.pixelSize() * 13;
+        final Color[] lc = {new Color(0xE05555), new Color(0x4CC266), new Color(0x5B86F0)};
+        g.setStroke(SphereCreo.stroke(2f));
+        for (int k = 0; k < 3; k++) {
+            final double[] e = screenOf(camera.target.add(Vec3.axis(k).mul(len)));
+            if (e != null) {
+                g.setColor(lc[k]);
+                g.drawLine((int) o[0], (int) o[1], (int) e[0], (int) e[1]);
+            }
+        }
+        g.setColor(darkTheme ? new Color(235, 238, 242) : new Color(40, 46, 56));
+        g.fillOval((int) o[0] - 2, (int) o[1] - 2, 5, 5);
+        g.dispose();
+    }
+
+    /** A button of the graphics toolbar: its icon, its name, what it does (given its box), lit while on. */
+    private record GButton(javax.swing.Icon icon, String tip, java.util.function.Consumer<java.awt.Rectangle> action,
+                           java.util.function.BooleanSupplier on, boolean groupStart) {
+    }
+
+    private List<GButton> gButtons;
+    private final List<java.awt.Rectangle> gBoxes = new ArrayList<>();
+
+    /** Where the graphics toolbar's buttons were drawn last, in their order. */
+    List<java.awt.Rectangle> toolbarBoxes() {
+        return List.copyOf(gBoxes);
+    }
+
+    /** The bottom of the graphics toolbar when it spans part of [x0, x1] across, else 0. */
+    private int toolbarBottom(int x0, int x1) {
+        int bottom = 0;
+        for (java.awt.Rectangle r : gBoxes) {
+            if (r.x < x1 && r.x + r.width > x0) {
+                bottom = Math.max(bottom, r.y + r.height + 4);
+            }
+        }
+        return bottom;
+    }
+    private int gHover = -1, gPressed = -1;
+
+    /** Creo's graphics toolbar, floating over the top of the view: refit, zoom, views, display, what is shown. */
+    private List<GButton> gButtons() {
+        if (gButtons == null) {
+            final java.util.function.BooleanSupplier off = () -> false;
+            gButtons = List.of(
+                new GButton(Icons.fit(16), "Refit (F)", r -> fitAll(true), off, false),
+                new GButton(Icons.zoom(16, 1), "Zoom in", r -> zoomCenter(1 / 1.3), off, false),
+                new GButton(Icons.zoom(16, -1), "Zoom out", r -> zoomCenter(1.3), off, false),
+                new GButton(Icons.view(16, "iso"), "Saved orientations: standard, FRONT, TOP, RIGHT... (0-8)",
+                    r -> popup(r, viewsMenu()), off, true),
+                new GButton(Icons.box(16, new Color(0x8AA4C8)), "Display style: shading with edges, shading, wireframe",
+                    r -> popup(r, styleMenu()), off, false),
+                new GButton(Icons.palette(16), "Color by: document, material, density, X0, depth, sensitive (K)",
+                    r -> popup(r, colorMenu()), () -> colorMode != ColorScheme.Mode.DOCUMENT, false),
+                new GButton(Icons.plane(16), "Datum planes and coordinate system", r -> {
+                    showDatums = !showDatums;
+                    repaint();
+                }, () -> showDatums, true),
+                new GButton(Icons.spin(16), "Spin center", r -> {
+                    showSpin = !showSpin;
+                    repaint();
+                }, () -> showSpin, false),
+                new GButton(Icons.grid(16), "Work plane grid", r -> {
+                    showGrid = !showGrid;
+                    repaint();
+                }, () -> showGrid, false),
+                new GButton(Icons.section(16), "Section (X)", r -> {
+                    section = !section;
+                    repaint();
+                }, () -> section, true),
+                new GButton(Icons.isolate(16), "Isolate the selection (I)", r -> {
+                    if (!isolate(!isIsolated())) {
+                        statusSink.accept("Select volumes first: Isolate then shows only them, the rest as outlines");
+                    }
+                }, this::isIsolated, false),
+                new GButton(Icons.perspective(16), "Perspective (O)", r -> togglePerspective(), () -> camera.perspective, false));
+            if (live != null) {
+                // Physics Live on and off, at hand on the drawing it covers
+                final List<GButton> all = new ArrayList<>(gButtons);
+                all.add(new GButton(Icons.shower(16), "Physics Live: the beam, its shower and its numbers on the drawing,"
+                    + " on or off (L)", r -> {
+                        if (physicsToggle != null) {
+                            physicsToggle.run();
+                        } else {
+                            live.setOn(!live.isOn());
+                        }
+                        repaint();
+                    }, () -> live != null && live.isOn(), true));
+                gButtons = List.copyOf(all);
+            }
+        }
+        return gButtons;
+    }
+
+    private void zoomCenter(double f) {
+        camera.zoomAt(f, getWidth() / 2.0, getHeight() / 2.0);
+        moving();
+        repaint();
+    }
+
+    private void popup(java.awt.Rectangle r, javax.swing.JPopupMenu m) {
+        m.show(this, r.x, r.y + r.height + 3);
+    }
+
+    javax.swing.JPopupMenu viewsMenu() {
+        final javax.swing.JPopupMenu m = new javax.swing.JPopupMenu();
+        final String[][] views = {{"Standard orientation", "iso", "0"}, {datumName(2).equals("FRONT") ? "FRONT" : "Front",
+            "front", "1"}, {"TOP", "top", "2"}, {"RIGHT", "right", "3"}, {"BACK", "rear", "4"}, {"BOTTOM", "bottom", "5"},
+            {"LEFT", "left", "6"}, {"Side, the beam to the right", "side", "7"}, {"Along the beam", "beam", "8"}};
+        for (String[] v : views) {
+            final javax.swing.JMenuItem it = new javax.swing.JMenuItem(v[0] + "   (" + v[2] + ")");
+            it.addActionListener(e -> setView(v[1], true));
+            m.add(it);
+        }
+        return m;
+    }
+
+    javax.swing.JPopupMenu styleMenu() {
+        final javax.swing.JPopupMenu m = new javax.swing.JPopupMenu();
+        for (int i = 0; i < DISPLAY_STYLES.length; i++) {
+            final int k = i;
+            final javax.swing.JRadioButtonMenuItem it = new javax.swing.JRadioButtonMenuItem(DISPLAY_STYLES[i], displayStyle == i);
+            it.addActionListener(e -> {
+                displayStyle = k;
+                repaint();
+            });
+            m.add(it);
+        }
+        return m;
+    }
+
+    javax.swing.JPopupMenu colorMenu() {
+        final javax.swing.JPopupMenu m = new javax.swing.JPopupMenu();
+        for (ColorScheme.Mode md : ColorScheme.Mode.values()) {
+            final javax.swing.JRadioButtonMenuItem it = new javax.swing.JRadioButtonMenuItem(md.label, colorMode == md);
+            it.addActionListener(e -> setColorMode(md));
+            m.add(it);
+        }
+        return m;
+    }
+
+    /** The graphics toolbar button under a pixel, or -1. */
+    private int gAt(int x, int y) {
+        for (int i = 0; i < gBoxes.size(); i++) {
+            if (gBoxes.get(i).contains(x, y)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void graphicsToolbar(Graphics2D g0) {
+        final List<GButton> bs = gButtons();
+        final SphereCreo.Palette p = darkTheme ? SphereCreo.DARK : SphereCreo.LIGHT;
+        int w = 8;
+        for (GButton b : bs) {
+            w += 28 + (b.groupStart() ? 9 : 0);
+        }
+        final int x0 = Math.max(4, (getWidth() - w) / 2), y0 = 6, h = 30;
+        final Graphics2D g = SphereCreo.smooth(g0);
+        g.setColor(SphereCreo.alpha(p.title(), 228));
+        g.fillRoundRect(x0, y0, w, h, 8, 8);
+        g.setColor(p.line());
+        g.drawRoundRect(x0, y0, w, h, 8, 8);
+        gBoxes.clear();
+        int x = x0 + 4;
+        for (int i = 0; i < bs.size(); i++) {
+            final GButton b = bs.get(i);
+            if (b.groupStart() && i > 0) {
+                g.setColor(p.groupLine());
+                g.drawLine(x + 4, y0 + 6, x + 4, y0 + h - 6);
+                x += 9;
+            }
+            final java.awt.Rectangle r = new java.awt.Rectangle(x, y0 + 3, 28, 24);
+            gBoxes.add(r);
+            final boolean on = b.on().getAsBoolean();
+            if (on || i == gHover) {
+                g.setColor(on ? p.press() : p.hover());
+                g.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
+                g.setColor(on ? p.pressLine() : p.hoverLine());
+                g.drawRoundRect(r.x, r.y, r.width - 1, r.height - 1, 6, 6);
+            }
+            b.icon().paintIcon(this, g, r.x + 6, r.y + 4);
+            x += 28;
+        }
+        if (gHover >= 0 && gHover < bs.size()) {
+            final java.awt.Rectangle r = gBoxes.get(gHover);
+            tag(g, r.x, y0 + h + 4, bs.get(gHover).tip(), p.accent());
+        }
+        g.dispose();
     }
 
     /** The color scheme's key, top left: a swatch per material (or detector), or the bar of a scale. */
@@ -1181,6 +1582,7 @@ final class Viewport extends JComponent {
             wmax = Math.max(wmax, 190);
         }
         final int hh = 10 + lh + (cs.continuous ? 34 : lh * lines.size()) + 4;
+        legendBottom = y + hh;
         g.setColor(darkTheme ? new Color(26, 30, 38, 215) : new Color(255, 255, 255, 220));
         g.fillRoundRect(x, y, wmax + 16, hh, 8, 8);
         g.setColor(darkTheme ? new Color(90, 100, 120) : new Color(160, 170, 188));
@@ -1210,6 +1612,16 @@ final class Viewport extends JComponent {
             cy += lh;
         }
     }
+
+    /** Physics Live (SphereLive): the beam and its shower on the drawing, and its card; null when the editor has none. */
+    SphereLive live;
+    /** A picture of the detector alone (the template gallery's): no toolbar, cube, triad, datum tags nor frame time. */
+    boolean bare;
+    /** What the graphics toolbar's Physics Live button does: the window's own toggle (it remembers the choice). */
+    Runnable physicsToggle;
+    /** Where the color legend ends, top left: Physics Live's card goes below it. */
+    private int legendBottom;
+    private boolean livePressed;
 
     /** The clashes the selection has now (see ClashWatch), and the line that sums them up; none when null. */
     private List<Clashes.Clash> clashes = List.of();
@@ -1261,7 +1673,7 @@ final class Viewport extends JComponent {
 
     /** A line of state across the top of the view. */
     private void banner(Graphics2D g, String text) {
-        banner(g, text, 10, new Color(240, 170, 40, 225), new Color(40, 30, 10));
+        banner(g, text, 44, new Color(240, 170, 40, 225), new Color(40, 30, 10));
     }
 
     private void banner(Graphics2D g, String text, int y, Color bg, Color fg) {
@@ -1305,7 +1717,7 @@ final class Viewport extends JComponent {
             }
             final double lit = 0.55 + 0.45 * normals[f].dot(camera.back);
             final boolean hot = mouseX >= 0 && p.contains(mouseX, mouseY);
-            final Color base = hot ? new Color(90, 170, 255) : darkTheme ? new Color(70, 80, 96) : new Color(222, 228, 238);
+            final Color base = hot ? new Color(66, 148, 234) : darkTheme ? new Color(70, 80, 96) : new Color(222, 228, 238);
             g.setColor(new Color((int) (base.getRed() * lit), (int) (base.getGreen() * lit), (int) (base.getBlue() * lit), 235));
             g.fillPolygon(p);
             g.setColor(darkTheme ? new Color(150, 160, 175) : new Color(90, 100, 118));
@@ -1342,29 +1754,47 @@ final class Viewport extends JComponent {
         }
     }
 
+    /** The color of a snap's marker and label, by what it snapped to. */
+    private int kindColor(String kind) {
+        return switch (kind) {
+            case "vertex" -> 0xFFF07814;
+            case "midpoint" -> 0xFF14A0C8;
+            case "center" -> 0xFFC828C8;
+            case "edge" -> 0xFFD2463C;
+            case "face" -> 0xFF148CDC;
+            case "guide", "axis" -> 0xFF8B6CC9;
+            default -> darkTheme ? 0xFFDCE2EC : 0xFF1E2634;
+        };
+    }
+
     private void snapMarker(Graphics2D g) {
         final double[] s = screenOf(snap.world());
         if (s == null) {
             return;
         }
         final int x = (int) s[0], y = (int) s[1];
-        Tools.stroke(g, 1.6f);
+        Tools.stroke(g, 1.8f);
+        g.setColor(new Color(kindColor(snap.kind()), true));
         switch (snap.kind()) {
-            case "vertex" -> {
-                g.setColor(new Color(240, 120, 20));
-                g.drawRect(x - 5, y - 5, 10, 10);
-            }
+            case "vertex" -> g.drawRect(x - 5, y - 5, 10, 10);
+            case "midpoint" -> g.drawPolygon(new int[] {x, x + 6, x - 6}, new int[] {y - 7, y + 5, y + 5}, 3);
             case "center" -> {
-                g.setColor(new Color(200, 40, 200));
                 g.drawOval(x - 6, y - 6, 12, 12);
                 g.drawLine(x - 3, y, x + 3, y);
                 g.drawLine(x, y - 3, x, y + 3);
             }
+            case "edge" -> g.drawPolygon(new int[] {x, x + 6, x, x - 6}, new int[] {y - 6, y, y + 6, y}, 4);
             case "face" -> {
-                g.setColor(new Color(20, 140, 220));
                 g.drawLine(x - 6, y - 6, x + 6, y + 6);
                 g.drawLine(x - 6, y + 6, x + 6, y - 6);
             }
+            case "guide", "axis" -> {
+                g.fillOval(x - 4, y - 4, 8, 8);
+                g.setColor(darkTheme ? new Color(255, 255, 255, 220) : new Color(30, 40, 60, 220));
+                g.drawLine(x - 8, y, x + 8, y);
+                g.drawLine(x, y - 8, x, y + 8);
+            }
+            case "free" -> g.drawOval(x - 4, y - 4, 8, 8);
             default -> {
                 g.setColor(darkTheme ? new Color(255, 255, 255, 200) : new Color(30, 40, 60, 200));
                 g.drawLine(x - 7, y, x + 7, y);
@@ -1373,26 +1803,476 @@ final class Viewport extends JComponent {
         }
     }
 
+    /**
+     * What the drawing assistant shows around the cursor: the guides it lines points up on, the points it
+     * acquired, the points the tool holds (pinned the moment they are taken), the mother the volume drawn
+     * will go into, and where it would overlap.
+     */
+    private void assistant(Graphics2D g0) {
+        final Graphics2D g = (Graphics2D) g0.create();
+        try {
+            if (tool.usesPlane() && mouseX >= 0) {
+                g.setStroke(new BasicStroke(1.2f));
+                g.setColor(darkTheme ? new Color(200, 208, 222, 140) : new Color(60, 70, 90, 140));
+                for (Inference.Ref r : inference.acquired()) {
+                    final double[] s = screenOf(r.at());
+                    if (s != null) {
+                        final int x = (int) s[0], y = (int) s[1];
+                        g.drawLine(x - 3, y, x + 3, y);
+                        g.drawLine(x, y - 3, x, y + 3);
+                    }
+                }
+                if (snap != null) {
+                    for (Inference.Guide gd : snap.guides()) {
+                        guide(g, gd);
+                    }
+                }
+            }
+            final Inference.Guide level = inference.alongGuide;
+            if (level != null) {
+                for (DynamicInput.Field f : tool.hud().fields) {
+                    if (level.label().equals(f.hint) && f.typed == null) {
+                        guide(g, level);
+                        break;
+                    }
+                }
+            }
+            // The points taken: pinned at once, so the hand sees the click was heard
+            for (Inference.Ref r : tool.references()) {
+                final double[] s = screenOf(r.at());
+                if (s == null) {
+                    continue;
+                }
+                final int x = (int) Math.round(s[0]), y = (int) Math.round(s[1]);
+                g.setColor(darkTheme ? new Color(20, 24, 30) : Color.WHITE);
+                g.fillOval(x - 6, y - 6, 12, 12);
+                g.setColor(new Color(0x1F9D57));
+                g.fillOval(x - 4, y - 4, 8, 8);
+            }
+            final LiveCheck.Verdict v = tool.verdict();
+            if (v != null) {
+                if (v.mother() != null && v.mother().pv() != null) {
+                    motherBox(g, v.mother());
+                }
+                if (v.where() != null && (v.state() == LiveCheck.State.OVERLAP || v.state() == LiveCheck.State.OUTSIDE)) {
+                    final double[] s = screenOf(v.where());
+                    if (s != null) {
+                        final int x = (int) s[0], y = (int) s[1];
+                        g.setColor(new Color(v.state().argb | 0xFF000000));
+                        g.setStroke(new BasicStroke(2f));
+                        g.drawOval(x - 9, y - 9, 18, 18);
+                        g.drawLine(x - 4, y - 4, x + 4, y + 4);
+                        g.drawLine(x - 4, y + 4, x + 4, y - 4);
+                    }
+                }
+            }
+        } finally {
+            g.dispose();
+        }
+    }
+
+    /** A guide: dashed, from what it refers to (a dot there) to where the mouse is taken. */
+    private void guide(Graphics2D g, Inference.Guide gd) {
+        final double[] a = screenOf(gd.from()), b = screenOf(gd.to());
+        if (a == null || b == null) {
+            return;
+        }
+        final Color c = new Color(gd.argb() & 0xFFFFFF);
+        g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 215));
+        g.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 1f, new float[] {6f, 4f}, 0f));
+        g.drawLine((int) a[0], (int) a[1], (int) b[0], (int) b[1]);
+        g.setStroke(new BasicStroke(1.4f));
+        g.fillOval((int) a[0] - 3, (int) a[1] - 3, 6, 6);
+    }
+
+    /** The box of the mother a volume being drawn will go into, dashed, with its name. */
+    private void motherBox(Graphics2D g, Geometry.Instance mi) {
+        final BBox b = Geometry.worldBox(mi);
+        if (b.isEmpty()) {
+            return;
+        }
+        final double[][] s = new double[8][];
+        int top = -1;
+        for (int k = 0; k < 8; k++) {
+            s[k] = screenOf(new Vec3((k & 1) == 0 ? b.minX() : b.maxX(), (k & 2) == 0 ? b.minY() : b.maxY(),
+                (k & 4) == 0 ? b.minZ() : b.maxZ()));
+            if (s[k] == null) {
+                return;
+            }
+            if (top < 0 || s[k][1] < s[top][1]) {
+                top = k;
+            }
+        }
+        g.setColor(darkTheme ? new Color(150, 200, 255, 150) : new Color(40, 90, 170, 150));
+        g.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 1f, new float[] {4f, 4f}, 0f));
+        for (int k = 0; k < 8; k++) {
+            for (int bit = 1; bit < 8; bit <<= 1) {
+                if ((k & bit) == 0) {
+                    g.drawLine((int) s[k][0], (int) s[k][1], (int) s[k | bit][0], (int) s[k | bit][1]);
+                }
+            }
+        }
+        tag(g, (int) s[top][0] + 6, (int) s[top][1] - 22, "inside " + mi.lv().name(),
+            darkTheme ? new Color(150, 200, 255) : new Color(40, 90, 170));
+    }
+
+    /** A small label with a colored edge: what the assistant snapped to, what a drag lands on. */
+    void tag(Graphics2D g0, int x, int y, String text, Color accent) {
+        final Graphics2D g = (Graphics2D) g0.create();
+        g.setFont(LABEL);
+        final FontMetrics fm = g.getFontMetrics();
+        final int w = fm.stringWidth(text) + 16, h = fm.getHeight() + 6;
+        final int cx = Math.max(2, Math.min(x, getWidth() - w - 2)), cy = Math.max(2, Math.min(y, getHeight() - h - 2));
+        g.setColor(darkTheme ? new Color(26, 30, 38, 232) : new Color(255, 255, 255, 238));
+        g.fillRoundRect(cx, cy, w, h, 8, 8);
+        g.setColor(new Color(accent.getRed(), accent.getGreen(), accent.getBlue()));
+        g.fillRoundRect(cx, cy, 4, h, 4, 4);
+        g.setColor(darkTheme ? new Color(225, 230, 238) : new Color(30, 38, 52));
+        g.drawString(text, cx + 10, cy + 3 + fm.getAscent());
+        g.dispose();
+    }
+
+    /**
+     * A dimension drawn on the shape being made: a line beside the edge from a to b, ticks at its ends, and
+     * the value in the middle, on the side away from a point (the shape's middle) when one is given.
+     */
+    java.awt.Rectangle dim(Graphics2D g0, Vec3 a, Vec3 b, String text, Vec3 away) {
+        return dim(g0, a, b, text, away, null);
+    }
+
+    /** The same in an ink of its own (null: the view's), returning the box of the value written. */
+    java.awt.Rectangle dim(Graphics2D g0, Vec3 a, Vec3 b, String text, Vec3 away, Color ink0) {
+        final double[] sa = screenOf(a), sb = screenOf(b);
+        if (sa == null || sb == null) {
+            return null;
+        }
+        final double dx = sb[0] - sa[0], dy = sb[1] - sa[1], l = Math.hypot(dx, dy);
+        if (l < 8) {
+            return null;
+        }
+        double nx = -dy / l, ny = dx / l;
+        final double mx = (sa[0] + sb[0]) / 2, my = (sa[1] + sb[1]) / 2;
+        if (away != null) {
+            final double[] c = screenOf(away);
+            if (c != null && (mx - c[0]) * nx + (my - c[1]) * ny < 0) {
+                nx = -nx;
+                ny = -ny;
+            }
+        }
+        final double off = 12;
+        final Graphics2D g = (Graphics2D) g0.create();
+        final Color ink = ink0 != null ? ink0 : darkTheme ? new Color(235, 238, 244, 230) : new Color(25, 32, 46, 230);
+        g.setColor(ink);
+        g.setStroke(new BasicStroke(1.1f));
+        final int ax = (int) (sa[0] + nx * off), ay = (int) (sa[1] + ny * off);
+        final int bx = (int) (sb[0] + nx * off), by = (int) (sb[1] + ny * off);
+        g.drawLine((int) (sa[0] + nx * 3), (int) (sa[1] + ny * 3), (int) (sa[0] + nx * (off + 4)), (int) (sa[1] + ny * (off + 4)));
+        g.drawLine((int) (sb[0] + nx * 3), (int) (sb[1] + ny * 3), (int) (sb[0] + nx * (off + 4)), (int) (sb[1] + ny * (off + 4)));
+        g.drawLine(ax, ay, bx, by);
+        // ticks at 45 degrees, as on a drawing
+        final double tx = (dx / l + nx) * 4, ty = (dy / l + ny) * 4;
+        g.drawLine((int) (ax - tx), (int) (ay - ty), (int) (ax + tx), (int) (ay + ty));
+        g.drawLine((int) (bx - tx), (int) (by - ty), (int) (bx + tx), (int) (by + ty));
+        g.setFont(LABEL_B);
+        final FontMetrics fm = g.getFontMetrics();
+        final int w = fm.stringWidth(text) + 10, h = fm.getHeight() + 2;
+        final int lx = (int) (mx + nx * (off + 10) - w / 2.0), ly = (int) (my + ny * (off + 10) - h / 2.0);
+        g.setColor(darkTheme ? new Color(26, 30, 38, 220) : new Color(255, 255, 255, 228));
+        g.fillRoundRect(lx, ly, w, h, 6, 6);
+        if (ink0 != null) {
+            g.setColor(SphereCreo.alpha(ink0, 160));
+            g.drawRoundRect(lx, ly, w - 1, h - 1, 6, 6);
+        }
+        g.setColor(ink);
+        g.drawString(text, lx + 5, ly + 1 + fm.getAscent());
+        g.dispose();
+        return new java.awt.Rectangle(lx, ly, w, h);
+    }
+
+    // ------------------------------------------------------------------
+    // Creo's Edit: the dimensions of a volume, on the model, changed in place
+    // ------------------------------------------------------------------
+
+    /** The copy whose dimensions are shown (by placement, copy number and depth), or null. */
+    private PhysicalVolume dimsPv;
+    private int dimsCopy, dimsDepth;
+
+    /** A dimension of a solid: from a to b in its frame, the parameter it is, and what is written before it. */
+    private record DimSpec(Vec3 a, Vec3 b, String param, String prefix) {
+    }
+
+    /** A dimension drawn: where its value is, and what it changes. */
+    private record DimLabel(java.awt.Rectangle box, Solid solid, String param) {
+    }
+
+    private final List<DimLabel> dimLabels = new ArrayList<>();
+    private javax.swing.JTextField dimEditor;
+
+    /** Shows the dimensions of a volume on the model: a double click on one changes it. */
+    void showDims(Geometry.Instance in) {
+        closeDimEditor();
+        dimsPv = in.pv();
+        dimsCopy = in.copy();
+        dimsDepth = in.depth();
+        final Solid s = in.lv().solid();
+        statusSink.accept(s == null || dimSpecs(s).isEmpty() ? (s == null ? "" : s.g4Class())
+            + ": its parameters are in the property sheet"
+            : "The dimensions of " + in.lv().name() + ": double-click one to change it (Esc hides them)");
+        repaint();
+    }
+
+    void hideDims() {
+        dimsPv = null;
+        dimLabels.clear();
+        closeDimEditor();
+        repaint();
+    }
+
+    /** The copy the dimensions are shown on, as the document is now (an edit makes the copies anew). */
+    private Geometry.Instance dimsInstance() {
+        Geometry.Instance first = null;
+        for (Geometry.Instance i : model.geometry.instancesOf(dimsPv)) {
+            if (i.copy() == dimsCopy && i.depth() == dimsDepth) {
+                return i;
+            }
+            if (first == null) {
+                first = i;
+            }
+        }
+        return first;
+    }
+
+    /** Where a solid's dimensions are drawn, in its frame: Creo's, one per parameter that makes its size. */
+    private static List<DimSpec> dimSpecs(Solid s) {
+        final List<DimSpec> d = new ArrayList<>();
+        switch (s.tag()) {
+            case "box" -> {
+                final double x = s.v("x") / 2, y = s.v("y") / 2, z = s.v("z") / 2;
+                d.add(new DimSpec(new Vec3(-x, -y, z), new Vec3(x, -y, z), "x", ""));
+                d.add(new DimSpec(new Vec3(x, -y, z), new Vec3(x, y, z), "y", ""));
+                d.add(new DimSpec(new Vec3(x, -y, -z), new Vec3(x, -y, z), "z", ""));
+            }
+            case "tube" -> {
+                final double r = s.v("rmax"), ri = s.v("rmin"), z = s.v("z") / 2;
+                d.add(new DimSpec(new Vec3(0, 0, z), new Vec3(r, 0, z), "rmax", "R "));
+                if (ri > 0) {
+                    d.add(new DimSpec(new Vec3(0, 0, z), new Vec3(0, ri, z), "rmin", "Ri "));
+                }
+                d.add(new DimSpec(new Vec3(r, 0, -z), new Vec3(r, 0, z), "z", ""));
+            }
+            case "cone" -> {
+                final double r1 = s.v("rmax1"), r2 = s.v("rmax2"), z = s.v("z") / 2;
+                d.add(new DimSpec(new Vec3(0, 0, -z), new Vec3(r1, 0, -z), "rmax1", "R1 "));
+                d.add(new DimSpec(new Vec3(0, 0, z), new Vec3(r2, 0, z), "rmax2", "R2 "));
+                final double m = -Math.max(r1, r2);
+                d.add(new DimSpec(new Vec3(m, 0, -z), new Vec3(m, 0, z), "z", ""));
+            }
+            case "orb" -> d.add(new DimSpec(Vec3.ZERO, new Vec3(s.v("r"), 0, 0), "r", "R "));
+            case "sphere" -> {
+                d.add(new DimSpec(Vec3.ZERO, new Vec3(s.v("rmax"), 0, 0), "rmax", "R "));
+                if (s.v("rmin") > 0) {
+                    d.add(new DimSpec(Vec3.ZERO, new Vec3(0, s.v("rmin"), 0), "rmin", "Ri "));
+                }
+            }
+            case "torus" -> {
+                final double rt = s.v("rtor"), r = s.v("rmax");
+                d.add(new DimSpec(Vec3.ZERO, new Vec3(rt, 0, 0), "rtor", "Rt "));
+                d.add(new DimSpec(new Vec3(rt, 0, 0), new Vec3(rt, 0, r), "rmax", "r "));
+            }
+            case "eltube" -> {
+                final double x = s.v("dx"), y = s.v("dy"), z = s.v("dz");
+                d.add(new DimSpec(new Vec3(0, 0, z), new Vec3(x, 0, z), "dx", "dx "));
+                d.add(new DimSpec(new Vec3(0, 0, z), new Vec3(0, y, z), "dy", "dy "));
+                d.add(new DimSpec(new Vec3(x, 0, 0), new Vec3(x, 0, z), "dz", "dz "));
+            }
+            case "trd" -> {
+                final double x1 = s.v("x1") / 2, x2 = s.v("x2") / 2, y1 = s.v("y1") / 2, y2 = s.v("y2") / 2, z = s.v("z") / 2;
+                d.add(new DimSpec(new Vec3(-x1, -y1, -z), new Vec3(x1, -y1, -z), "x1", "x1 "));
+                d.add(new DimSpec(new Vec3(-x2, -y2, z), new Vec3(x2, -y2, z), "x2", "x2 "));
+                d.add(new DimSpec(new Vec3(x1, -y1, -z), new Vec3(x1, y1, -z), "y1", "y1 "));
+                d.add(new DimSpec(new Vec3(x2, -y2, z), new Vec3(x2, y2, z), "y2", "y2 "));
+                final double mx = -Math.max(x1, x2), my = -Math.max(y1, y2);
+                d.add(new DimSpec(new Vec3(mx, my, -z), new Vec3(mx, my, z), "z", ""));
+            }
+            default -> {
+                // its parameters are in the property sheet
+            }
+        }
+        return d;
+    }
+
+    /** A dimension's value: the number, or the variable it is and its number. */
+    private String dimText(Solid.Param p) {
+        final String v = Units.best(p.value(), Units.Category.LENGTH);
+        try {
+            if (!Expr.parse(p.expr()).variables().isEmpty()) {
+                return p.expr() + " = " + v;
+            }
+        } catch (GeometryException ignored) {
+            // shown as the number
+        }
+        return v;
+    }
+
+    /** The dimensions of the volume shown, in Creo's blue, over the model. */
+    private void drawDims(Graphics2D g) {
+        dimLabels.clear();
+        if (dimsPv == null || tool != null) {
+            return;
+        }
+        final Geometry.Instance in = dimsInstance();
+        if (in == null) {
+            dimsPv = null;
+            return;
+        }
+        final Solid s = in.lv().solid();
+        if (s == null || s.error() != null) {
+            return;
+        }
+        final Color ink = darkTheme ? new Color(0x7DB8FF) : new Color(0x1C5FBF);
+        final Vec3 center = in.world().translation();
+        for (DimSpec d : dimSpecs(s)) {
+            final Solid.Param p = s.param(d.param());
+            if (p == null) {
+                continue;
+            }
+            final java.awt.Rectangle r = dim(g, in.world().apply(d.a()), in.world().apply(d.b()), d.prefix() + dimText(p), center, ink);
+            if (r != null) {
+                dimLabels.add(new DimLabel(r, s, d.param()));
+            }
+        }
+    }
+
+    /** The dimension whose value is under a pixel, or -1. */
+    private int dimAt(int x, int y) {
+        for (int i = 0; i < dimLabels.size(); i++) {
+            if (dimLabels.get(i).box().contains(x, y)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Opens a dimension's value for typing, where it is written: a number, a unit, an expression, a variable. */
+    void editDim(int i) {
+        final DimLabel d = dimLabels.get(i);
+        closeDimEditor();
+        final javax.swing.JTextField f = new javax.swing.JTextField(d.solid().param(d.param()).expr());
+        f.setFont(LABEL_B);
+        f.setBounds(d.box().x - 4, d.box().y - 3, Math.max(d.box().width + 40, 140), d.box().height + 6);
+        f.setToolTipText("A value (120, 12 cm), an expression or a variable (2*Rin); Enter applies, Esc leaves it");
+        f.addActionListener(a -> applyDim(d, f.getText()));
+        f.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+                    closeDimEditor();
+                }
+            }
+        });
+        f.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                if (!e.isTemporary()) {
+                    closeDimEditor();
+                }
+            }
+        });
+        add(f);
+        dimEditor = f;
+        f.selectAll();
+        f.requestFocusInWindow();
+        repaint();
+    }
+
+    /** Where the values of the dimensions shown are written, as drawn last. */
+    List<java.awt.Rectangle> dimBoxes() {
+        final List<java.awt.Rectangle> out = new ArrayList<>();
+        for (DimLabel d : dimLabels) {
+            out.add(d.box());
+        }
+        return out;
+    }
+
+    /** The text field a dimension is being typed in, while it is (for the tests and the keys). */
+    javax.swing.JTextField dimEditor() {
+        return dimEditor;
+    }
+
+    /** Sets a solid's parameter from what was typed, as one undo step, echoed as the console's command. */
+    private void applyDim(DimLabel d, String text) {
+        final String expr = DynamicInput.normalize(text, Units.Category.LENGTH, model.lengthUnit);
+        final double v;
+        try {
+            v = Expr.eval(expr, model.geometry.scope());
+        } catch (GeometryException ex) {
+            statusSink.accept(d.param() + ": " + ex.getMessage());
+            return;
+        }
+        if (v < 0 || (v == 0 && !d.param().startsWith("rmin"))) {
+            statusSink.accept(d.param() + " must be positive");
+            return;
+        }
+        model.edit("Edit " + d.solid().name() + "." + d.param(), () -> d.solid().set(d.param(), expr));
+        model.log("set " + d.solid().name() + "." + d.param() + " = " + expr);
+        closeDimEditor();
+    }
+
+    private void closeDimEditor() {
+        if (dimEditor != null) {
+            final javax.swing.JTextField f = dimEditor;
+            dimEditor = null;
+            remove(f);
+            repaint();
+            requestFocusInWindow();
+        }
+    }
+
     private void dynamicInput(Graphics2D g) {
-        final DynamicInput in = tool.input;
+        final DynamicInput in = tool.hud();
+        final LiveCheck.Verdict verdict = tool.verdict();
         final List<String> lines = new ArrayList<>();
         for (int i = 0; i < in.fields.size(); i++) {
             lines.add(in.fields.get(i).label + "  " + in.display(i, model.lengthUnit));
         }
-        final int x = mouseX + 18, y = mouseY + 22;
+        final int nf = lines.size();
+        if (verdict != null) {
+            lines.add("into " + verdict.motherName());
+            lines.add(verdict.describe());
+        }
         g.setFont(LABEL);
         final FontMetrics fm = g.getFontMetrics();
         int wmax = 0;
         for (String l : lines) {
             wmax = Math.max(wmax, fm.stringWidth(l));
         }
+        if (in.error != null) {
+            wmax = Math.max(wmax, fm.stringWidth(in.error));
+        }
         final int lh = fm.getHeight() + 3;
         final int hh = lh * lines.size() + 8 + (in.error != null ? lh : 0);
+        // Beside the cursor, kept inside the view: on its other side near the right or the bottom edge
+        int x = mouseX + 18, y = mouseY + 22;
+        if (x + wmax + 22 > getWidth() - 2) {
+            x = Math.max(2, mouseX - 18 - (wmax + 22));
+        }
+        if (y + hh > getHeight() - 2) {
+            y = Math.max(2, mouseY - 22 - hh);
+        }
         g.setColor(darkTheme ? new Color(26, 30, 38, 230) : new Color(255, 255, 255, 235));
         g.fillRoundRect(x, y, wmax + 22, hh, 8, 8);
         g.setColor(darkTheme ? new Color(90, 100, 120) : new Color(150, 160, 180));
         g.drawRoundRect(x, y, wmax + 22, hh, 8, 8);
-        for (int i = 0; i < lines.size(); i++) {
+        for (int i = nf; i < lines.size(); i++) {
+            final int ly = y + 6 + lh * i;
+            final boolean state = i == nf + 1;
+            g.setFont(state ? LABEL_B : LABEL);
+            g.setColor(!state ? (darkTheme ? new Color(170, 180, 196) : new Color(90, 100, 118))
+                : new Color(verdict.state() == LiveCheck.State.CLEAR ? 0x1F9D57 : verdict.state().argb & 0xFFFFFF));
+            g.drawString(lines.get(i), x + 10, ly + fm.getAscent() + 1);
+        }
+        g.setFont(LABEL);
+        for (int i = 0; i < nf; i++) {
             final DynamicInput.Field f = in.fields.get(i);
             final int ly = y + 6 + lh * i;
             if (i == in.active) {
@@ -1543,7 +2423,7 @@ final class Viewport extends JComponent {
     }
 
     /** Parameter along an axis line through o of the point closest to the mouse ray. */
-    private double axisParam(Vec3 o, Vec3 axis, int mx, int my) {
+    double axisParam(Vec3 o, Vec3 axis, int mx, int my) {
         final Vec3[] r = camera.ray(mx, my);
         final Vec3 w0 = o.sub(r[0]);
         final double b = axis.dot(r[1]), d = axis.dot(w0), e = r[1].dot(w0);
@@ -1583,70 +2463,87 @@ final class Viewport extends JComponent {
         });
     }
 
+    /**
+     * What the mouse takes at a pixel (see Inference): a corner, a middle, a center or an edge of the volumes
+     * there, else the work plane's point lined up and on the grid. allowFacePlane: a face hit is returned
+     * (kind "face", with its normal) when no point of interest is in reach, for the first point of a shape.
+     */
     private Tools.Snap computeSnap(int mx, int my, boolean allowFacePlane) {
-        final Vec3[] r = camera.ray(mx, my);
+        final Tools.Snap s = inference.snap(mx, my, ctrlHeld);
+        if (s != null && s.onGeometry()) {
+            return s; // a corner, a center, an edge: the plane stays as it is
+        }
+        if (allowFacePlane) {
+            final Tools.Snap f = faceHit(mx, my);
+            if (f != null) {
+                return f;
+            }
+        }
+        return s;
+    }
+
+    /** The face of a volume under a pixel (kind "face": its point and its normal), or null on the background. */
+    private Tools.Snap faceHit(int mx, int my) {
         final Geometry.Instance under = instanceAt(mx, my);
-        // Vertex snap on the volume under the mouse
-        if (vertexSnap && under != null) {
-            final Mesh m = under.lv().solid().mesh(1); // the solid's own: the view's cache is the render thread's
-            double best = 11;
-            Vec3 bp = null;
-            for (int i = 0; i < m.vertexCount(); i++) {
-                final Vec3 p = under.world().apply(new Vec3(m.pos[i * 3], m.pos[i * 3 + 1], m.pos[i * 3 + 2]));
-                final double[] s = screenOf(p);
-                if (s == null) {
-                    continue;
-                }
-                final double d = Math.hypot(s[0] - mx, s[1] - my);
-                if (d < best) {
-                    best = d;
-                    bp = p;
-                }
-            }
-            final Vec3 c = under.world().translation();
-            final double[] sc = screenOf(c);
-            if (sc != null && Math.hypot(sc[0] - mx, sc[1] - my) < Math.min(best, 11)) {
-                final double[] uv = plane.uv(c);
-                return new Tools.Snap(uv[0], uv[1], c, "center", null);
-            }
-            if (bp != null) {
-                final double[] uv = plane.uv(bp);
-                return new Tools.Snap(uv[0], uv[1], bp, "vertex", null);
-            }
-        }
-        if (allowFacePlane && under != null) {
-            final Vec3 p = fromShown(f -> f.raster().pointAt((int) (mx * f.scale()), (int) (my * f.scale())));
-            if (p != null) {
-                final Vec3 local = under.world().applyInverse(p);
-                final Vec3 nl = under.lv().solid().normal(local.x(), local.y(), local.z());
-                final Vec3 nw = under.world().applyDir(nl);
-                return new Tools.Snap(0, 0, p, "face", nw);
-            }
-        }
-        final double[] uv = plane.hit(r[0], r[1]);
-        if (uv == null) {
+        final Solid sol = under == null || under.pv() == null ? null : under.lv().solid();
+        final Vec3 p = sol == null || sol.error() != null ? null : pointAt(mx, my);
+        if (p == null) {
             return null;
         }
-        double u = uv[0], v = uv[1];
-        String kind = "free";
-        if (gridSnap) {
-            final double s = gridStep();
-            u = Math.rint(u / s) * s;
-            v = Math.rint(v / s) * s;
-            kind = "grid";
+        // The depth buffer holds floats: the point is put back on the surface, so what is drawn there sits on
+        // it exactly, neither a hair inside (an overlap) nor above it (a gap)
+        Vec3 local = under.world().applyInverse(p);
+        for (int k = 0; k < 3; k++) {
+            final double d = sol.sdf(local.x(), local.y(), local.z());
+            if (!(Math.abs(d) > 1e-12)) {
+                break;
+            }
+            local = local.sub(sol.normal(local.x(), local.y(), local.z()).mul(d));
         }
-        return new Tools.Snap(u, v, plane.at(u, v), kind, null);
+        final Vec3 nl = sol.normal(local.x(), local.y(), local.z());
+        return new Tools.Snap(0, 0, under.world().apply(local), "face", under.world().applyDir(nl));
+    }
+
+    /** The snap at a pixel, for tools that place points of their own (a sketch's corners, its center). */
+    Tools.Snap snapAt(int x, int y) {
+        return computeSnap(x, y, false);
+    }
+
+    /** True while Ctrl is held: the assistant steps aside. */
+    boolean snapSuspended() {
+        return ctrlHeld;
     }
 
     /** The height the mouse pulls off the plane at a base point, snapped to the grid step. */
     double heightUnderMouse(Vec3 base) {
+        return heightAt(base).value();
+    }
+
+    /**
+     * The height the mouse pulls off the plane at a base point, as the assistant reads it: level with a
+     * point around (a neighbor's top, a corner), a size of the design or a variable, else on the grid.
+     */
+    Inference.Length heightAt(Vec3 base) {
         final Vec3[] r = camera.ray(mouseX, mouseY);
-        double h = plane.height(base, r[0], r[1]);
-        if (gridSnap) {
-            final double s = gridStep();
-            h = Math.rint(h / s) * s;
-        }
-        return h;
+        return inference.along(base, plane.n, plane.height(base, r[0], r[1]), ctrlHeld);
+    }
+
+    /** The world point of a volume under a pixel (the depth buffer's), or null on the background. */
+    Vec3 pointAt(int x, int y) {
+        return fromShown(f -> f.raster().pointAt((int) (x * f.scale()), (int) (y * f.scale())));
+    }
+
+    int mouseX() {
+        return mouseX;
+    }
+
+    int mouseY() {
+        return mouseY;
+    }
+
+    /** Says something in the status bar (a tool's measure while it drags). */
+    void status(String s) {
+        statusSink.accept(s);
     }
 
     // ------------------------------------------------------------------
@@ -1661,7 +2558,8 @@ final class Viewport extends JComponent {
         pv.setPosition(shift(p[0], d.x()), shift(p[1], d.y()), shift(p[2], d.z()));
     }
 
-    private String shift(String expr, double delta) {
+    /** An expression moved by a value: written anew when it is a number, kept and added to when it names a variable. */
+    String shift(String expr, double delta) {
         if (Math.abs(delta) < 1e-12) {
             return expr;
         }
@@ -1711,7 +2609,31 @@ final class Viewport extends JComponent {
             pressY = e.getY();
             pressButton = e.getButton();
             dragging = false;
-            if (SwingUtilities.isLeftMouseButton(e) && tool instanceof Tools.MoveTool mt) {
+            drawDrag = false;
+            drawMoved = false;
+            toolGrab = false;
+            boxArmed = false;
+            boxing = false;
+            ctrlHeld = e.isControlDown();
+            mouseX = e.getX();
+            mouseY = e.getY();
+            gPressed = SwingUtilities.isLeftMouseButton(e) ? gAt(e.getX(), e.getY()) : -1;
+            if (gPressed >= 0) {
+                return; // a button of the graphics toolbar: it acts at the release
+            }
+            livePressed = SwingUtilities.isLeftMouseButton(e) && live != null && live.hit(e.getX(), e.getY());
+            if (livePressed) {
+                return; // Physics Live's card: it opens the panel at the release
+            }
+            if (SwingUtilities.isMiddleMouseButton(e)) {
+                // Creo spins about the spin center; hidden, about the point of the model under the mouse
+                spinPivot = showSpin ? null : pointAt(e.getX(), e.getY());
+                return;
+            }
+            if (!SwingUtilities.isLeftMouseButton(e) || onCube(e.getX(), e.getY())) {
+                return;
+            }
+            if (tool instanceof Tools.MoveTool mt) {
                 final int a = hitGizmo(e.getX(), e.getY(), mt.rotate);
                 if (a >= 0) {
                     gizmoAxis = a;
@@ -1725,16 +2647,49 @@ final class Viewport extends JComponent {
                         dragStart.put(pv, new String[] {p[0], p[1], p[2], r[0], r[1], r[2]});
                     }
                     model.checkpoint();
+                    return;
                 }
             }
+            if (tool != null) {
+                // A stroke or a shape starts on the face pressed, when the tool draws on faces
+                if (tool.phase == 0 && faceSnapPlane && tool.takesFacePlane() && tool.usesPlane()) {
+                    facePlaneAt(e.getX(), e.getY());
+                }
+                // A tool that takes the press itself: a stroke, a face to push, a volume to drag
+                if (tool.pressed(e)) {
+                    toolGrab = true;
+                    updateStatus();
+                    repaint();
+                    return;
+                }
+                if (tool.usesPlane()) {
+                    // A drawing tool takes its point at the press, at once: a hand that trembles while it clicks
+                    // loses no point, and never turns the view. From the first point, a drag draws the next one,
+                    // taken at the release (a rectangle, a radius, in one stroke)
+                    drawGesture = tool.dragDraw();
+                    toolPoint(e);
+                    drawGesture &= tool.phase > 0;
+                    drawDrag = true;
+                    return;
+                }
+            }
+            // Creo: a left drag draws a box that selects (not over a dimension shown on the model)
+            boxArmed = creoMouse && (tool == null || tool instanceof Tools.MoveTool) && dimAt(e.getX(), e.getY()) < 0;
         }
 
         @Override
         public void mouseDragged(MouseEvent e) {
+            if (livePressed) {
+                return;
+            }
+            if (gPressed >= 0) {
+                return;
+            }
             final int dx = e.getX() - mouseX, dy = e.getY() - mouseY;
             if (Math.abs(e.getX() - pressX) + Math.abs(e.getY() - pressY) > 3) {
                 dragging = true;
             }
+            ctrlHeld = e.isControlDown();
             if (gizmoAxis >= 0) {
                 moving();
                 dragGizmo(e);
@@ -1742,15 +2697,71 @@ final class Viewport extends JComponent {
                 mouseY = e.getY();
                 return;
             }
-            if (mouseX >= 0 && dragging) {
-                final boolean pan = SwingUtilities.isRightMouseButton(e) || SwingUtilities.isMiddleMouseButton(e)
-                    || (SwingUtilities.isLeftMouseButton(e) && (e.isControlDown() || e.isShiftDown()) && tool == null);
-                if (pan) {
-                    camera.pan(dx, dy);
-                } else if (SwingUtilities.isLeftMouseButton(e)) {
-                    camera.orbit(-dx * 0.008, dy * 0.008);
+            if (toolGrab && tool != null) {
+                mouseX = e.getX();
+                mouseY = e.getY();
+                tool.dragged(e);
+                repaint();
+                return;
+            }
+            if (drawDrag && tool != null) {
+                // The point is taken: the mouse goes on showing the next one, it does not orbit
+                mouseX = e.getX();
+                mouseY = e.getY();
+                if (Math.hypot(e.getX() - pressX, e.getY() - pressY) > DRAG_DRAW_PX) {
+                    drawMoved = true;
                 }
-                moving();
+                inference.alongGuide = null;
+                if (tool.usesPlane()) {
+                    snap = computeSnap(e.getX(), e.getY(), false);
+                    if (snap != null) {
+                        tool.moved(snap, e);
+                    }
+                }
+                repaint();
+                return;
+            }
+            if (boxArmed && SwingUtilities.isLeftMouseButton(e)) {
+                if (Math.hypot(e.getX() - pressX, e.getY() - pressY) > 4) {
+                    boxing = true;
+                }
+                boxX0 = pressX;
+                boxY0 = pressY;
+                boxX1 = e.getX();
+                boxY1 = e.getY();
+                mouseX = e.getX();
+                mouseY = e.getY();
+                repaint();
+                return;
+            }
+            if (mouseX >= 0 && dragging) {
+                final boolean left = SwingUtilities.isLeftMouseButton(e), middle = SwingUtilities.isMiddleMouseButton(e);
+                final boolean right = SwingUtilities.isRightMouseButton(e);
+                if (creoMouse) {
+                    creoNavigate(e, dx, dy, middle, right);
+                } else {
+                    final boolean pan, orbit;
+                    if (tool != null && tool.usesPlane()) {
+                        // Drawing: the left button draws; the middle one orbits (Shift: pans), the right one pans
+                        orbit = middle && !e.isShiftDown();
+                        pan = right || (middle && e.isShiftDown());
+                    } else {
+                        pan = right || (middle && !e.isShiftDown()) || (left && (e.isControlDown() || e.isShiftDown()) && tool == null);
+                        orbit = !pan && (left || middle);
+                    }
+                    if (pan) {
+                        camera.pan(dx, dy);
+                    } else if (orbit) {
+                        camera.orbit(-dx * 0.008, dy * 0.008);
+                    }
+                    moving();
+                }
+                if (tool != null && tool.usesPlane()) {
+                    snap = computeSnap(e.getX(), e.getY(), false);
+                    if (snap != null) {
+                        tool.moved(snap, e);
+                    }
+                }
                 repaint();
             }
             mouseX = e.getX();
@@ -1759,6 +2770,24 @@ final class Viewport extends JComponent {
 
         @Override
         public void mouseReleased(MouseEvent e) {
+            if (livePressed) {
+                livePressed = false;
+                dragging = false;
+                if (live != null && live.hit(e.getX(), e.getY())) {
+                    live.clicked(e.getX(), e.getY());
+                }
+                return;
+            }
+            if (gPressed >= 0) {
+                final int b = gAt(e.getX(), e.getY()), pressed = gPressed;
+                gPressed = -1;
+                dragging = false;
+                if (b == pressed) {
+                    gButtons().get(b).action().accept(new java.awt.Rectangle(gBoxes.get(b)));
+                }
+                repaint();
+                return;
+            }
             if (gizmoAxis >= 0) {
                 gizmoAxis = -1;
                 model.commit(gizmoRotate ? "Rotate" : "Move");
@@ -1770,10 +2799,51 @@ final class Viewport extends JComponent {
                 repaint();
                 return;
             }
+            if (toolGrab) {
+                toolGrab = false;
+                dragging = false;
+                if (tool != null) {
+                    tool.released(e);
+                }
+                updateStatus();
+                repaint();
+                return;
+            }
+            if (drawDrag) {
+                // The press took the point; a drag from the first point takes the next one here
+                drawDrag = false;
+                dragging = false;
+                if (drawGesture && drawMoved && tool != null) {
+                    toolPoint(e);
+                }
+                drawMoved = false;
+                drawGesture = false;
+                updateStatus();
+                repaint();
+                return;
+            }
+            if (boxing) {
+                boxing = false;
+                boxArmed = false;
+                dragging = false;
+                selectBox(e.isControlDown());
+                repaint();
+                return;
+            }
+            boxArmed = false;
+            spinPivot = null;
+            if (!dragging && pressButton == MouseEvent.BUTTON2 && tool != null) {
+                toolAccept(); // Creo's middle click: OK
+                return;
+            }
             if (!dragging && pressButton == MouseEvent.BUTTON1) {
                 click(e);
             } else if (!dragging && pressButton == MouseEvent.BUTTON3 && tool != null) {
-                setTool(null); // right click ends a tool, as in FreeCAD's Draft
+                if (creoMouse) {
+                    toolMenu(e); // Creo: the tool's menu, OK and Cancel first
+                } else {
+                    setTool(null); // FreeCAD's Draft: a right click ends the tool
+                }
             } else if (!dragging && pressButton == MouseEvent.BUTTON3) {
                 contextMenu(e);
             }
@@ -1784,6 +2854,9 @@ final class Viewport extends JComponent {
         public void mouseMoved(MouseEvent e) {
             mouseX = e.getX();
             mouseY = e.getY();
+            ctrlHeld = e.isControlDown();
+            gHover = gAt(e.getX(), e.getY());
+            inference.alongGuide = null;
             final Geometry.Instance in = instanceAt(e.getX(), e.getY());
             final PhysicalVolume hv = in == null ? null : in.pv();
             if (hv != model.hover()) {
@@ -1795,6 +2868,9 @@ final class Viewport extends JComponent {
                     // A slow scene highlights what the mouse rests on, not every volume it crosses
                     hoverTimer.restart();
                 }
+            }
+            if (tool != null) {
+                tool.hovered(e);
             }
             if (tool != null && tool.usesPlane()) {
                 snap = computeSnap(e.getX(), e.getY(), false);
@@ -1808,6 +2884,7 @@ final class Viewport extends JComponent {
         @Override
         public void mouseExited(MouseEvent e) {
             mouseX = -1;
+            gHover = -1;
             model.hover(null);
             shownHover = null;
             hoverTimer.stop();
@@ -1816,7 +2893,9 @@ final class Viewport extends JComponent {
 
         @Override
         public void mouseWheelMoved(MouseWheelEvent e) {
-            final double f = Math.pow(1.15, e.getPreciseWheelRotation());
+            // Creo: Ctrl zooms finely, Shift coarsely
+            final double step = creoMouse && e.isControlDown() ? 1.04 : creoMouse && e.isShiftDown() ? 1.45 : 1.15;
+            final double f = Math.pow(step, e.getPreciseWheelRotation());
             camera.zoomAt(f, e.getX(), e.getY());
             moving();
             if (tool != null && tool.usesPlane()) {
@@ -1827,6 +2906,185 @@ final class Viewport extends JComponent {
             }
             repaint();
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Creo's mouse: spin, pan, zoom, turn; box selection; the tool's menu
+    // ------------------------------------------------------------------
+
+    /** Creo's mouse (the default): middle spins, Shift+middle pans, Ctrl+middle zooms and turns. False: FreeCAD's. */
+    boolean creoMouse = true;
+    /** What the view spins about while the middle button is held; null: the spin center (the view's target). */
+    private Vec3 spinPivot;
+    /** A left press that may become a selection box, the box being drawn, and its corners. */
+    private boolean boxArmed, boxing;
+    private int boxX0, boxY0, boxX1, boxY1;
+
+    /** A drag with Creo's mouse: middle spins, Shift+middle pans, Ctrl+middle zooms (up and down) and turns (across). */
+    private void creoNavigate(MouseEvent e, int dx, int dy, boolean middle, boolean right) {
+        if ((middle && e.isShiftDown()) || right) {
+            camera.pan(dx, dy);
+        } else if (middle && e.isControlDown()) {
+            if (Math.abs(dy) >= Math.abs(dx)) {
+                camera.zoomAt(Math.pow(1.012, dy), pressX, pressY);
+            } else {
+                camera.rotate(camera.back, dx * 0.01);
+            }
+        } else if (middle) {
+            spin(dx, dy);
+        } else {
+            return;
+        }
+        moving();
+    }
+
+    /**
+     * Creo's spin: free, about the screen's axes (no up axis held, the model can be turned any way), about the
+     * spin center, or about the point the drag began on when the spin center is hidden.
+     */
+    private void spin(int dx, int dy) {
+        final Vec3 r0 = camera.right, u0 = camera.up, b0 = camera.back;
+        camera.rotate(camera.up, -dx * 0.008);
+        camera.rotate(camera.right, -dy * 0.008);
+        if (spinPivot != null) {
+            // the view turned about its target; the target turns about the pivot the same way
+            final Vec3 d = camera.target.sub(spinPivot);
+            final Vec3 q = camera.right.mul(r0.dot(d)).add(camera.up.mul(u0.dot(d))).add(camera.back.mul(b0.dot(d)));
+            camera.target = spinPivot.add(q);
+        }
+    }
+
+    /**
+     * Selects what a box drawn with the left button holds. Drawn left to right: what lies wholly inside it;
+     * right to left: what it touches. A volume comes with what it holds: the outermost ones are selected.
+     * Ctrl adds to the selection.
+     */
+    private void selectBox(boolean add) {
+        final double x0 = Math.min(boxX0, boxX1), x1 = Math.max(boxX0, boxX1);
+        final double y0 = Math.min(boxY0, boxY1), y1 = Math.max(boxY0, boxY1);
+        final boolean window = boxX1 >= boxX0;
+        final List<Geometry.Instance> list = model.geometry.instances();
+        final boolean[] taken = new boolean[list.size()];
+        final java.util.LinkedHashSet<PhysicalVolume> chosen = new java.util.LinkedHashSet<>();
+        if (add) {
+            chosen.addAll(model.selection());
+        }
+        for (int i = 1; i < list.size(); i++) {
+            final Geometry.Instance in = list.get(i);
+            if (in.pv() == null) {
+                continue;
+            }
+            final int mother = in.parent() == null ? -1 : in.parent().id();
+            if (mother >= 0 && mother < taken.length && taken[mother]) {
+                taken[i] = true; // it comes with its mother
+                continue;
+            }
+            if (!in.lv().visible() || !insideIsolation(in)) {
+                continue;
+            }
+            final BBox b = Geometry.worldBox(in);
+            if (b.isEmpty()) {
+                continue;
+            }
+            double sx0 = Double.MAX_VALUE, sx1 = -Double.MAX_VALUE, sy0 = Double.MAX_VALUE, sy1 = -Double.MAX_VALUE;
+            boolean behind = false;
+            for (int k = 0; k < 8; k++) {
+                final double[] s = screenOf(new Vec3((k & 1) == 0 ? b.minX() : b.maxX(), (k & 2) == 0 ? b.minY() : b.maxY(),
+                    (k & 4) == 0 ? b.minZ() : b.maxZ()));
+                if (s == null) {
+                    behind = true;
+                    break;
+                }
+                sx0 = Math.min(sx0, s[0]);
+                sx1 = Math.max(sx1, s[0]);
+                sy0 = Math.min(sy0, s[1]);
+                sy1 = Math.max(sy1, s[1]);
+            }
+            if (behind) {
+                continue;
+            }
+            final boolean in2 = window ? sx0 >= x0 && sx1 <= x1 && sy0 >= y0 && sy1 <= y1
+                : sx1 >= x0 && sx0 <= x1 && sy1 >= y0 && sy0 <= y1;
+            if (in2) {
+                taken[i] = true;
+                chosen.add(in.pv());
+            }
+        }
+        model.selectAll(new ArrayList<>(chosen));
+        statusSink.accept(chosen.isEmpty() ? "Nothing " + (window ? "wholly inside" : "touched by") + " the box"
+            : chosen.size() + " selected (" + (window ? "wholly inside the box" : "touched by the box")
+            + "; drawn right to left, a box takes what it touches)");
+        if (!chosen.isEmpty()) {
+            final StringBuilder b = new StringBuilder("select");
+            for (PhysicalVolume pv : chosen) {
+                b.append(' ').append(pv.name());
+            }
+            model.log(b.toString());
+        }
+    }
+
+    /** True when a copy is shown: nothing is isolated, or it is inside what is. */
+    private boolean insideIsolation(Geometry.Instance in) {
+        if (isolated == null) {
+            return true;
+        }
+        for (Geometry.Instance i = in; i != null; i = i.parent()) {
+            if (i.pv() != null && isolated.contains(i.pv())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The selection box: solid when it takes what is wholly inside, dashed when it takes what it touches. */
+    private void selectionBox(Graphics2D g0) {
+        if (!boxing) {
+            return;
+        }
+        final Graphics2D g = (Graphics2D) g0.create();
+        final SphereCreo.Palette p = darkTheme ? SphereCreo.DARK : SphereCreo.LIGHT;
+        final boolean window = boxX1 >= boxX0;
+        final int x = Math.min(boxX0, boxX1), y = Math.min(boxY0, boxY1), w = Math.abs(boxX1 - boxX0), h = Math.abs(boxY1 - boxY0);
+        final Color c = window ? p.accent() : new Color(p.select() & 0xFFFFFF);
+        g.setColor(SphereCreo.alpha(c, 40));
+        g.fillRect(x, y, w, h);
+        g.setColor(c);
+        g.setStroke(window ? new BasicStroke(1.4f)
+            : new BasicStroke(1.4f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, new float[] {5f, 4f}, 0f));
+        g.drawRect(x, y, w, h);
+        g.dispose();
+    }
+
+    /** Creo's right click in a tool: its menu, OK and Cancel first, then the snaps. */
+    private void toolMenu(MouseEvent e) {
+        final javax.swing.JPopupMenu m = new javax.swing.JPopupMenu();
+        final javax.swing.JMenuItem ok = new javax.swing.JMenuItem("OK   (middle click, Enter)");
+        ok.addActionListener(a -> toolAccept());
+        m.add(ok);
+        final javax.swing.JMenuItem cancel = new javax.swing.JMenuItem("Cancel   (Esc)");
+        cancel.addActionListener(a -> setTool(null));
+        m.add(cancel);
+        if (tool != null && tool.phase > 0) {
+            final javax.swing.JMenuItem back = new javax.swing.JMenuItem("Start this shape again");
+            back.addActionListener(a -> {
+                if (tool != null) {
+                    tool.cancel();
+                    updateStatus();
+                }
+            });
+            m.add(back);
+        }
+        m.addSeparator();
+        final javax.swing.JCheckBoxMenuItem grid = new javax.swing.JCheckBoxMenuItem("Snap to grid   (G)", gridSnap);
+        grid.addActionListener(a -> gridSnap = grid.isSelected());
+        m.add(grid);
+        final javax.swing.JCheckBoxMenuItem points = new javax.swing.JCheckBoxMenuItem("Snap to points", vertexSnap);
+        points.addActionListener(a -> vertexSnap = points.isSelected());
+        m.add(points);
+        final javax.swing.JCheckBoxMenuItem faces = new javax.swing.JCheckBoxMenuItem("Draw on faces", faceSnapPlane);
+        faces.addActionListener(a -> faceSnapPlane = faces.isSelected());
+        m.add(faces);
+        m.show(this, e.getX(), e.getY());
     }
 
     private void dragGizmo(MouseEvent e) {
@@ -1864,6 +3122,52 @@ final class Viewport extends JComponent {
             + (gizmoRotate ? "XYZ".charAt(gizmoAxis) : Units.best(dd, Units.Category.LENGTH) + " along " + "XYZ".charAt(gizmoAxis)));
     }
 
+    /** True on a face of the navigation cube. */
+    private boolean onCube(int x, int y) {
+        for (Polygon p : cubeFaces) {
+            if (p.contains(x, y)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Gives a tool the point under the mouse, snapped where the event is (not where the mouse was last seen):
+     * the first point of a shape on a face moves the work plane onto that face.
+     */
+    private void toolPoint(MouseEvent e) {
+        if (tool == null) {
+            return;
+        }
+        if (tool.phase == 0 && faceSnapPlane && tool.takesFacePlane()) {
+            facePlaneAt(e.getX(), e.getY());
+        }
+        inference.alongGuide = null;
+        snap = computeSnap(e.getX(), e.getY(), false);
+        if (snap != null) {
+            tool.clicked(snap, e);
+            updateStatus();
+        }
+        repaint();
+    }
+
+    /**
+     * Moves the work plane onto the face of a volume under a pixel, if one is there (and it is another plane):
+     * a shape started on a box's top stands on it, whatever corner or middle the point then snaps to.
+     */
+    private void facePlaneAt(int x, int y) {
+        final Tools.Snap f = faceHit(x, y);
+        if (f == null || f.normal() == null) {
+            return;
+        }
+        final WorkPlane np = WorkPlane.facing(f.world(), f.normal());
+        if (!np.u.equals(plane.u) || !np.v.equals(plane.v) || np.origin.distance(plane.origin) > 1e-9) {
+            plane = np;
+            tool.fields();
+        }
+    }
+
     private void click(MouseEvent e) {
         // Navigation cube faces
         for (int i = cubeFaces.length - 1; i >= 0; i--) {
@@ -1873,30 +3177,25 @@ final class Viewport extends JComponent {
             }
         }
         if (tool != null && !(tool instanceof Tools.MoveTool)) {
-            // First click of a shape on a face: draw on that face
-            if (tool.phase == 0 && faceSnapPlane && !(tool instanceof Tools.MeasureTool)) {
-                final Tools.Snap f = computeSnap(e.getX(), e.getY(), true);
-                if (f != null && "face".equals(f.kind()) && f.normal() != null && instanceAt(e.getX(), e.getY()) != null
-                    && !(tool instanceof Tools.PolygonTool pt && !pt.pts.isEmpty())) {
-                    plane = WorkPlane.facing(f.world(), f.normal());
-                    tool.fields();
-                    snap = computeSnap(e.getX(), e.getY(), false);
-                }
+            toolPoint(e);
+            return;
+        }
+        // A dimension shown on the model: a double click changes it (Creo's Edit)
+        final int d = dimAt(e.getX(), e.getY());
+        if (d >= 0) {
+            if (e.getClickCount() >= 2) {
+                editDim(d);
             }
-            if (snap == null) {
-                snap = computeSnap(e.getX(), e.getY(), false);
-            }
-            if (snap != null) {
-                tool.clicked(snap, e);
-                updateStatus();
-            }
-            repaint();
             return;
         }
         final Geometry.Instance in = instanceAt(e.getX(), e.getY());
         if (e.getClickCount() >= 2 && in != null && in.pv() != null) {
             model.select(topSelectable(in), false);
-            fitSelection(true);
+            if (creoMouse) {
+                showDims(in); // Creo: a double click shows a feature's dimensions, to change them
+            } else {
+                fitSelection(true);
+            }
             return;
         }
         if (in == null || in.pv() == null) {
@@ -1953,9 +3252,35 @@ final class Viewport extends JComponent {
         contextMenuHandler.accept(e);
     }
 
+    /** Ctrl pressed or released: the snap under the mouse is taken again, with the assistant or without. */
+    private void ctrlChanged(boolean held) {
+        if (held == ctrlHeld) {
+            return;
+        }
+        ctrlHeld = held;
+        if (tool != null && tool.usesPlane() && mouseX >= 0) {
+            snap = computeSnap(mouseX, mouseY, false);
+            if (snap != null) {
+                tool.moved(snap, null);
+            }
+        }
+        repaint();
+    }
+
     private final class Keys extends KeyAdapter {
         @Override
+        public void keyReleased(KeyEvent e) {
+            if (e.getKeyCode() == KeyEvent.VK_CONTROL) {
+                ctrlChanged(false);
+            }
+        }
+
+        @Override
         public void keyPressed(KeyEvent e) {
+            if (e.getKeyCode() == KeyEvent.VK_CONTROL) {
+                ctrlChanged(true);
+                return;
+            }
             if (tool != null && tool.key(e)) {
                 updateStatus();
                 e.consume();

@@ -186,6 +186,8 @@ public class CppBackend implements Backend {
 
     public synchronized void cancelCurrentExecution() {
         if (currentProcess != null && currentProcess.isAlive()) {
+            // what it started too: a program the network builds runs under its cortex, in WSL through wsl.exe
+            currentProcess.descendants().forEach(ProcessHandle::destroyForcibly);
             currentProcess.destroyForcibly();
             AppLogger.info("C++ process pipeline forcibly canceled by user.");
         }
@@ -306,6 +308,13 @@ public class CppBackend implements Backend {
             tempSourceFile = Files.createTempFile("sphere_inline_", ".cpp");
             Files.writeString(tempSourceFile, codeBody, StandardCharsets.UTF_8);
 
+            // Code using the network's modules is built and run by the network, where they are
+            final java.util.Map<String, String> uses = com.sphere.core.snn.SnnCpp.needs(codeBody);
+            if (!uses.isEmpty() && com.sphere.core.snn.SnnCpp.reachable()) {
+                return snnRun(tempSourceFile.toFile(), List.of(), listener,
+                    "uses " + String.join(", ", uses.keySet()) + ": the Sphere Neural Network builds it where they are");
+            }
+
             String os = System.getProperty("os.name").toLowerCase();
             boolean useWsl = activeToolchain.isWsl();
             boolean targetIsWindows = os.contains("win") && !useWsl;
@@ -393,6 +402,22 @@ public class CppBackend implements Backend {
             return new CppProcessRunner.CppResult("", "Unrecognized extension.", -1, false);
         }
 
+        // The Sphere Neural Network: a program using its modules (ROOT, Geant4, FastJet, HepMC3, Pythia8, libtorch...)
+        // is built where they are, with the installations settings.conf [SNN] chose, and healed when it does not build.
+        // Flags of the user's own (-I, -l, a config script) are their way: it is tried first, the network after.
+        String code = "";
+        try {
+            code = Files.readString(sourceFile.toPath(), StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException unreadable) {
+            // the compiler will say what is wrong with it
+        }
+        final java.util.Map<String, String> uses = com.sphere.core.snn.SnnCpp.needs(code);
+        final boolean network = com.sphere.core.snn.SnnCpp.reachable();
+        if (!uses.isEmpty() && network && !com.sphere.core.snn.SnnCpp.ownFlags(compileFlags)) {
+            return snnRun(sourceFile, runtimeArgs, listener,
+                "uses " + String.join(", ", uses.keySet()) + ": the Sphere Neural Network builds it where they are");
+        }
+
         final String os = System.getProperty("os.name").toLowerCase();
         final boolean useWsl = activeToolchain.isWsl();
         final boolean targetIsWindows = os.contains("win") && !useWsl;
@@ -425,6 +450,14 @@ public class CppBackend implements Backend {
             processRunner.run(compileCmd, logCommand, listener, activeToolchain, true);
         publishDiagnostics(sourceFile, compResult.getStderr());
         if (compResult.getExitCode() != 0) {
+            // A build that missed something the network knows (a header, a class or a namespace of one of its
+            // modules, a symbol of their libraries) is handed to it; a mistake of the program's own is not.
+            final String missed = network && !compResult.timedOut()
+                ? com.sphere.core.snn.SnnCpp.healable(compResult.getStderr() + "\n" + compResult.getStdout()) : null;
+            if (missed != null) {
+                return snnRun(sourceFile, runtimeArgs, listener,
+                    "the build missed " + missed + ": the Sphere Neural Network takes over");
+            }
             return compResult;
         }
 
@@ -438,6 +471,71 @@ public class CppBackend implements Backend {
             listener.onStdoutLine("[Sphere Core] Launching executable output...");
         }
         return processRunner.run(runCmd, logCommand, listener, activeToolchain, false);
+    }
+
+    /**
+     * A source built and run by the Sphere Neural Network ('snn run'): where its modules are, healed when it does not
+     * build -- each fix said --, run with what it needs. The compiler's findings reach the editor as a build of its own
+     * would; :kill and a cancel reach the program.
+     */
+    private CppProcessRunner.CppResult snnRun(File sourceFile, List<String> runtimeArgs, CppOutputListener listener, String why) {
+        final String intro = "[Sphere Core] " + sourceFile.getName() + " " + why;
+        if (listener != null) {
+            listener.onStdoutLine(intro);
+        } else {
+            AppLogger.info(intro);
+        }
+        final StringBuilder said = new StringBuilder();
+        final com.sphere.core.commandrouterincludes.CommandContext table = com.sphere.core.python.PythonBackend.processTable();
+        final String[] token = new String[1];
+        final Process[] running = new Process[1];
+        final long t0 = System.nanoTime();
+        int exit;
+        try {
+            exit = com.sphere.core.snn.SnnCpp.run(sourceFile.toPath(), runtimeArgs,
+                runTimeoutSeconds > 0 ? runTimeoutSeconds + 600 : 7L * 86_400,      // the build's own time on top
+                line -> {
+                    said.append(line).append(System.lineSeparator());
+                    if (listener != null) {
+                        listener.onStdoutLine(line);
+                    } else {
+                        AppLogger.stream(line);
+                    }
+                },
+                p -> {
+                    running[0] = p;
+                    synchronized (CppBackend.this) {
+                        currentProcess = p;
+                    }
+                    if (table != null) {
+                        token[0] = table.registerProcess("cpp-run", p);
+                    }
+                });
+        } catch (IOException e) {
+            final String msg = "The Sphere Neural Network could not run " + sourceFile.getName() + ": " + e.getMessage();
+            AppLogger.error(msg);
+            if (listener != null) {
+                listener.onStderrLine(msg);
+                listener.onProcessComplete(-1, false);
+            }
+            return new CppProcessRunner.CppResult("", msg, -1, false);
+        } finally {
+            if (table != null && token[0] != null) {
+                table.unregisterProcess(token[0], running[0]);
+            }
+            synchronized (this) {
+                if (currentProcess == running[0]) {
+                    currentProcess = null;
+                }
+            }
+        }
+        final String text = said.toString();
+        publishDiagnostics(sourceFile, exit == 0 ? "" : com.sphere.core.snn.SnnCpp.local(text, sourceFile.toPath()));
+        metrics.recordRun(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0), exit != 0, false);
+        if (listener != null) {
+            listener.onProcessComplete(exit, false);
+        }
+        return new CppProcessRunner.CppResult(text, exit == 0 ? "" : text, exit, false);
     }
 
     private CppProcessRunner.CppResult handleStandardSourcePipeline(String cleanArgs, boolean logCommand, CppOutputListener listener) {

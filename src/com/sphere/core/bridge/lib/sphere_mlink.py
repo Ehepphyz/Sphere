@@ -379,6 +379,15 @@ AUTO = {"np": "numpy", "numpy": "numpy", "torch": "torch", "tf": "tensorflow", "
         "jax": "jax", "jnp": "jax.numpy", "pyhf": "pyhf", "scipy": "scipy", "ml": "sphere_ml", "spx": "sphere_spx",
         "sg": "sphere_graph", "dana": "sphere_dana", "xg": "sphere_xgrad", "xf": "sphere_xf"}
 
+# The neurons of the Sphere Neural Network (sphere_snn.py), by the names code uses for them: ROOT, fastjet, pyhepmc,
+# uproot, awkward... as modules; Geant4 (g4), fjcontrib (contrib), HepMC3's C++ (hepmc3), Pythia8 and CLHEP through
+# Cling. A name this Python cannot hold sends the request on to a Python that can (SNN, below).
+SNN = {"ROOT": "root", "cppyy": "root", "fastjet": "fastjet", "pyhepmc": "hepmc3", "uproot": "uproot", "ak": "awkward",
+       "awkward": "awkward", "vector": "vector", "iminuit": "iminuit", "lhapdf": "lhapdf", "yoda": "yoda", "g4": "geant4",
+       "contrib": "fjcontrib", "hepmc3": "hepmc3", "pythia8": "pythia8", "clhep": "clhep"}
+AUTO.update({name: "snn:" + name for name in SNN})
+AUTO["snn"] = "sphere_snn"
+
 
 def _names(code):
     out, stack = set(), [code]
@@ -631,10 +640,17 @@ class Gateway:
                   "pyhf": "pyhf"}
 
     def _wanted(self, op, meta):
-        """The frameworks a request will use."""
+        """The frameworks a request will use, and the neurons of the network it names."""
         if op == "py":
             names = _names(compile(meta.get("Code", ""), "<mlink>", "exec"))
-            return {self._FRAMEWORK[n] for n in names & set(self._FRAMEWORK)}
+            wanted = {self._FRAMEWORK[n] for n in names & set(self._FRAMEWORK)}
+            wanted |= {SNN[n] for n in names & set(SNN)}
+            snn = self._snn() if names & {"snn"} or not names <= set(AUTO) else None
+            if snn is not None:
+                wanted |= {snn.PY_MODULE_NEURONS[n] for n in names & set(snn.PY_MODULE_NEURONS)}
+                if "snn" in names:
+                    wanted |= {snn.NEEDS[n] for n in names & set(snn.NEEDS)}
+            return wanted
         if op == "pyhf":
             return {"pyhf"}
         if op == "predict":
@@ -648,12 +664,18 @@ class Gateway:
             missing = sorted(f for f in self._wanted(op, meta) if not self.have.get(f))
         except Exception:      # a syntax error, a file that is not there: the request's own failure, reported in its place
             return None
+        if missing:                    # what the network says this Python holds is not missing
+            held = self._snn_held()
+            missing = [f for f in missing if f not in held]
         if not missing:
             return None
         routes = {}
         for line in read_lines(os.path.join(self.spool, "routes.txt")):
             framework, _, command = line.partition("\t")
             routes[framework] = command.split("\t")
+        if set(missing) - set(routes):
+            for neuron, command in self._snn_routes().items():
+                routes.setdefault(neuron, command)
         target = next((routes[f] for f in missing if f in routes), None)
         if target is None:
             return None
@@ -676,11 +698,52 @@ class Gateway:
             self.vias[sub] = Link(sub, timeout=180.0)
         return self.vias[sub]
 
+    # ---- the Sphere Neural Network ----------------------------------------
+
+    def _snn(self):
+        """sphere_snn, the network's cortex, or None where it is not."""
+        if not hasattr(self, "_snn_module"):
+            try:
+                self._snn_module = importlib.import_module("sphere_snn")
+            except Exception as e:
+                sys.stderr.write("mlink: no Sphere Neural Network here: %s\n" % e)
+                self._snn_module = None
+        return self._snn_module
+
+    def _snn_held(self):
+        """The neurons this Python can hold (from the network's connectome: nothing is imported to know it)."""
+        if not hasattr(self, "_snn_here"):
+            snn = self._snn()
+            try:
+                self._snn_here = snn.here() if snn is not None else {}
+            except Exception as e:
+                sys.stderr.write("mlink: the network did not say what this Python holds: %s\n" % e)
+                self._snn_here = {}
+        return self._snn_here
+
+    def _snn_routes(self):
+        """For each neuron this Python cannot hold, the Python that can (either side of WSL), as the command that
+        starts it."""
+        if not hasattr(self, "_snn_route_table"):
+            snn = self._snn()
+            try:
+                self._snn_route_table = snn.routes() if snn is not None else {}
+            except Exception as e:
+                sys.stderr.write("mlink: the network gave no routes: %s\n" % e)
+                self._snn_route_table = {}
+        return self._snn_route_table
+
     # ---- what is imported, and how --------------------------------------
 
     def _module(self, name):
         """A framework, imported the way that works: PyTorch before TensorFlow on Windows (the other order fails to
-        initialize torch's DLLs on some machines), JAX in float64, Keras on the backend Sphere chooses for it."""
+        initialize torch's DLLs on some machines), JAX in float64, Keras on the backend Sphere chooses for it. A neuron
+        of the network (snn:<name>) comes the way sphere_snn gives it: ROOT from its installation, Geant4 through Cling."""
+        if name.startswith("snn:"):
+            snn = self._snn()
+            if snn is None:
+                raise ImportError("%s needs sphere_snn.py beside this file" % name[4:])
+            return snn.binding(name[4:])
         os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
         if name in ("tensorflow", "keras") and os.name == "nt" and "torch" not in sys.modules and self.ml._dist_version("torch"):
             importlib.import_module("torch")
@@ -899,6 +962,10 @@ def serve(spool, idle=600.0, parent=None):
         return 0
     os.environ.setdefault("SPHERE_BRIDGE", os.path.dirname(os.path.abspath(spool)))
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+    try:                               # 'import ROOT' in a request: the network's finder gives it from its installation
+        import sphere_snn_hook  # noqa: F401
+    except Exception:
+        pass
     for box in ("in", "out"):          # what an earlier run left: nobody waits for it any more
         for name in os.listdir(os.path.join(spool, box)):
             with contextlib.suppress(OSError):

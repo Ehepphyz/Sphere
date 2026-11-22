@@ -342,13 +342,13 @@ public class TerminalEngine {
                     // read from our own file instead of through --login.
                     boolean login = arguments.remove("--login") | arguments.remove("-l");
                     Path rc = write("terminal-color.bashrc",
-                        (login ? LOGIN_PROFILE : BASHRC_PROFILE) + "\n" + COLOR_PREAMBLE);
+                        (login ? LOGIN_PROFILE : BASHRC_PROFILE) + "\n" + snnLine(false) + "\n" + COLOR_PREAMBLE);
                     arguments.add(0, forwardSlashes(rc));
                     arguments.add(0, "--rcfile");
                 }
                 case "zsh" -> {
                     Path folder = write("zdotdir/.zshrc",
-                        ZSHRC_PROFILE + "\n" + COLOR_PREAMBLE).getParent();
+                        ZSHRC_PROFILE + "\n" + snnLine(false) + "\n" + COLOR_PREAMBLE).getParent();
                     environment.put("ZDOTDIR", folder.toAbsolutePath().toString());
                 }
                 case "sh" -> {
@@ -368,7 +368,7 @@ public class TerminalEngine {
                     // terminal, so it is neither interactive nor colored. The
                     // file is reached through /mnt, the only path both sides share.
                     Path rc = write("terminal-color.bashrc",
-                        BASHRC_PROFILE + "\n" + COLOR_PREAMBLE);
+                        BASHRC_PROFILE + "\n" + snnLine(true) + "\n" + COLOR_PREAMBLE);
                     String inside = mountPath(rc);
                     if (inside != null) {
                         arguments.add("--");
@@ -384,6 +384,22 @@ public class TerminalEngine {
             return new ArrayList<>(shell.arguments);   // colors stay as they are
         }
         return arguments;
+    }
+
+    /**
+     * The Sphere Neural Network in the terminal: its side's thissnn.sh, which the network's cortex writes inside Sphere
+     * from settings.conf [SNN] (snn, snn-config, the import finder, the installations chosen). Read from Sphere's own
+     * startup file, after the user's: the user's ~/.bashrc is read, never written.
+     */
+    private static String snnLine(boolean wsl) {
+        Path base = com.sphere.core.snn.Snn.folder();
+        if (wsl) {
+            String inside = mountPath(base);
+            return inside == null ? ""
+                : "_snn=\"" + inside + "/wsl-${WSL_DISTRO_NAME}/thissnn.sh\"; [ -r \"$_snn\" ] && . \"$_snn\"; unset _snn";
+        }
+        String sh = forwardSlashes(base.resolve(com.sphere.core.snn.Snn.side()).resolve("thissnn.sh"));
+        return "[ -r \"" + sh + "\" ] && . \"" + sh + "\"";
     }
 
     private static Path write(String name, String content) throws IOException {

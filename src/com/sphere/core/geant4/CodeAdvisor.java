@@ -531,4 +531,59 @@ public final class CodeAdvisor {
         }
         return out;
     }
+
+    /**
+     * The edits that make the application shoot a particle at an energy (MeV), where gun() reads them: the
+     * generator's FindParticle name and its SetParticleEnergy argument when that is a plain value (a variable of the
+     * application is left to it), and the run macro's /gun/particle and /gun/energy lines, which a run obeys last.
+     */
+    public static List<Edit> gunEdits(Map<Path, String> texts, Path project, String particle, double energyMeV) {
+        final List<Edit> out = new ArrayList<>();
+        final boolean gev = energyMeV >= 1000;
+        final String value = Units.num(gev ? energyMeV / 1000 : energyMeV);
+        final String cpp = (value.contains(".") || value.contains("e") ? value : value + ".") + "*" + (gev ? "GeV" : "MeV");
+        for (Map.Entry<Path, String> e : texts.entrySet()) {
+            final String text = e.getValue();
+            final String code = blank(text, true);
+            if (!isCpp(e.getKey()) || !code.contains("GeneratePrimaries") && !code.contains("G4ParticleGun")) {
+                continue;
+            }
+            final Matcher p = GUN_PARTICLE.matcher(code);
+            if (particle != null && p.find()) {
+                out.add(new Edit(e.getKey(), p.start(1), p.end(1), text.substring(p.start(1), p.end(1)), particle));
+            }
+            final Matcher en = GUN_ENERGY.matcher(code);
+            while (en.find()) {
+                final String arg = text.substring(en.start(1), en.end(1));
+                try {
+                    Expr.eval(arg.strip(), Expr.NO_VARIABLES);
+                } catch (GeometryException | RuntimeException ignored) {
+                    continue; // a variable of the application: the run's value, not rewritten
+                }
+                out.add(new Edit(e.getKey(), en.start(1), en.end(1), arg, cpp));
+            }
+        }
+        if (project != null) {
+            for (String name : new String[] {"run1.mac", "run.mac", "exampleB4a.in", "run2.mac"}) {
+                final Path mac = project.resolve(name);
+                if (!Files.isRegularFile(mac)) {
+                    continue;
+                }
+                try {
+                    final String m = Files.readString(mac);
+                    for (Matcher x = MAC_PARTICLE.matcher(m); particle != null && x.find(); ) {
+                        out.add(new Edit(mac, x.start(1), x.end(1), x.group(1), particle));
+                    }
+                    for (Matcher x = MAC_ENERGY.matcher(m); x.find(); ) {
+                        final int end = x.group(2) == null ? x.end(1) : x.end(2);
+                        out.add(new Edit(mac, x.start(1), end, m.substring(x.start(1), end), value + " " + (gev ? "GeV" : "MeV")));
+                    }
+                } catch (Exception ignored) {
+                    // unreadable: the generator alone
+                }
+                break;
+            }
+        }
+        return out;
+    }
 }

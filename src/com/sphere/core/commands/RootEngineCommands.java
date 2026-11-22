@@ -1101,13 +1101,13 @@ public final class RootEngineCommands {
         return new Ready(manifest, source);
     }
 
-    private static com.sphere.core.rootbackend.RootUserCompiler compilerFor(
+    static com.sphere.core.rootbackend.RootUserCompiler compilerFor(
             CommandExecutionContext c) {
         return new com.sphere.core.rootbackend.RootUserCompiler(
             new com.sphere.utils.SettingsManager(), Handlers.backend(c));
     }
 
-    private static double asDouble(String text) {
+    static double asDouble(String text) {
         try {
             return Double.parseDouble(text.trim());
         } catch (NumberFormatException notANumber) {
@@ -1116,7 +1116,7 @@ public final class RootEngineCommands {
     }
 
     /** The source of a pipeline by its name, the project layer winning. */
-    private static java.nio.file.Path pipelineSource(String name, String project) {
+    static java.nio.file.Path pipelineSource(String name, String project) {
         java.nio.file.Path found = null;
         for (java.nio.file.Path root
                 : com.sphere.core.rootbackend.RootUserPipeline.layers(project)) {
@@ -1132,7 +1132,7 @@ public final class RootEngineCommands {
         return found;
     }
 
-    private static String activeProject(CommandExecutionContext c) {
+    static String activeProject(CommandExecutionContext c) {
         return c != null && c.ctx != null ? c.ctx.getActiveProject() : null;
     }
 

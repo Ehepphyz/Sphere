@@ -32,19 +32,25 @@ final class WorkPlane {
         return new WorkPlane("YZ", new Vec3(x, 0, 0), Vec3.Y, Vec3.Z);
     }
 
-    /** The axis-aligned plane closest to a face normal, through a point. */
+    /**
+     * The axis-aligned plane closest to a face normal, through a point. Its origin is where the world's
+     * origin falls on it, so its grid stays on round world coordinates whatever point of the face was hit.
+     */
     static WorkPlane facing(Vec3 point, Vec3 normal) {
         final double ax = Math.abs(normal.x()), ay = Math.abs(normal.y()), az = Math.abs(normal.z());
         if (az >= ax && az >= ay) {
-            return normal.z() >= 0 ? new WorkPlane("XY", point, Vec3.X, Vec3.Y)
-                : new WorkPlane("XY", point, Vec3.Y, Vec3.X);
+            final Vec3 o = new Vec3(0, 0, point.z());
+            return normal.z() >= 0 ? new WorkPlane("XY", o, Vec3.X, Vec3.Y)
+                : new WorkPlane("XY", o, Vec3.Y, Vec3.X);
         }
         if (ay >= ax) {
-            return normal.y() >= 0 ? new WorkPlane("XZ", point, Vec3.Z, Vec3.X)
-                : new WorkPlane("XZ", point, Vec3.X, Vec3.Z);
+            final Vec3 o = new Vec3(0, point.y(), 0);
+            return normal.y() >= 0 ? new WorkPlane("XZ", o, Vec3.Z, Vec3.X)
+                : new WorkPlane("XZ", o, Vec3.X, Vec3.Z);
         }
-        return normal.x() >= 0 ? new WorkPlane("YZ", point, Vec3.Y, Vec3.Z)
-            : new WorkPlane("YZ", point, Vec3.Z, Vec3.Y);
+        final Vec3 o = new Vec3(point.x(), 0, 0);
+        return normal.x() >= 0 ? new WorkPlane("YZ", o, Vec3.Y, Vec3.Z)
+            : new WorkPlane("YZ", o, Vec3.Z, Vec3.Y);
     }
 
     WorkPlane through(Vec3 p) {

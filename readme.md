@@ -128,7 +128,7 @@ graph LR
 
 ## G4editor — the geometry editor (`:g4editor [design.gdml|geometry.root]`)
 
-A FreeCAD-style editor for Geant4 geometries. **It works without Geant4 installed.**
+A Sphere CAD editor for Geant4 geometries. **It works without Geant4 installed.**
 
 ![Image 12](images/image11.png)
 
@@ -141,7 +141,7 @@ A FreeCAD-style editor for Geant4 geometries. **It works without Geant4 installe
 - **Console language** (`Script`): everything the mouse does, typed (`var T = 300um`, `box Layer …`), and **sentences in French or English** read into commands (`Intent`).
 - **Templates**: calorimeter, tracker, telescope, shield, phantom, TPC — parametric, built the way Geant4's examples build them.
 - **Files**: GDML (parametric, or portable), and **ROOT geometries (`TGeoManager`) read and written without ROOT**; `:g4 convert` converts in both directions.
-- **3D view** in pure Java (software rasterizer: z-buffer, shading, silhouettes, translucency, section plane with capped cuts), FreeCAD navigation.
+- **3D view** in pure Java (software rasterizer: z-buffer, shading, silhouettes, translucency, section plane with capped cuts), Sphere CAD navigation.
 - **Insert into G4code**: the selection, or the whole detector, is written into the C++ open in G4code with everything it holds.
 
 ![Image 13](images/image12.png)

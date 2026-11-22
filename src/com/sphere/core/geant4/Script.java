@@ -95,7 +95,10 @@ public final class Script {
         HELP.put("renumber", "renumber <volume>   its placements in each mother get copy numbers 0, 1, 2..., for its hits");
         HELP.put("color", "color <volume> <#rrggbb[aa]|red|...>");
         HELP.put("hide", "hide <volume> ...  /  show <volume> ...");
-        HELP.put("template", "template calorimeter|tracker|telescope|shield|phantom|tpc key=value ...   parametric detectors");
+        HELP.put("template", "template " + String.join("|", Templates.kinds()) + " key=value ...   parametric detectors,"
+            + " each with its beam; 'templates' opens the gallery");
+        HELP.put("templates", "templates   the template gallery: each template drawn in 3D with its beam, its parameters, its"
+            + " physics, goals");
         HELP.put("x0", "x0 <material> [thickness]   radiation and interaction lengths, and the fraction a thickness makes");
         HELP.put("info", "info <name>   what an object is, its volume, mass and material budget");
         HELP.put("list", "list   the placement tree");
@@ -117,6 +120,13 @@ public final class Script {
         HELP.put("nist", "nist [apply]   the defined materials that are NIST ones; apply uses NIST's");
         HELP.put("run", "run <events> [particle] [energy]   in Geant4 through geant4-bridge");
         HELP.put("undo", "undo / redo");
+        HELP.put("beam", "beam [particle] [energy] [along +z|-x...] [at x y z] [toward dx dy dz]   the design's gun, and what it"
+            + " meets: depth in X0 and lambdaI, the shower kept, the sampling fraction");
+        HELP.put("goal", "goal <metric> >=|<=|= <value> [by <variable>]   the value of a variable that meets a physics target;"
+            + " metrics: containment, longitudinal, lateral, x0, lambda, depth, sampling, resolution, signal, mass");
+        HELP.put("relations", "relations [apply]   stacks drawn by hand written as relations: thicknesses become variables,"
+            + " positions and envelopes follow them");
+        HELP.put("live", "live on|off   Physics Live: what the beam does, on the drawing, worked out again at every edit");
     }
 
     private static String typeList() {
@@ -227,6 +237,9 @@ public final class Script {
             case "list", "ls", "tree" -> list();
             case "materials" -> materials(a);
             case "select" -> select(a);
+            case "beam", "gun" -> beam(a);
+            case "goal", "seek" -> goal(line.substring(t.get(0).length()).trim());
+            case "relations", "relation", "parametrize", "parameterize" -> relations(a);
             default -> {
                 if (host.command(cmd, new ArrayList<>(a))) {
                     return;
@@ -254,6 +267,140 @@ public final class Script {
             host.print("  " + v);
         }
         host.print("Anything else is read as a sentence: \"add a 2 mm lead layer at z=50 cm\", \"a 5 layer silicon tracker\".");
+    }
+
+    // ------------------------------------------------------------------
+    // Physics: the beam, goals, relations
+    // ------------------------------------------------------------------
+
+    /** beam [particle] [energy] [along +z] [at x y z] [toward dx dy dz]: sets the gun, then tells what it meets. */
+    private void beam(List<String> a) throws GeometryException {
+        BeamPhysics.Beam b = BeamPhysics.Beam.of(g);
+        if (!a.isEmpty()) {
+            BeamPhysics.Particle p = b.particle();
+            double e = b.energy();
+            Vec3 o = null, d = b.direction();
+            boolean aimed = false;
+            int i = 0;
+            while (i < a.size()) {
+                final String w = a.get(i), low = w.toLowerCase(Locale.ROOT);
+                final BeamPhysics.Particle q = BeamPhysics.Particle.of(w);
+                if (q != null) {
+                    p = q;
+                    i++;
+                } else if (low.equals("along")) {
+                    need(a.subList(i + 1, a.size()), 1, "along +x|-x|+y|-y|+z|-z");
+                    d = axis(a.get(i + 1));
+                    aimed = true;
+                    i += 2;
+                } else if (low.equals("at") || low.equals("from")) {
+                    o = vec(a, i + 1, Units.Category.LENGTH);
+                    i += 4;
+                } else if (low.equals("toward") || low.equals("dir") || low.equals("direction")) {
+                    d = vec(a, i + 1, Units.Category.NONE);
+                    aimed = true;
+                    i += 4;
+                } else {
+                    String text = w;
+                    if (i + 1 < a.size() && a.get(i + 1).matches("(?i)[kmgtp]?eV")) {
+                        text = w + a.get(i + 1);
+                        i++;
+                    }
+                    e = Expr.eval(Inputs.normalize(text, Units.Category.ENERGY, "mm"), g.scope());
+                    i++;
+                }
+            }
+            if (d.length() < 1e-12) {
+                throw new GeometryException("the beam needs a direction");
+            }
+            if (o == null) {
+                o = aimed ? BeamPhysics.Beam.entry(g, d.unit()) : b.origin();
+            }
+            final BeamPhysics.Beam nb = new BeamPhysics.Beam(p, e, o, d);
+            host.edit("Beam " + nb.describe(), () -> nb.store(g));
+            b = nb;
+        }
+        for (String l : BeamPhysics.analyze(g, b).lines()) {
+            host.print(l);
+        }
+    }
+
+    private static Vec3 axis(String w) throws GeometryException {
+        final String t = w.toLowerCase(Locale.ROOT).trim();
+        final double s = t.startsWith("-") ? -1 : 1;
+        final int k = "xyz".indexOf(t.charAt(t.length() - 1));
+        if (k < 0) {
+            throw new GeometryException("along +x, -x, +y, -y, +z or -z, not " + w);
+        }
+        return Vec3.axis(k).mul(s);
+    }
+
+    /** goal containment >= 95% [by cal_nLayers]: the value of a variable meeting a physics target, applied when met. */
+    private void goal(String rest) throws GeometryException {
+        final Object[] parsed = GoalSeek.parse(rest, g.scope());
+        final GoalSeek.Goal goal = (GoalSeek.Goal) parsed[0];
+        String var = (String) parsed[1];
+        final BeamPhysics.Beam beam = BeamPhysics.Beam.of(g);
+        if (var == null) {
+            final List<GoalSeek.Lever> levers = GoalSeek.levers(g, beam, goal.metric());
+            if (levers.isEmpty()) {
+                throw new GeometryException("no variable moves the " + goal.metric().label + " of " + beam.describe()
+                    + ": make the design parametric first ('relations', or 'var')");
+            }
+            var = levers.get(0).variable();
+            final StringBuilder b = new StringBuilder("# the strongest lever: " + levers.get(0).describe(goal.metric()));
+            for (int i = 1; i < Math.min(3, levers.size()); i++) {
+                b.append(i == 1 ? "; then " : ", ").append(levers.get(i).describe(goal.metric()));
+            }
+            host.print(b.toString());
+        }
+        final GoalSeek.Result r = GoalSeek.solve(g, beam, goal, var);
+        host.print(r.message() + "  (" + r.trials() + " trials)");
+        if (r.changes() && r.reached() && !r.already()) {
+            final Define d = g.define(r.variable());
+            host.edit("Goal " + goal.describe(), () -> {
+                d.setExpr(r.after());
+                if (r.worldGrown()) {
+                    g.rebuild();
+                    GoalSeek.growWorld(g);
+                }
+            });
+            host.print(r.command() + (r.worldGrown() ? "; world grown to " + Units.best(g.world().solid().v("z"),
+                Units.Category.LENGTH) + " along z" : ""));
+        } else if (r.changes() && r.already()) {
+            host.print("# " + r.command() + " would take it to the boundary");
+        }
+    }
+
+    /** relations [apply]: the stacks drawn by hand, read as relations; apply writes them, as one step. */
+    private void relations(List<String> a) throws GeometryException {
+        final Relations.Plan p = Relations.plan(g, null);
+        for (String f : p.findings()) {
+            host.print(f);
+        }
+        if (p.isEmpty()) {
+            if (p.findings().isEmpty()) {
+                host.print("No stack found: volumes standing face to face along an axis (unturned boxes, or tubes, cones"
+                    + " and trds along z) are what relations are read from.");
+            }
+            return;
+        }
+        if (a.isEmpty() || !a.get(0).equalsIgnoreCase("apply")) {
+            host.print(p.steps().size() + " changes, variables " + String.join(", ", p.variables())
+                + ". 'relations apply' writes them; nothing moves.");
+            return;
+        }
+        host.edit("Relations", () -> {
+            try {
+                Relations.apply(g, p);
+            } catch (GeometryException e) {
+                throw new IllegalArgumentException(e.getMessage());
+            }
+        });
+        for (String c : p.commands()) {
+            host.print(c);
+        }
+        host.print("Relations written: " + String.join(", ", p.variables()));
     }
 
     // ------------------------------------------------------------------

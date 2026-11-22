@@ -794,6 +794,16 @@ private:
 // With HepMC3's own headers included first (#include "HepMC3/GenEvent.h"), the
 // events become HepMC3::GenEvent of the C++ library: ids, vertices, weights
 // and attributes as Sphere had them, ready for WriterAscii, Rivet or a ROOT IO.
+// GenEvent.h only declares GenEventData: its definition is read here, outside spx.
+}  // namespace spx
+#if defined(__has_include)
+#if __has_include(<HepMC3/Data/GenEventData.h>)
+#include <HepMC3/FourVector.h>
+#include <HepMC3/Units.h>
+#include <HepMC3/Data/GenEventData.h>
+#endif
+#endif
+namespace spx {
 namespace hepmc3 {
 
 inline std::string unescape(const std::string& s) {

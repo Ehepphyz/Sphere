@@ -9,13 +9,13 @@ import com.sphere.core.geant4.LogicalVolume;
 import com.sphere.core.geant4.MaterialMatcher;
 import com.sphere.core.geant4.NistDB;
 import com.sphere.core.geant4.PhysicalVolume;
+import com.sphere.core.geant4.Relations;
 import com.sphere.core.geant4.Script;
 import com.sphere.core.geant4.TGeoReader;
 import com.sphere.core.geant4.Templates;
 
 import javax.imageio.ImageIO;
 import javax.swing.AbstractButton;
-import javax.swing.BorderFactory;
 import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JCheckBoxMenuItem;
@@ -33,8 +33,6 @@ import javax.swing.JPopupMenu;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
-import javax.swing.JToggleButton;
-import javax.swing.JToolBar;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
@@ -45,7 +43,6 @@ import javax.swing.filechooser.FileFilter;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.event.KeyEvent;
@@ -85,17 +82,38 @@ public final class G4EditorFrame extends JFrame {
     private final AnalysisPanel analysis;
     private final ClashWatch clashes;
     private final RunPanel runPanel;
+    /** Physics Live: the beam's physics on the drawing, and its panel of the beam, the layers and goals. */
+    private final SphereLive live;
     private final Script script;
     private final JLabel status = new JLabel(" ");
     private final JLabel hover = new JLabel(" ");
     private final JTabbedPane bottom = new JTabbedPane();
     private final List<AbstractButton> toolButtons = new ArrayList<>();
+    /** The tool buttons by the name the keys, the menus and the console's "tool" command use. */
+    private final java.util.Map<String, AbstractButton> toolNamed = new java.util.LinkedHashMap<>();
     private final JComboBox<String> materialBox = new JComboBox<>();
     private final Function<String, String> settings;
     private JSplitPane centerSplit;
+    /** The drawing's share of the height is saved once the one of the last session is back, not before. */
+    private boolean splitRestored;
     private JMenu recentMenu;
     private JMenuItem undoItem;
     private JMenuItem redoItem;
+    /**
+     * The classic menus: no longer shown (Creo's ribbon and File tab are), still the command search's index,
+     * the File tab's menu and where the keyboard shortcuts come from.
+     */
+    private JMenuBar menuBar;
+    private JMenu fileMenu, helpMenu;
+    private SphereCreo.Ribbon ribbon;
+    private SphereCreo.Navigator navigator;
+    private SphereCreo.Dashboard dashboard;
+    private java.awt.Component mlPanel;
+    /** The tool at work, by its button's name ("select" when none): what the ribbon shows lit. */
+    private String activeTool = "select";
+    private final JComboBox<String> unitBox = new JComboBox<>(new String[] {"mm", "cm", "m", "um"});
+    private final JComboBox<String> planeBox = new JComboBox<>(new String[] {"XY", "XZ", "YZ"});
+    private final JTextField offsetField = new JTextField("0", 5);
     /** The files opened and saved last, most recent first (kept across sessions). */
     private static final Preferences PREFS = Preferences.userNodeForPackage(G4EditorFrame.class);
     private static final int MAX_RECENT = 12;
@@ -110,51 +128,99 @@ public final class G4EditorFrame extends JFrame {
         model = new EditorModel(Geometry.blank());
         vp = new Viewport(model);
         vp.darkTheme = isDark();
+        vp.creoMouse = PREFS.getBoolean("creoMouse", true);
         script = new Script(model.geometry, new Host());
         tree = new ModelTree(model);
         props = new PropertySheet(model, script);
         analysis = new AnalysisPanel(model, vp, console::run);
         clashes = new ClashWatch(model, vp, console::print);
         runPanel = new RunPanel(model, vp, this.settings, s -> SwingUtilities.invokeLater(() -> console.print(s)));
+        live = new SphereLive(model, vp);
+        vp.live = live;
+        live.gunChanged = runPanel::restoreGun;
+        // each run in Geant4 is set against Physics Live's prediction for the same beam and design
+        runPanel.onResult = r -> {
+            final com.sphere.core.geantbackend.RunComparison.Result c = live.runFinished(r, runPanel.runDesign());
+            if (c != null) {
+                for (String l : c.lines()) {
+                    console.print(l);
+                }
+            }
+        };
+        live.checkInGeant4 = () -> {
+            runPanel.runNow();
+            status.setText("Geant4 runs Physics Live's beam; its answer is set against the prediction when it comes");
+        };
         console.setScript(script);
         model.addLog(console::logged);
 
-        // Left: model tree, materials, variables above the property view (FreeCAD's combo view)
-        final JTabbedPane leftTabs = new JTabbedPane();
-        leftTabs.addTab("Model", tree);
+        // Left: Creo's navigator (model tree, materials, variables) above the property view
         final LibraryPanels.Materials materials = new LibraryPanels.Materials(model, console::setInput);
-        leftTabs.addTab("Materials", materials);
-        leftTabs.addTab("Variables", new LibraryPanels.Variables(model));
-        final JSplitPane left = new JSplitPane(JSplitPane.VERTICAL_SPLIT, leftTabs, props);
+        navigator = new SphereCreo.Navigator()
+            .page("Model Tree", Icons.tree(16), tree)
+            .page("Materials", Icons.flask(16), materials)
+            .page("Variables", Icons.variables(16), new LibraryPanels.Variables(model));
+        navigator.show(0);
+        final JSplitPane left = new JSplitPane(JSplitPane.VERTICAL_SPLIT, navigator, props);
         left.setResizeWeight(0.45);
         left.setDividerLocation(360);
+        // A split pane's divider stops at its panes' minimum sizes, which forms full of fields make large: the panes
+        // around the drawing may be made as small as one likes, so the drawing can be given the whole window
+        navigator.setMinimumSize(new java.awt.Dimension(0, 0));
+        props.setMinimumSize(new java.awt.Dimension(0, 0));
+        left.setMinimumSize(new java.awt.Dimension(0, 0));
 
-        bottom.addTab("Console", console);
-        bottom.addTab("Analyses", analysis);
+        bottom.addTab("Console", Icons.console(14), console);
+        bottom.addTab("Analyses", Icons.check(14), analysis);
+        bottom.addTab("Physics Live", Icons.shower(14), live.panel);
+        live.showPanel = () -> showBottom(live.panel);
         bottom.addTab("Run in Geant4", Icons.run(14), runPanel);
-        bottom.addTab("Machine learning", new FastSimPanel(model, this.settings, s -> SwingUtilities.invokeLater(() -> console.print(s))));
+        mlPanel = new FastSimPanel(model, this.settings, s -> SwingUtilities.invokeLater(() -> console.print(s)));
+        bottom.addTab("Machine learning", Icons.network(14), mlPanel);
         final JSplitPane center = new JSplitPane(JSplitPane.VERTICAL_SPLIT, vp, bottom);
         center.setResizeWeight(0.7);
+        // The console, the Run panel and the others below can be shrunk to their tabs, or folded away with the
+        // divider's arrows, to give the drawing the room; the height chosen is kept for the next session
+        bottom.setMinimumSize(new java.awt.Dimension(0, 0));
+        vp.setMinimumSize(new java.awt.Dimension(120, 80));
+        center.setOneTouchExpandable(true);
+        center.addPropertyChangeListener(JSplitPane.DIVIDER_LOCATION_PROPERTY, e -> {
+            final int span = center.getHeight() - center.getDividerSize();
+            if (splitRestored && span > 100 && center.isShowing()) {
+                PREFS.putDouble("drawingShare", Math.max(0.05, Math.min(1.0, center.getDividerLocation() / (double) span)));
+            }
+        });
         centerSplit = center;
         final JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, center);
         main.setDividerLocation(360);
+        main.setOneTouchExpandable(true);
 
-        final JPanel statusBar = new JPanel(new BorderLayout(10, 0));
-        statusBar.setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 8));
-        statusBar.add(status, BorderLayout.CENTER);
-        statusBar.add(hover, BorderLayout.EAST);
-        hover.setForeground(new Color(0x7D8796));
-
-        final JPanel top = new JPanel(new BorderLayout());
-        top.add(toolbar(), BorderLayout.CENTER);
+        // Creo's frame: the ribbon above, the message area below
+        final JPanel statusBar = new SphereCreo.StatusBar(status, hover);
+        ribbon = ribbon();
+        dashboard = new SphereCreo.Dashboard(vp, G4EditorFrame::toolIcon);
         getContentPane().setLayout(new BorderLayout());
-        getContentPane().add(top, BorderLayout.NORTH);
+        getContentPane().add(ribbon, BorderLayout.NORTH);
         getContentPane().add(main, BorderLayout.CENTER);
         getContentPane().add(statusBar, BorderLayout.SOUTH);
-        setJMenuBar(menus());
+        getContentPane().setBackground(SphereCreo.palette().window());
+        menuBar = menus();
+        installAccelerators(menuBar);
+        // The tool at work gets its tab in the ribbon (Creo's dashboard), lit buttons follow it
+        vp.setToolListener(t -> {
+            activeTool = toolName(t);
+            if (t == null) {
+                ribbon.hideContext();
+            } else {
+                ribbon.showContext(t.name(), dashboard);
+            }
+            ribbon.repaint();
+        });
         // the tree keeps its own drag and drop (reparenting volumes)
         installDrop(getRootPane(), vp);
 
+        live.setOn(PREFS.getBoolean("physicsLive", true));
+        vp.physicsToggle = this::toggleLive;
         vp.setStatusSink(s -> status.setText(s));
         vp.setHoverSink(in -> hover.setText(Viewport.describe(model.geometry, in)));
         vp.setShortcuts(this::shortcut);
@@ -191,14 +257,16 @@ public final class G4EditorFrame extends JFrame {
         if (file != null) {
             open(file);
         } else {
-            console.print("New design: a 2 m air world. Draw with the tools above (B box, T tube, S sphere, C cone, P extrude,"
-                + " V revolve), type values while drawing, or describe a detector in the console. File > Open reads GDML"
-                + " and ROOT geometries (TGeoManager); Ctrl+Shift+P finds any command.");
+            console.print("New design: a 2 m air world. Draw with the tools above (Q sketch freehand, B box, T tube,"
+                + " S sphere, C cone, P extrude, V revolve; E pushes and pulls faces), type values while drawing, or"
+                + " describe a detector in the console. File > Open reads GDML and ROOT geometries (TGeoManager);"
+                + " Ctrl+Shift+P finds any command.");
         }
         updateTitle();
         vp.updateStatus();
         SwingUtilities.invokeLater(() -> {
-            centerSplit.setDividerLocation(0.68);
+            centerSplit.setDividerLocation(PREFS.getDouble("drawingShare", 0.68));
+            splitRestored = true;
             vp.fitAll(false);
             vp.requestFocusInWindow();
         });
@@ -373,6 +441,12 @@ public final class G4EditorFrame extends JFrame {
                     }
                 }
                 case "xray" -> vp.setXray(a.isEmpty() || !a.get(0).equals("off"));
+                case "templates", "gallery" -> SwingUtilities.invokeLater(G4EditorFrame.this::openGallery);
+                case "live" -> {
+                    setLive(a.isEmpty() ? !live.isOn() : !a.get(0).equals("off"));
+                    console.print("Physics Live " + (live.isOn() ? "on: the beam's physics is on the drawing, worked out"
+                        + " again at every edit ('beam' sets the gun, 'goal' seeks a target)" : "off"));
+                }
                 case "section" -> {
                     if (a.isEmpty() || a.get(0).equals("off")) {
                         vp.section = false;
@@ -473,112 +547,271 @@ public final class G4EditorFrame extends JFrame {
     // Toolbar
     // ------------------------------------------------------------------
 
-    private JComponent toolbar() {
-        final JPanel rows = new JPanel(new java.awt.GridLayout(1, 1));
-        final JToolBar t = new JToolBar();
-        t.setFloatable(false);
-        t.add(button(Icons.file(20, "new"), "New design (Ctrl+N)", this::newDesign));
-        t.add(button(Icons.file(20, "open"), "Open a GDML design or a ROOT geometry (Ctrl+O); files can also be dropped"
-            + " on the window", this::openDialog));
-        t.add(button(Icons.file(20, "save"), "Save (Ctrl+S), in the format of the file: GDML or ROOT", () -> save(null)));
-        t.addSeparator();
-        t.add(button(Icons.undo(20, false), "Undo (Ctrl+Z)", model::undo));
-        t.add(button(Icons.undo(20, true), "Redo (Ctrl+Y)", model::redo));
-        t.addSeparator();
-        t.add(tool(Icons.select(20), "Select (Esc)", () -> null));
-        t.add(tool(Icons.move(20), "Move: drag the gizmo or type a displacement (M)", () -> new Tools.MoveTool(vp, false)));
-        t.add(tool(Icons.rotate(20), "Rotate: drag a ring or type angles (R)", () -> new Tools.MoveTool(vp, true)));
-        t.add(tool(Icons.measure(20), "Measure distance and radiation lengths crossed (D)", () -> new Tools.MeasureTool(vp)));
-        t.addSeparator();
+    // ------------------------------------------------------------------
+    // The ribbon (PTC Creo's): File, Model, Analysis, Geant4, View
+    // ------------------------------------------------------------------
+
+    private SphereCreo.Ribbon ribbon() {
+        final SphereCreo.Ribbon r = new SphereCreo.Ribbon(() -> model.title() + "  (Active)  -  G4editor");
+        r.onFile((c, box) -> fileMenu.getPopupMenu().show(c, box.x, box.y + box.height));
+        final SphereCreo.Size S = SphereCreo.Size.SMALL, L = SphereCreo.Size.LARGE, I = SphereCreo.Size.ICON;
+
+        // Quick access, top left, as Creo's title bar has it
+        r.quick(new SphereCreo.Button(I, Icons.file(16, "new"), "New", "New design (Ctrl+N)", this::newDesign));
+        r.quick(new SphereCreo.Button(I, Icons.file(16, "open"), "Open", "Open a GDML design or a ROOT geometry (Ctrl+O)",
+            this::openDialog));
+        r.quick(new SphereCreo.Button(I, Icons.file(16, "save"), "Save", "Save (Ctrl+S), in the format of the file", () -> save(null)));
+        r.quick(new SphereCreo.Button(I, Icons.undo(16, false), "Undo", "Undo (Ctrl+Z)", model::undo));
+        r.quick(new SphereCreo.Button(I, Icons.undo(16, true), "Redo", "Redo (Ctrl+Y)", model::redo));
+        r.quick(new SphereCreo.Button(I, Icons.zoom(16, 0), "Find", "Find any command (Ctrl+Shift+P)",
+            () -> ActionPalette.show(this, menuBar)));
+        r.quick(new SphereCreo.Button(I, Icons.shower(16), "Physics Live", "Physics Live over the drawing, on or off (L)",
+            this::toggleLive).on(live::isOn));
+        final SphereCreo.Button[] help = new SphereCreo.Button[1];
+        help[0] = new SphereCreo.Button(I, Icons.help(16), "Help", "Help: console commands, mouse and keyboard, files",
+            () -> helpMenu.getPopupMenu().show(help[0], 0, help[0].getHeight()));
+        r.trailing(help[0]);
+
+        setupControls();
         final Color c = new Color(0x8AA4C8);
-        t.add(tool(Icons.box(20, c), "Box, G4Box (B): corner, opposite corner, height", () -> new Tools.BoxTool(vp)));
-        t.add(tool(Icons.tube(20, c), "Tube, G4Tubs (T): center, radius, length", () -> new Tools.TubeTool(vp)));
-        t.add(tool(Icons.sphere(20, c), "Sphere, G4Orb / G4Sphere (S): center, radius", () -> new Tools.SphereTool(vp)));
-        t.add(tool(Icons.cone(20, c), "Cone, G4Cons (C): center, radius, height, top radius", () -> new Tools.ConeTool(vp)));
-        t.add(tool(Icons.torus(20, c), "Torus, G4Torus: center, ring radius, tube radius", () -> new Tools.TorusTool(vp)));
-        t.add(tool(Icons.extrude(20, c), "Extrusion, G4ExtrudedSolid (P): outline, thickness", () -> new Tools.PolygonTool(vp, false)));
-        t.add(tool(Icons.revolve(20, c), "Revolution, G4GenericPolycone (V): (r, z) profile", () -> new Tools.PolygonTool(vp, true)));
-        t.add(button(Icons.template(20), "Parametric detectors (templates)", () -> templateMenu(t)));
-        t.addSeparator();
-        t.add(button(Icons.bool(20, 0), "Union of the two selected volumes", () -> booleanOf(BooleanSolid.Op.UNION)));
-        t.add(button(Icons.bool(20, 1), "Subtract the second selected volume from the first", () -> booleanOf(BooleanSolid.Op.SUBTRACTION)));
-        t.add(button(Icons.bool(20, 2), "Intersection of the two selected volumes", () -> booleanOf(BooleanSolid.Op.INTERSECTION)));
-        t.addSeparator();
-        t.add(button(Icons.check(20), "Check overlaps", () -> {
-            showBottom(analysis);
-            analysis.checkOverlaps(1000);
-        }));
-        t.add(button(Icons.budget(20), "Material budget scan", () -> {
-            showBottom(analysis);
-            analysis.scanBudget(true, 4, 80, false);
-        }));
-        t.add(button(Icons.advise(20), "Design assistant", () -> {
-            showBottom(analysis);
-            analysis.showAssistant();
-        }));
-        t.add(button(Icons.run(20), "Run in Geant4", () -> showBottom(runPanel)));
-        t.addSeparator();
-        t.add(button(Icons.view(20, "iso"), "Isometric view (0)", () -> vp.setView("iso", true)));
-        t.add(button(Icons.view(20, "front"), "Front view (1)", () -> vp.setView("front", true)));
-        t.add(button(Icons.view(20, "top"), "Top view (2)", () -> vp.setView("top", true)));
-        t.add(button(Icons.view(20, "right"), "Right view (3)", () -> vp.setView("right", true)));
-        t.add(button(Icons.fit(20), "Fit all (F)", () -> vp.fitAll(true)));
-        final JToggleButton section = new JToggleButton(Icons.section(20));
-        section.setToolTipText("Section view (X): cut the detector open along a plane");
-        section.addActionListener(e -> {
-            vp.section = section.isSelected();
-            vp.repaint();
-        });
-        t.add(section);
-        final JToggleButton grid = new JToggleButton(Icons.grid(20), true);
-        grid.setToolTipText("Snap to the grid (G)");
-        grid.addActionListener(e -> vp.gridSnap = grid.isSelected());
-        t.add(grid);
-        t.addSeparator();
-        t.add(new JLabel(" Material "));
+
+        // Model: what is drawn and how
+        final JPanel m = r.tab("Model");
+        m.add(new SphereCreo.Group("Operations")
+            .add(toolButton("select", L, Icons.select(32), "Select", "Select (Esc)", () -> null))
+            .add(large(Icons.regenerate(32), "Regenerate", "Evaluates every expression and placement again (Ctrl+G)",
+                this::regenerate))
+            .stack(small(Icons.copy(16), "Copy", "The selected placements (Ctrl+C)", this::copySelection),
+                small(Icons.paste(16), "Paste", "Copies of them, to drag into place (Ctrl+V)", this::paste),
+                small(Icons.trash(16), "Delete", "Delete the selection (Delete)", this::deleteSelection))
+            .stack(small(Icons.selectAll(16), "Select all", "Every placement (Ctrl+A)",
+                    () -> model.selectAll(model.geometry.placements())),
+                small(Icons.copy(16), "Duplicate", "A copy of the selection in place",
+                    () -> forSelection(pv -> "copy " + pv.name() + " 1"))));
+        m.add(new SphereCreo.Group("Get Data")
+            .add(large(Icons.template(32), "Templates", "The template gallery: 14 parametric detectors, each drawn in 3D"
+                + " with the beam it is made for; search them in words, set their parameters, see their physics, seek a goal",
+                this::openGallery))
+            .add(menuButton(L, Icons.volume(32, "polycone", c), "Any solid", "Any Geant4 solid, made at the origin",
+                this::solidsPopup)));
+        m.add(new SphereCreo.Group("Datum")
+            .add(toolButton("sketch", L, Icons.sketch(32), "Sketch", "Sketch (Q): draw a shape freehand, a circle, a"
+                + " rectangle, a hexagon, any outline, a line; it is read and made a volume (Space: another reading)",
+                () -> new SmartTools.SketchTool(vp)))
+            .stack(SphereCreo.labeled("Plane", planeBox, 100), SphereCreo.labeled("Offset", offsetField, 100),
+                toggle(Icons.plane(16), "On faces", "Draw on the face clicked first", () -> vp.faceSnapPlane,
+                    () -> vp.faceSnapPlane = !vp.faceSnapPlane)));
+        m.add(new SphereCreo.Group("Shapes")
+            .add(toolButton("extrude", L, Icons.extrude(32, c), "Extrude", "Extrusion, G4ExtrudedSolid (P): outline,"
+                + " thickness", () -> new Tools.PolygonTool(vp, false)))
+            .add(toolButton("revolve", L, Icons.revolve(32, c), "Revolve", "Revolution, G4GenericPolycone (V): (r, z)"
+                + " profile", () -> new Tools.PolygonTool(vp, true)))
+            .stack(toolButton("box", S, Icons.box(16, c), "Box", "Box, G4Box (B): corner, opposite corner (or one drag),"
+                    + " height", () -> new Tools.BoxTool(vp)),
+                toolButton("tube", S, Icons.tube(16, c), "Tube", "Tube, G4Tubs (T): center, radius (or one drag), length",
+                    () -> new Tools.TubeTool(vp)),
+                toolButton("sphere", S, Icons.sphere(16, c), "Sphere", "Sphere, G4Orb / G4Sphere (S): center, radius",
+                    () -> new Tools.SphereTool(vp)))
+            .stack(toolButton("cone", S, Icons.cone(16, c), "Cone", "Cone, G4Cons (C): center, radius, height, top radius",
+                    () -> new Tools.ConeTool(vp)),
+                toolButton("torus", S, Icons.torus(16, c), "Torus", "Torus, G4Torus: center, ring radius, tube radius",
+                    () -> new Tools.TorusTool(vp))));
+        m.add(new SphereCreo.Group("Editing")
+            .add(toolButton("pushpull", L, Icons.pushPull(32), "Push/Pull", "Push/Pull (E): drag a face of a volume out or"
+                + " in; its length or radius follows, the opposite face stays", () -> new SmartTools.PushPullTool(vp)))
+            .add(toolButton("move", L, Icons.move(32), "Move", "Move (M): drag the selected volume (it lands flush against"
+                + " its neighbors; Ctrl drags a copy, then type 5 for a row of five), drag the gizmo, or type a"
+                + " displacement", () -> new Tools.MoveTool(vp, false)))
+            .stack(toolButton("rotate", S, Icons.rotate(16), "Rotate", "Rotate (R): drag a ring or type angles",
+                    () -> new Tools.MoveTool(vp, true)),
+                small(Icons.eye(16, true), "Hide / Show", "Hide or show the selection (H)", this::toggleVisibility))
+            .stack(small(Icons.bool(16, 0), "Union", "Union of the two selected volumes",
+                    () -> booleanOf(BooleanSolid.Op.UNION)),
+                small(Icons.bool(16, 1), "Subtract", "Subtract the second selected volume from the first",
+                    () -> booleanOf(BooleanSolid.Op.SUBTRACTION)),
+                small(Icons.bool(16, 2), "Intersect", "Intersection of the two selected volumes",
+                    () -> booleanOf(BooleanSolid.Op.INTERSECTION))));
+        m.add(new SphereCreo.Group("Model Intent")
+            .stack(SphereCreo.labeled("Material", materialBox, 170), SphereCreo.labeled("Unit", unitBox, 100),
+                small(Icons.flask(16), "NIST equivalents", "Use NIST equivalents of the defined materials", () -> nistMatch(true)))
+            .stack(small(Icons.tree(16), "Model Tree", "The volumes, in the navigator", () -> navigator.show("Model Tree")),
+                small(Icons.flask(16), "Materials", "The materials, in the navigator", () -> navigator.show("Materials")),
+                small(Icons.variables(16), "Variables", "The design's variables, in the navigator",
+                    () -> navigator.show("Variables")))
+            .stack(small(Icons.relations(16), "Relations", "The stacks drawn by hand made parametric: their thicknesses"
+                    + " become variables, their positions and envelopes follow them (nothing moves)", this::relationsDialog),
+                small(Icons.goal(16), "Goal Seek", "The value of a variable that meets a physics target (95% kept, 25 X0,"
+                    + " a mass...), tried on a copy of the design, applied as one step", this::goalSeek)));
+
+        // Analysis
+        final JPanel a = r.tab("Analysis");
+        a.add(new SphereCreo.Group("Measure")
+            .add(toolButton("measure", L, Icons.measure(32), "Measure", "Measure distance and radiation lengths crossed (D)",
+                () -> new Tools.MeasureTool(vp))));
+        a.add(new SphereCreo.Group("Physics Live")
+            .add(new SphereCreo.Button(L, Icons.shower(32), "Physics Live", "What the beam does, on the drawing: its shower,"
+                + " the energy kept, where it leaks, the sampling; worked out again at every edit (L)", this::toggleLive)
+                .on(live::isOn))
+            .add(menuButton(L, Icons.beam(32), "Beam", "The design's gun, the one the Run panel fires and the C++ uses: its"
+                + " particle, its energy, where it goes", this::beamPopup))
+            .add(large(Icons.goal(32), "Goal Seek", "The value of a variable that meets a physics target: 95% kept, 25 X0,"
+                + " a mass... Tried on a copy of the design, applied as one step", this::goalSeek)));
+        a.add(new SphereCreo.Group("Inspect Geometry")
+            .add(large(Icons.check(32), "Check overlaps", "Check the whole design for overlaps (F7)", () -> {
+                showBottom(analysis);
+                analysis.checkOverlaps(1000);
+            }))
+            .add(large(Icons.clash(32), "Resolve clash", "Move the selected volume out of what it overlaps (F6)",
+                this::resolveClash))
+            .stack(toggle(Icons.clash(16), "Live clash check", "Check the selection as it is edited",
+                    clashes::enabled, () -> clashes.setEnabled(!clashes.enabled())),
+                toggle(Icons.check(16), "Check while drawing", "Previews say where they go and what they would overlap",
+                    () -> vp.liveCheck, () -> vp.liveCheck = !vp.liveCheck)));
+        a.add(new SphereCreo.Group("Model Report")
+            .add(large(Icons.mass(32), "Mass", "Masses of the volumes", () -> {
+                showBottom(analysis);
+                analysis.computeMasses();
+            }))
+            .add(large(Icons.budget(32), "Material budget", "Material budget scan (F8)", () -> {
+                showBottom(analysis);
+                analysis.scanBudget(true, 4, 80, false);
+            }))
+            .add(large(Icons.advise(32), "Design assistant", "Design assistant (F9)", () -> {
+                showBottom(analysis);
+                analysis.showAssistant();
+            })));
+
+        // Applications (Creo's name for the tab of the programs around the model): Geant4's runs, G4code, ROOT and GDML
+        final JPanel g = r.tab("Applications");
+        g.add(new SphereCreo.Group("Simulation")
+            .add(large(Icons.run(32), "Run in Geant4", "Run the design in Geant4 (F5)", () -> showBottom(runPanel)))
+            .stack(small(Icons.geant4(16), "Installations", "The Geant4 installations found", this::showInstallations),
+                small(Icons.network(16), "Machine learning", "Fast simulation by machine learning",
+                    () -> showBottom(mlPanel))));
+        g.add(new SphereCreo.Group("Code")
+            .add(large(Icons.code(32), "Into G4code", "The selection (else the whole detector) written into the C++ open"
+                + " in G4code, in the volume selected there (Ctrl+Shift+I)", this::insertIntoG4code))
+            .add(large(Icons.export(32, Icons.BLUE), "C++ project", "A Geant4 C++ project (Ctrl+E)", this::exportCppDialog)));
+        g.add(new SphereCreo.Group("Exchange")
+            .add(large(Icons.root(32), "ROOT geometry", "A .root file TGeoManager::Import reads, written without ROOT"
+                + " (Ctrl+Shift+R)", () -> exportDialog(GeometryFiles.Format.ROOT)))
+            .stack(small(Icons.export(16, Icons.GREEN), "GDML for Geant4", "The design as it is, expressions and variables"
+                    + " kept", () -> exportDialog(GeometryFiles.Format.GDML)),
+                small(Icons.export(16, Icons.ORANGE), "GDML for ROOT", "Numbers instead of expressions: ROOT reads it too",
+                    () -> exportDialog(GeometryFiles.Format.GDML_PORTABLE)),
+                small(Icons.convert(16), "Convert files", "GDML to ROOT or ROOT to GDML, many files at once",
+                    this::convertDialog))
+            .stack(small(Icons.file(16, "open"), "Open", "Open a GDML design or a ROOT geometry (Ctrl+O)", this::openDialog),
+                small(Icons.image(16), "Image (PNG)", "The view as a picture", this::exportImage)));
+        g.add(new SphereCreo.Group("Materials")
+            .stack(small(Icons.flask(16), "NIST equivalents", "Use NIST equivalents of the defined materials",
+                    () -> nistMatch(true)),
+                small(Icons.list(16), "List materials", "The materials, in the console", () -> {
+                    bottom.setSelectedIndex(0);
+                    console.run("materials");
+                })));
+
+        // View
+        final JPanel v = r.tab("View");
+        v.add(new SphereCreo.Group("Orientation")
+            .add(large(Icons.fit(32), "Refit", "Fit all (F)", () -> vp.fitAll(true)))
+            .add(menuButton(L, Icons.view(32, "iso"), "Saved orientations", "Standard, FRONT, TOP, RIGHT... (0-8)",
+                vp::viewsMenu))
+            .stack(small(Icons.view(16, "front"), "Front", "Front view (1)", () -> vp.setView("front", true)),
+                small(Icons.view(16, "top"), "Top", "Top view (2)", () -> vp.setView("top", true)),
+                small(Icons.view(16, "right"), "Right", "Right view (3)", () -> vp.setView("right", true)))
+            .stack(small(Icons.view(16, "iso"), "Standard", "Standard orientation (0)", () -> vp.setView("iso", true)),
+                small(Icons.fit(16), "Fit selection", "Frame the selection", () -> vp.fitSelection(true))));
+        v.add(new SphereCreo.Group("Model Display")
+            .add(menuButton(L, Icons.box(32, c), "Display style", "Shading with edges, shading, wireframe", vp::styleMenu))
+            .add(menuButton(L, Icons.palette(32), "Color by", "Document, material, density, X0, depth, sensitive (K)",
+                vp::colorMenu))
+            .stack(toggle(Icons.perspective(16), "Perspective", "Perspective (O)", () -> vp.camera.perspective,
+                    vp::togglePerspective),
+                toggle(Icons.isolate(16), "See-through envelopes", "Envelopes as glass, so what they hold shows",
+                    () -> vp.autoTransparent, () -> vp.autoTransparent = !vp.autoTransparent),
+                toggle(Icons.palette(16), "Dark background", "The graphics area's dark gradient", () -> vp.darkTheme,
+                    () -> vp.darkTheme = !vp.darkTheme)));
+        v.add(new SphereCreo.Group("Show")
+            .stack(toggle(Icons.plane(16), "Datum planes", "FRONT, TOP, RIGHT and the world's coordinate system",
+                    () -> vp.showDatums, () -> vp.showDatums = !vp.showDatums),
+                toggle(Icons.spin(16), "Spin center", "Where the view turns about", () -> vp.showSpin,
+                    () -> vp.showSpin = !vp.showSpin),
+                toggle(Icons.grid(16), "Grid", "The work plane's grid", () -> vp.showGrid, () -> vp.showGrid = !vp.showGrid))
+            .stack(toggle(Icons.isolate(16), "Isolate", "Only the selection (I)", vp::isIsolated, () -> {
+                    if (!vp.isolate(!vp.isIsolated())) {
+                        status.setText("Select volumes first: Isolate then shows only them, the rest as outlines");
+                    }
+                }),
+                toggle(Icons.isolate(16), "X-ray", "Isolated: the rest as outlines", vp::xray, () -> vp.setXray(!vp.xray())),
+                toggle(Icons.section(16), "Section", "Cut the detector open along a plane (X)", () -> vp.section,
+                    () -> vp.section = !vp.section))
+            .stack(menuButton(S, Icons.section(16), "Section plane", "Normal to X, Y or Z", this::sectionPopup)));
+        v.add(new SphereCreo.Group("Drawing Aids")
+            .stack(toggle(Icons.grid(16), "Snap to grid", "Snap to the grid (G)", () -> vp.gridSnap,
+                    () -> vp.gridSnap = !vp.gridSnap),
+                toggle(Icons.select(16), "Snap to points", "Corners, middles, centers and edges (Ctrl held: off)",
+                    () -> vp.vertexSnap, () -> vp.vertexSnap = !vp.vertexSnap),
+                toggle(Icons.view(16, "top"), "Z up", "Z up (FreeCAD) instead of Y up (Geant4)", () -> !vp.yUp,
+                    () -> vp.setUpAxis(!vp.yUp))));
+        v.add(new SphereCreo.Group("Navigation")
+            .stack(toggle(Icons.spin(16), "Creo mouse", "Middle drag spins, Shift+middle pans, Ctrl+middle zooms and"
+                    + " turns, a left drag selects with a box, a double click shows the dimensions (off: FreeCAD's mouse)",
+                    () -> vp.creoMouse, () -> {
+                        vp.creoMouse = !vp.creoMouse;
+                        PREFS.putBoolean("creoMouse", vp.creoMouse);
+                        vp.updateStatus();
+                    }),
+                small(Icons.view(16, "iso"), "Standard orientation", "Ctrl+D", () -> vp.setView("iso", true)),
+                small(Icons.fit(16), "Repaint", "Ctrl+R", vp::repaint)));
+        v.add(new SphereCreo.Group("Window")
+            .add(large(Icons.zoom(32, 0), "Find a command", "Every command, found by typing a few letters (Ctrl+Shift+P)",
+                () -> ActionPalette.show(this, menuBar)))
+            .stack(small(Icons.console(16), "Console", "The console (Space)", () -> {
+                    bottom.setSelectedIndex(0);
+                    console.focusInput();
+                }),
+                small(Icons.pane(16), "Analyses", "The analyses", () -> showBottom(analysis)),
+                small(Icons.run(16), "Run panel", "Run in Geant4", () -> showBottom(runPanel))));
+        r.select("Model");
+        return r;
+    }
+
+    /** The material, unit and plane controls, as they were: the ribbon only holds them. */
+    private void setupControls() {
         materialBox.setEditable(true);
-        materialBox.setMaximumSize(new Dimension(220, 28));
-        for (String m : List.of("G4_Al", "G4_Si", "G4_Pb", "G4_Fe", "G4_Cu", "G4_W", "G4_AIR", "G4_Galactic", "G4_WATER",
+        for (String mat : List.of("G4_Al", "G4_Si", "G4_Pb", "G4_Fe", "G4_Cu", "G4_W", "G4_AIR", "G4_Galactic", "G4_WATER",
             "G4_PLASTIC_SC_VINYLTOLUENE", "G4_PbWO4", "G4_lAr", "G4_CONCRETE", "G4_STAINLESS-STEEL", "G4_KAPTON")) {
-            materialBox.addItem(m);
+            materialBox.addItem(mat);
         }
         materialBox.setSelectedItem(model.material);
-        materialBox.setToolTipText("Material of the volumes you draw next (any NIST name, or a common name: lead, eau, scintillator)");
+        materialBox.setToolTipText("Material of the volumes you draw next (any NIST name, or a common name: lead, water, scintillator)");
         materialBox.addActionListener(e -> {
-            final String v = String.valueOf(materialBox.getSelectedItem()).trim();
-            final String m = model.geometry.materials().material(v) != null ? v : com.sphere.core.geant4.Intent.material(v);
-            if (m != null) {
-                model.material = m;
-                if (!m.equals(v)) {
-                    materialBox.setSelectedItem(m);
+            final String val = String.valueOf(materialBox.getSelectedItem()).trim();
+            final String mat = model.geometry.materials().material(val) != null ? val : com.sphere.core.geant4.Intent.material(val);
+            if (mat != null) {
+                model.material = mat;
+                if (!mat.equals(val)) {
+                    materialBox.setSelectedItem(mat);
                 }
             } else {
-                status.setText("unknown material " + v);
+                status.setText("unknown material " + val);
             }
         });
-        t.add(materialBox);
-        t.add(new JLabel(" Unit "));
-        final JComboBox<String> unit = new JComboBox<>(new String[] {"mm", "cm", "m", "um"});
-        unit.setMaximumSize(new Dimension(70, 28));
-        unit.setSelectedItem(model.lengthUnit);
-        unit.setToolTipText("Unit of lengths typed without one");
-        unit.addActionListener(e -> model.lengthUnit = String.valueOf(unit.getSelectedItem()));
-        t.add(unit);
-        t.add(new JLabel(" Plane "));
-        final JComboBox<String> plane = new JComboBox<>(new String[] {"XY", "XZ", "YZ"});
-        plane.setMaximumSize(new Dimension(70, 28));
-        final JTextField offset = new JTextField("0", 5);
-        offset.setMaximumSize(new Dimension(70, 28));
-        offset.setToolTipText("Offset of the work plane along its normal (Enter)");
+        unitBox.setSelectedItem(model.lengthUnit);
+        unitBox.setToolTipText("Unit of lengths typed without one");
+        unitBox.addActionListener(e -> model.lengthUnit = String.valueOf(unitBox.getSelectedItem()));
+        planeBox.setToolTipText("The work plane");
+        offsetField.setToolTipText("Offset of the work plane along its normal (Enter)");
         final Runnable applyPlane = () -> {
             double o = 0;
             try {
-                o = com.sphere.core.geant4.Expr.eval(com.sphere.core.geant4.Inputs.normalize(offset.getText(),
+                o = com.sphere.core.geant4.Expr.eval(com.sphere.core.geant4.Inputs.normalize(offsetField.getText(),
                     com.sphere.core.geant4.Units.Category.LENGTH, model.lengthUnit), model.geometry.scope());
             } catch (GeometryException ex) {
                 status.setText(ex.getMessage());
             }
-            vp.plane = switch (String.valueOf(plane.getSelectedItem())) {
+            vp.plane = switch (String.valueOf(planeBox.getSelectedItem())) {
                 case "XZ" -> WorkPlane.xz(o);
                 case "YZ" -> WorkPlane.yz(o);
                 default -> WorkPlane.xy(o);
@@ -588,42 +821,204 @@ public final class G4EditorFrame extends JFrame {
             }
             vp.repaint();
         };
-        plane.addActionListener(e -> applyPlane.run());
-        offset.addActionListener(e -> applyPlane.run());
-        t.add(plane);
-        t.add(offset);
-        rows.add(t);
-        return rows;
+        planeBox.addActionListener(e -> applyPlane.run());
+        offsetField.addActionListener(e -> applyPlane.run());
     }
 
-    private JButton button(Icon icon, String tip, Runnable r) {
-        final JButton b = new JButton(icon);
-        b.setToolTipText(tip);
-        b.setFocusable(false);
-        b.addActionListener(e -> r.run());
-        return b;
-    }
-
-    private JToggleButton tool(Icon icon, String tip, Supplier<Tools.Tool> make) {
-        final JToggleButton b = new JToggleButton(icon);
-        b.setToolTipText(tip);
-        b.setFocusable(false);
-        b.addActionListener(e -> {
-            for (AbstractButton o : toolButtons) {
-                o.setSelected(o == b);
-            }
-            vp.setTool(make.get());
-        });
+    /** A tool's button: lit while its tool is at work; also what its key and the console's "tool" command press. */
+    private SphereCreo.Button toolButton(String name, SphereCreo.Size size, Icon icon, String label, String tip,
+                                         Supplier<Tools.Tool> make) {
+        final SphereCreo.Button b = new SphereCreo.Button(size, icon, label, tip, () -> vp.setTool(make.get()));
+        b.on(() -> name.equals(activeTool));
+        toolNamed.put(name, b);
         toolButtons.add(b);
-        if (toolButtons.size() == 1) {
-            b.setSelected(true);
-        }
         return b;
     }
 
-    private void selectToolButton(int index) {
-        for (int i = 0; i < toolButtons.size(); i++) {
-            toolButtons.get(i).setSelected(i == index);
+    private SphereCreo.Button large(Icon icon, String label, String tip, Runnable r) {
+        return new SphereCreo.Button(SphereCreo.Size.LARGE, icon, label, tip, r);
+    }
+
+    private SphereCreo.Button small(Icon icon, String label, String tip, Runnable r) {
+        return new SphereCreo.Button(SphereCreo.Size.SMALL, icon, label, tip, r);
+    }
+
+    /** A small button lit while an option is on, which a click flips. */
+    private SphereCreo.Button toggle(Icon icon, String label, String tip, java.util.function.BooleanSupplier on, Runnable flip) {
+        return small(icon, label, tip, () -> {
+            flip.run();
+            vp.repaint();
+        }).on(on);
+    }
+
+    /** A button that opens a menu under itself. */
+    private SphereCreo.Button menuButton(SphereCreo.Size size, Icon icon, String label, String tip, Supplier<JPopupMenu> menu) {
+        final SphereCreo.Button[] b = new SphereCreo.Button[1];
+        b[0] = new SphereCreo.Button(size, icon, label, tip, () -> menu.get().show(b[0], 0, b[0].getHeight()));
+        b[0].menu();
+        return b[0];
+    }
+
+    private JPopupMenu solidsPopup() {
+        final JPopupMenu m = new JPopupMenu();
+        for (var t : com.sphere.core.geant4.Solids.types()) {
+            m.add(item(t.label() + "  (" + t.g4Class() + ")", null, () -> console.run("solid " + t.tag())));
+        }
+        return m;
+    }
+
+    private JPopupMenu sectionPopup() {
+        final JPopupMenu m = new JPopupMenu();
+        for (int i = 0; i < 3; i++) {
+            final int k = i;
+            m.add(item("Normal to " + "XYZ".charAt(i), null, () -> {
+                vp.sectionAxis = k;
+                vp.section = true;
+                vp.repaint();
+            }));
+        }
+        return m;
+    }
+
+    /** What Copy took: the names of the placements, which Paste copies. */
+    private final List<String> clipboard = new ArrayList<>();
+
+    private void copySelection() {
+        clipboard.clear();
+        for (PhysicalVolume pv : model.selection()) {
+            clipboard.add(pv.name());
+        }
+        status.setText(clipboard.isEmpty() ? "Nothing selected to copy"
+            : clipboard.size() + " placement" + (clipboard.size() > 1 ? "s" : "") + " copied: Ctrl+V pastes them");
+    }
+
+    /** Creo's paste: copies of what was copied, on the originals, the Move tool at hand to put them in place. */
+    private void paste() {
+        if (clipboard.isEmpty()) {
+            status.setText("Nothing copied: select volumes, then Ctrl+C");
+            return;
+        }
+        final List<PhysicalVolume> made = new ArrayList<>();
+        for (String n : clipboard) {
+            if (model.geometry.placement(n) == null) {
+                continue;
+            }
+            final Set<PhysicalVolume> before = new java.util.HashSet<>(model.geometry.placements());
+            console.run("copy " + n + " 1");
+            for (PhysicalVolume pv : model.geometry.placements()) {
+                if (!before.contains(pv)) {
+                    made.add(pv);
+                }
+            }
+        }
+        if (made.isEmpty()) {
+            status.setText("The placements copied are gone");
+            return;
+        }
+        model.selectAll(made);
+        shortcutTool("move");
+        status.setText(made.size() + " pasted on the originals: drag them into place (or type the move); Esc leaves them");
+    }
+
+    /** Creo's Regenerate: every expression and placement evaluated again, the view and the panels told. */
+    private void regenerate() {
+        model.geometry.rebuild();
+        model.fireDocument(Geometry.Change.ALL);
+        vp.repaint();
+        long errors = 0;
+        for (Geometry.Issue i : model.geometry.issues()) {
+            if (i.severity() == Geometry.Severity.ERROR) {
+                errors++;
+            }
+        }
+        status.setText("Regenerated: " + model.geometry.placements().size() + " placements"
+            + (errors > 0 ? ", " + errors + " error" + (errors > 1 ? "s" : "") + " (see the console)" : ", no error"));
+    }
+
+    /** The Geant4 installations found, in the console. */
+    private void showInstallations() {
+        final var list = com.sphere.core.geantbackend.Geant4Locator.find(settings);
+        bottom.setSelectedIndex(0);
+        if (list.isEmpty()) {
+            console.print("No Geant4 found (settings.conf GEANT4_DIR, PATH, conda, virtual environments; on Windows a "
+                + "Linux GEANT4_DIR such as /home/me/geant4 is looked for inside WSL). G4editor works without it; the "
+                + "engine and the exported project need it to be built.");
+        }
+        for (var i : list) {
+            console.print("  " + i + (i.datasets().isEmpty() ? "  (no data sets found)" : "  " + i.datasets().size() + " data sets"));
+        }
+    }
+
+    /** The name of a tool's button: what the ribbon lights while it is at work. */
+    static String toolName(Tools.Tool t) {
+        if (t == null) {
+            return "select";
+        }
+        if (t instanceof Tools.MoveTool mt) {
+            return mt.rotate ? "rotate" : "move";
+        }
+        if (t instanceof Tools.PolygonTool pt) {
+            return pt.revolve ? "revolve" : "extrude";
+        }
+        if (t instanceof SmartTools.SketchTool) {
+            return "sketch";
+        }
+        if (t instanceof SmartTools.PushPullTool) {
+            return "pushpull";
+        }
+        return t.name().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** A tool's icon, for its dashboard (G4code's too). */
+    static Icon toolIcon(Tools.Tool t) {
+        final Color c = new Color(0x8AA4C8);
+        return switch (toolName(t)) {
+            case "move" -> Icons.move(32);
+            case "rotate" -> Icons.rotate(32);
+            case "measure" -> Icons.measure(32);
+            case "box" -> Icons.box(32, c);
+            case "tube" -> Icons.tube(32, c);
+            case "sphere" -> Icons.sphere(32, c);
+            case "cone" -> Icons.cone(32, c);
+            case "torus" -> Icons.torus(32, c);
+            case "extrude" -> Icons.extrude(32, c);
+            case "revolve" -> Icons.revolve(32, c);
+            case "sketch" -> Icons.sketch(32);
+            case "pushpull" -> Icons.pushPull(32);
+            default -> Icons.select(32);
+        };
+    }
+
+    /**
+     * The menus' keyboard shortcuts, on the window: the menus are no longer shown, their keys still work (Ctrl+S,
+     * Ctrl+Z, F5 to F9...).
+     */
+    private void installAccelerators(JMenuBar bar) {
+        final javax.swing.InputMap im = getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        final javax.swing.ActionMap am = getRootPane().getActionMap();
+        for (int i = 0; i < bar.getMenuCount(); i++) {
+            accelerators(bar.getMenu(i), im, am);
+        }
+    }
+
+    private void accelerators(JMenu menu, javax.swing.InputMap im, javax.swing.ActionMap am) {
+        for (java.awt.Component c : menu.getMenuComponents()) {
+            if (c instanceof JMenu sub) {
+                accelerators(sub, im, am);
+            } else if (c instanceof JMenuItem it && it.getAccelerator() != null) {
+                final String key = "g4editor:" + it.getAccelerator();
+                im.put(it.getAccelerator(), key);
+                am.put(key, new javax.swing.AbstractAction() {
+                    private static final long serialVersionUID = 1L;
+
+                    @Override
+                    public void actionPerformed(java.awt.event.ActionEvent e) {
+                        if (it.isEnabled()) {
+                            it.doClick(0);
+                        }
+                    }
+                });
+            }
         }
     }
 
@@ -633,6 +1028,8 @@ public final class G4EditorFrame extends JFrame {
             return false;
         }
         switch (e.getKeyCode()) {
+            case KeyEvent.VK_Q -> shortcutTool("sketch");
+            case KeyEvent.VK_E -> shortcutTool("pushpull");
             case KeyEvent.VK_B -> shortcutTool("box");
             case KeyEvent.VK_T -> shortcutTool("tube");
             case KeyEvent.VK_S -> shortcutTool("sphere");
@@ -644,6 +1041,7 @@ public final class G4EditorFrame extends JFrame {
             case KeyEvent.VK_D -> shortcutTool("measure");
             case KeyEvent.VK_DELETE, KeyEvent.VK_BACK_SPACE -> deleteSelection();
             case KeyEvent.VK_H -> toggleVisibility();
+            case KeyEvent.VK_L -> toggleLive();
             case KeyEvent.VK_SPACE -> {
                 bottom.setSelectedIndex(0);
                 console.focusInput();
@@ -665,12 +1063,13 @@ public final class G4EditorFrame extends JFrame {
     }
 
     private void shortcutTool(String name) {
-        final String[] names = {"select", "move", "rotate", "measure", "box", "tube", "sphere", "cone", "torus", "extrude", "revolve"};
-        for (int i = 0; i < names.length; i++) {
-            if (names[i].equals(name)) {
-                toolButtons.get(i).doClick();
-                return;
-            }
+        final AbstractButton b = toolNamed.get(switch (name) {
+            case "push", "pull", "push/pull", "pushpull" -> "pushpull";
+            case "draw", "freehand", "sketch" -> "sketch";
+            default -> name;
+        });
+        if (b != null) {
+            b.doClick();
         }
     }
 
@@ -681,6 +1080,7 @@ public final class G4EditorFrame extends JFrame {
     private JMenuBar menus() {
         final JMenuBar bar = new JMenuBar();
         final JMenu file = menu("File", 'F');
+        fileMenu = file;
         file.add(item("New design", "control N", this::newDesign));
         file.add(item("Open...", "control O", this::openDialog,
             "A GDML design, or the geometry (TGeoManager) a ROOT file holds"));
@@ -717,18 +1117,24 @@ public final class G4EditorFrame extends JFrame {
         edit.add(undoItem);
         edit.add(redoItem);
         edit.addSeparator();
-        edit.add(item("Duplicate", "control D", () -> forSelection(pv -> "copy " + pv.name() + " 1")));
+        edit.add(item("Copy", "control C", this::copySelection, "The selected placements, for Ctrl+V"));
+        edit.add(item("Paste", "control V", this::paste,
+            "Copies of the placements copied, put in place by dragging them (Creo's paste)"));
+        edit.add(item("Duplicate", null, () -> forSelection(pv -> "copy " + pv.name() + " 1")));
         edit.add(item("Delete", null, this::deleteSelection));
         edit.add(item("Select all", "control A", () -> model.selectAll(model.geometry.placements())));
+        edit.add(item("Regenerate", "control G", this::regenerate, "Evaluates every expression and placement again"));
         edit.addSeparator();
         edit.add(item("Fit the world around the detector", null, () -> console.run("world fit")));
         edit.addSeparator();
-        edit.add(item("Command palette...", "control shift P", () -> ActionPalette.show(this, getJMenuBar()),
+        edit.add(item("Command palette...", "control shift P", () -> ActionPalette.show(this, menuBar),
             "Every command of these menus, found by typing a few letters"));
         bar.add(edit);
         updateUndoItems();
 
         final JMenu view = menu("View", 'V');
+        view.add(item("Standard orientation", "control D", () -> vp.setView("iso", true)));
+        view.add(item("Repaint", "control R", vp::repaint));
         for (String[] v : new String[][] {{"Isometric", "0", "iso"}, {"Front", "1", "front"}, {"Top", "2", "top"},
             {"Right", "3", "right"}, {"Rear", "4", "rear"}, {"Bottom", "5", "bottom"}, {"Left", "6", "left"},
             {"Side (beam to the right)", "7", "side"}, {"Along the beam", "8", "beam"}}) {
@@ -790,7 +1196,11 @@ public final class G4EditorFrame extends JFrame {
             vp.repaint();
         }));
         view.add(check("Draw on the face clicked first", true, b -> vp.faceSnapPlane = b));
-        view.add(check("Snap to vertices", true, b -> vp.vertexSnap = b));
+        view.add(check("Snap to corners, middles, centers and edges (Ctrl held: off)", true, b -> vp.vertexSnap = b));
+        view.add(check("Check what is drawn for overlaps as it is drawn", true, b -> {
+            vp.liveCheck = b;
+            vp.repaint();
+        }));
         view.add(check("Z up (FreeCAD) instead of Y up (Geant4)", false, b -> vp.setUpAxis(!b)));
         view.add(check("Dark background", vp.darkTheme, b -> {
             vp.darkTheme = b;
@@ -799,6 +1209,12 @@ public final class G4EditorFrame extends JFrame {
         bar.add(view);
 
         final JMenu create = menu("Create", 'C');
+        create.add(item("Sketch freehand (Q) - drawn, read, made", null, () -> shortcutTool("sketch"),
+            "Draw a circle, a rectangle, a hexagon, any outline or a line by hand: it is read as the shape it looks"
+                + " like and made a tube, a box, a prism, a plate (Space offers another reading)"));
+        create.add(item("Push/Pull a face (E)", null, () -> shortcutTool("pushpull"),
+            "Drag a face of a box, tube, cone, sphere, torus, trapezoid or extrusion: the size it stands for follows"));
+        create.addSeparator();
         for (String[] s : new String[][] {{"Box (B)", "box"}, {"Tube (T)", "tube"}, {"Sphere (S)", "sphere"}, {"Cone (C)", "cone"},
             {"Torus", "torus"}, {"Extrusion (P)", "extrude"}, {"Revolution (V)", "revolve"}}) {
             create.add(item(s[0] + " - draw", null, () -> shortcutTool(s[1])));
@@ -810,8 +1226,11 @@ public final class G4EditorFrame extends JFrame {
         }
         create.add(byType);
         final JMenu templates = new JMenu("Parametric detector");
-        for (String k : Templates.kinds()) {
-            templates.add(item(k, null, () -> console.run("template " + k)));
+        templates.add(item("Template gallery...", null, this::openGallery,
+            "Every template drawn in 3D with its beam: search, parameters, physics, goals"));
+        templates.addSeparator();
+        for (Templates.Template t : Templates.catalog()) {
+            templates.add(item(t.title() + "  (" + t.kind() + ")", null, () -> console.run("template " + t.kind())));
         }
         create.add(templates);
         bar.add(create);
@@ -844,25 +1263,22 @@ public final class G4EditorFrame extends JFrame {
             showBottom(analysis);
             analysis.showAssistant();
         }));
+        tools.addSeparator();
+        tools.add(item("Physics Live on the drawing (L)", null, this::toggleLive,
+            "The beam's shower, the energy kept, the sampling, on the drawing and again at every edit"));
+        tools.add(item("Goal seek...", null, this::goalSeek,
+            "The value of a variable that meets a physics target, tried on a copy of the design"));
+        tools.add(item("Relations from the drawing...", null, this::relationsDialog,
+            "Stacks drawn by hand made parametric: thicknesses become variables, positions follow"));
         bar.add(tools);
 
         final JMenu g4 = menu("Geant4", 'G');
         g4.add(item("Run in Geant4...", "F5", () -> showBottom(runPanel)));
-        g4.add(item("Geant4 installations found", null, () -> {
-            final var list = com.sphere.core.geantbackend.Geant4Locator.find(settings);
-            bottom.setSelectedIndex(0);
-            if (list.isEmpty()) {
-                console.print("No Geant4 found (settings.conf GEANT4_DIR, PATH, conda, virtual environments; on Windows a "
-                    + "Linux GEANT4_DIR such as /home/me/geant4 is looked for inside WSL). G4editor works without it; the "
-                    + "engine and the exported project need it to be built.");
-            }
-            for (var i : list) {
-                console.print("  " + i + (i.datasets().isEmpty() ? "  (no data sets found)" : "  " + i.datasets().size() + " data sets"));
-            }
-        }));
+        g4.add(item("Geant4 installations found", null, this::showInstallations));
         bar.add(g4);
 
         final JMenu help = menu("Help", 'H');
+        helpMenu = help;
         help.add(item("Console commands", null, () -> {
             bottom.setSelectedIndex(0);
             console.run("help");
@@ -935,37 +1351,51 @@ public final class G4EditorFrame extends JFrame {
 
     private void showKeys() {
         JOptionPane.showMessageDialog(this, """
-            Mouse
-              left drag: orbit          right or middle drag: pan        wheel: zoom at the cursor
-              click: select             Ctrl+click: add to selection     double click: frame it
-              right click: menu (ends a drawing tool)       click the navigation cube: standard view
+            Mouse (PTC Creo's; View > Navigation > Creo mouse off gives FreeCAD's)
+              middle drag: spin, about the spin center (or the point under the mouse when it is hidden)
+              Shift+middle drag: pan     Ctrl+middle drag: zoom (up and down) and turn (across)
+              wheel: zoom at the cursor (Ctrl: finely, Shift: coarsely)     middle click: OK
+              click: select     Ctrl+click: add or remove     drag a box: select (left to right: what is wholly
+                inside, right to left: what it touches)
+              double click a volume: its dimensions on the model; double click one to change it
+              right click: menu (in a tool: OK, Cancel, snaps)     click the navigation cube: standard view
             Drawing
-              click points on the work plane; while drawing, type values: 12, 12 cm, 2*Rin+5mm
-              Tab: next field (locks the typed one)   Enter: take the step   Esc: cancel
-              Shift: horizontal / vertical edge (outlines)   a first click on a face draws on that face
+              a press takes the point at once; press and drag from the first point draws the base in one stroke
+              while drawing: middle drag orbits, Shift+middle or right drag pans, the left button only draws
+              the assistant snaps to corners, middles of edges, centers of circles and faces, edges, lines up with
+              the points it saw (dashed guides), the axes and 45 degrees from the last point; Ctrl held: free
+              sizes stop at the design's variables (kept by name), at sizes already drawn, level with neighbors
+              the preview turns red when it would overlap, blue when it only touches; it says where it goes
+              type values: 12, 12 cm, 2*Rin+5mm    Tab: next field   Enter: take the step   Esc: cancel
+              Shift: horizontal / vertical edge (outlines)   a first point on a face draws on that face
+            Smart tools
+              Q sketch: draw freehand, a circle becomes a tube, a rectangle a box, a hexagon a prism, a line a plate
+                (Space: another reading: sphere, cone, extrusion, revolution)
+              E push/pull: drag a face out or in, its length or radius follows, the opposite face stays
+              M move: drag the selected volume, it lands flush against its neighbors; Ctrl drags a copy,
+                then type 5 and Enter for five in a row, /5 to spread five over the gap
+            Physics (Analysis > Physics Live)
+              the beam is the design's gun (Run panel, C++): its line, the energy left along it in heat colors,
+                the shower's maximum and the cylinder holding 95% of it, red where it leaves the detector
+              Goal Seek: a target (95% kept, 25 X0, 2 t...) and a variable; the value is searched on a copy
+              Relations (Model): plates drawn face to face become a stack of variables; change one, the rest follow
+              console: beam e- 50 GeV along +z   goal containment >= 95% by cal_nLayers   relations apply
+            Interface (PTC Creo's)
+              the ribbon: File, Model, Analysis, Applications (Geant4 runs, G4code, C++, ROOT, GDML), View; a double click on a tab
+                folds it away, another unfolds it; the quick access bar above: new, open, save, undo, redo, find
+              a tool at work gets its own tab, its dashboard: its values, where the volume goes, OK and Cancel
+                (a middle click is OK, as in Creo)
+              the graphics toolbar over the view: refit, zoom, saved orientations, display style, color by,
+                datum planes (FRONT, TOP, RIGHT), spin center, grid, section, isolate, perspective
             Keys
-              B box  T tube  S sphere  C cone  P extrude  V revolve  M move  R rotate  D measure
+              Q sketch  E push/pull  B box  T tube  S sphere  C cone  P extrude  V revolve  M move  R rotate  D measure
+              L Physics Live: the beam's shower, the energy kept, the sampling, on the drawing
               0-8 views   F fit   O perspective   X section   G grid snap   H hide   Delete
               I isolate the selection (again: show all)    K color by material, density, X0, depth...
-              Space: console    Ctrl+Z / Ctrl+Y undo / redo    Ctrl+D duplicate   Ctrl+S save
+              Space: console    Ctrl+Z / Ctrl+Y undo / redo    Ctrl+S save    Ctrl+D standard orientation
+              Ctrl+C / Ctrl+V copy and paste (then drag the copy into place)    Ctrl+G regenerate    Ctrl+R repaint
               Ctrl+Shift+P: every command by name    files (GDML, ROOT) can be dropped on the window
             """, "G4editor - mouse and keyboard", JOptionPane.INFORMATION_MESSAGE);
-    }
-
-    private void templateMenu(JComponent anchor) {
-        final JPopupMenu m = new JPopupMenu();
-        final String[][] t = {
-            {"Sampling calorimeter (B4-like, replicated layers)", "template calorimeter"},
-            {"Silicon tracker barrel", "template tracker"},
-            {"Beam telescope", "template telescope"},
-            {"Concrete shielding", "template shield"},
-            {"Water phantom with bone", "template phantom"},
-            {"TPC drift volume", "template tpc"}};
-        for (String[] x : t) {
-            m.add(item(x[0], null, () -> console.run(x[1])));
-        }
-        final java.awt.Point p = anchor.getMousePosition();
-        m.show(anchor, p == null ? 0 : p.x, p == null ? anchor.getHeight() : p.y);
     }
 
     // ------------------------------------------------------------------
@@ -1062,6 +1492,118 @@ public final class G4EditorFrame extends JFrame {
     // ------------------------------------------------------------------
     // Files
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // Physics Live, goals, relations
+    // ------------------------------------------------------------------
+
+    private void toggleLive() {
+        setLive(!live.isOn());
+    }
+
+    private void setLive(boolean on) {
+        live.setOn(on);
+        PREFS.putBoolean("physicsLive", on);
+        status.setText(on ? "Physics Live: " + live.report().beam().describe() + " (Analysis > Beam aims it; the card"
+            + " opens its panel)" : "Physics Live off");
+        ribbon.repaint();
+    }
+
+    /** The gun's aim, particles and energies at hand, and the panel for the rest. */
+    private JPopupMenu beamPopup() {
+        final JPopupMenu m = new JPopupMenu();
+        m.add(item("Along +Z, through the center", null, () -> live.aim(com.sphere.core.geant4.Vec3.Z, null)));
+        m.add(item("Along +X", null, () -> live.aim(com.sphere.core.geant4.Vec3.X, null)));
+        m.add(item("Along +Y", null, () -> live.aim(com.sphere.core.geant4.Vec3.Y, null)));
+        m.add(item("Through the selection", null, () -> {
+            if (!live.aimAtSelection()) {
+                status.setText("Select the volumes the beam should go through first");
+            }
+        }));
+        m.add(item("Along the view", null, live::aimAlongView));
+        m.addSeparator();
+        for (String[] b : new String[][] {{"e-", "1 GeV"}, {"e-", "10 GeV"}, {"e-", "100 GeV"}, {"gamma", "10 GeV"},
+            {"mu-", "10 GeV"}, {"pi-", "50 GeV"}, {"proton", "100 GeV"}}) {
+            m.add(item(b[0] + "  " + b[1], null, () -> {
+                final com.sphere.core.geant4.BeamPhysics.Beam now = com.sphere.core.geant4.BeamPhysics.Beam.of(model.geometry);
+                try {
+                    live.setBeam(now.with(com.sphere.core.geant4.BeamPhysics.Particle.of(b[0]), com.sphere.core.geant4.Expr.eval(
+                        com.sphere.core.geant4.Inputs.normalize(b[1], com.sphere.core.geant4.Units.Category.ENERGY, "mm"), null)));
+                } catch (GeometryException e) {
+                    status.setText(e.getMessage());
+                }
+                if (!live.isOn()) {
+                    setLive(true);
+                }
+            }));
+        }
+        m.addSeparator();
+        m.add(item("The beam, the layers, goals...", null, () -> showBottom(live.panel)));
+        return m;
+    }
+
+    private void goalSeek() {
+        showBottom(live.panel);
+        live.panel.target.requestFocusInWindow();
+        live.panel.target.selectAll();
+    }
+
+    /** Creo's Relations, read from the drawing: the stacks drawn by hand become variables and sums of them. */
+    private void relationsDialog() {
+        final List<PhysicalVolume> scope = new ArrayList<>(model.selection());
+        final Relations.Plan p = Relations.plan(model.geometry, scope);
+        if (p.isEmpty()) {
+            JOptionPane.showMessageDialog(this, p.findings().isEmpty() ? "No stack found" + (scope.isEmpty() ? ""
+                : " in the selection") + ".\nRelations are read from volumes standing face to face along an axis:"
+                + " unturned boxes, or tubes, cones and trds along z." : String.join("\n", p.findings()), "Relations",
+                JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        final StringBuilder b = new StringBuilder("<html><body style='width:460px'>");
+        for (String f : p.findings()) {
+            b.append("&bull; ").append(f.replace("&", "&amp;").replace("<", "&lt;")).append("<br>");
+        }
+        b.append("<br>Variables: <b>").append(String.join(", ", p.variables())).append("</b><br><br>Nothing moves now."
+            + " Change a variable afterwards (double click on the model, the Variables, a goal) and the stack follows.");
+        if (JOptionPane.showConfirmDialog(this, b.append("</body></html>").toString(), "Relations",
+            JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.OK_OPTION) {
+            return;
+        }
+        try {
+            model.edit("Relations", () -> {
+                try {
+                    Relations.apply(model.geometry, p);
+                } catch (GeometryException e) {
+                    throw new IllegalStateException(e.getMessage(), e);
+                }
+            });
+        } catch (IllegalStateException e) {
+            status.setText("Relations not written: " + e.getMessage());
+            return;
+        }
+        for (String c : p.commands()) {
+            model.log(c);
+        }
+        status.setText("Relations written: " + String.join(", ", p.variables()));
+        navigator.show("Variables");
+    }
+
+    /**
+     * The template gallery; the template chosen is built by the console's template command (logged, one undo step),
+     * its beam set as the design's gun when asked.
+     */
+    private void openGallery() {
+        final TemplateGallery.Choice c = TemplateGallery.choose(this, "Create", vp.darkTheme);
+        if (c == null) {
+            return;
+        }
+        bottom.setSelectedIndex(0);
+        console.run(c.command());
+        if (c.beamCommand() != null) {
+            console.run(c.beamCommand());
+        }
+        vp.fitAll(true);
+    }
 
     /** Brings a bottom tab forward, giving it room when the 3D view had taken it all. */
     private void showBottom(java.awt.Component c) {
@@ -1617,6 +2159,14 @@ public final class G4EditorFrame extends JFrame {
     }
 
     // For headless checks
+    SphereCreo.Ribbon ribbonBar() {
+        return ribbon;
+    }
+
+    JMenu fileMenu() {
+        return fileMenu;
+    }
+
     Viewport viewport() {
         return vp;
     }

@@ -56,7 +56,20 @@ public final class Advisor {
         names(g, out);
         showers(g, out);
         physics(g, out);
+        relations(g, out);
         return out;
+    }
+
+    /** Stacks drawn by hand, their sizes plain numbers: relations would let one change move the rest. */
+    private static void relations(Geometry g, List<Advice> out) {
+        final Relations.Plan p = Relations.plan(g, null);
+        if (p.isEmpty()) {
+            return;
+        }
+        out.add(new Advice(Level.IDEA, "Stacks drawn by hand are not parametric", String.join(" ", p.findings())
+            + " Relations would make " + String.join(", ", p.variables()) + " variables: change one (on the model, in the"
+            + " Variables, by a goal) and the plates after it move, the envelope follows. Nothing moves when they are"
+            + " written.", null, List.of(new Fix("Write the relations", "relations apply"))));
     }
 
     private static String name(Object o) {

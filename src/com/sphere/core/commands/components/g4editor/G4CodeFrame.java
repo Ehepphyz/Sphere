@@ -44,7 +44,6 @@ import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JToggleButton;
-import javax.swing.JToolBar;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
@@ -118,7 +117,20 @@ public final class G4CodeFrame extends JFrame {
     private final Viewport vp;
     private final ModelTree volumes;
     private final ApiBrowser api;
-    private final JTabbedPane left = new JTabbedPane();
+    /** Creo's navigator, as G4editor's: the project, the volumes, Geant4's API, its UI commands. */
+    private final SphereCreo.Navigator left = new SphereCreo.Navigator();
+    /** G4editor's ribbon and dashboard: one look for both tools. */
+    private SphereCreo.Ribbon ribbon;
+    private SphereCreo.Dashboard dashboard;
+    /** The classic menus, not shown: the File tab's menu, the command search's index. */
+    private javax.swing.JMenuBar menuBar;
+    private javax.swing.JMenu fileMenu;
+    /** Physics Live on the detector the code builds, for the beam the application shoots. */
+    private final SphereLive physics;
+    /** What the template gallery chose for a new project: its parameters and beam go into the C++. */
+    private TemplateGallery.Choice galleryChoice;
+    /** The gun as the code (and Physics Live's last aim) set it: put back on each new reading. */
+    private Map<String, String> codeGun = new LinkedHashMap<>();
     private final JTabbedPane editors = new JTabbedPane(JTabbedPane.TOP, JTabbedPane.SCROLL_TAB_LAYOUT);
     private final JTabbedPane rightTabs = new JTabbedPane();
     private final List<CodeTab> tabs = new ArrayList<>();
@@ -212,15 +224,18 @@ public final class G4CodeFrame extends JFrame {
 
         vp = new Viewport(model);
         vp.darkTheme = isDark();
+        physics = new SphereLive(model, vp);
+        vp.live = physics;
         volumes = new ModelTree(model);
         api = new ApiBrowser(this::insertAtCaret);
         reparse.setRepeats(false);
 
-        // Left: the project
-        left.addTab("Project", projectTree);
-        left.addTab("Volumes", volumes);
-        left.addTab("Geant4 API", api);
-        left.addTab("UI commands", uiCommandsPanel());
+        // Left: the project, in Creo's navigator as G4editor's
+        left.page("Project", Icons.tree(16), projectTree)
+            .page("Volumes", Icons.box(16, new Color(0x8AA4C8)), volumes)
+            .page("Geant4 API", Icons.geant4(16), api)
+            .page("UI commands", Icons.console(16), uiCommandsPanel());
+        left.show(0);
 
         // Middle: the code, and what is wrong with it
         problemList.setCellRenderer(new ProblemRenderer());
@@ -273,7 +288,7 @@ public final class G4CodeFrame extends JFrame {
                 reveal(Path.of(f[0]), Integer.parseInt(f[1]));
             } else if (e.getEventType() == HyperlinkEvent.EventType.ACTIVATED && e.getDescription() != null
                 && e.getDescription().startsWith("class:")) {
-                left.setSelectedComponent(api);
+                left.show("Geant4 API");
                 api.showClass(e.getDescription().substring(6));
             }
         });
@@ -332,6 +347,14 @@ public final class G4CodeFrame extends JFrame {
         });
         rightTabs.addTab("Properties", new PropertySheet(model, script));
         rightTabs.addTab("Console", new JScrollPane(console));
+        // Physics Live, as in G4editor, on the detector the code builds and the beam the application shoots; its
+        // goals turn the code's constants, its beam is written into the generator and the run macro
+        rightTabs.addTab("Physics Live", Icons.shower(14), physics.panel);
+        physics.showPanel = () -> rightTabs.setSelectedComponent(physics.panel);
+        physics.beamWriter = this::writeGun;
+        physics.levers = new CodeKnobs();
+        physics.setCheckInGeant4(null);
+        physics.panel.variablesChanged();
         final JPanel view = new JPanel(new BorderLayout());
         view.add(vp, BorderLayout.CENTER);
         view.add(askBar(), BorderLayout.SOUTH);
@@ -352,17 +375,33 @@ public final class G4CodeFrame extends JFrame {
             sp.setContinuousLayout(true);
         }
 
-        final JPanel statusBar = new JPanel(new BorderLayout(12, 0));
-        statusBar.setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 8));
-        statusBar.add(status, BorderLayout.CENTER);
-        statusBar.add(reading, BorderLayout.EAST);
-        reading.setForeground(new Color(0x7D8796));
-
+        // G4editor's frame: Creo's ribbon above, the message area below
+        final JPanel statusBar = new SphereCreo.StatusBar(status, reading);
+        setupControls();
+        menuBar = menus();
+        ribbon = ribbon();
+        dashboard = new SphereCreo.Dashboard(vp, G4EditorFrame::toolIcon);
         getContentPane().setLayout(new BorderLayout());
-        getContentPane().add(toolbar(), BorderLayout.NORTH);
+        getContentPane().add(ribbon, BorderLayout.NORTH);
         getContentPane().add(main, BorderLayout.CENTER);
         getContentPane().add(statusBar, BorderLayout.SOUTH);
+        getContentPane().setBackground(SphereCreo.palette().window());
         keys();
+        // the tool at work: its button lit, its dashboard in the ribbon (OK, Cancel), as in G4editor
+        vp.setToolListener(t -> {
+            final int i = TOOL_NAMES.indexOf(G4EditorFrame.toolName(t));
+            for (int k = 0; k < toolButtons.size(); k++) {
+                toolButtons.get(k).setSelected(k == Math.max(0, i));
+            }
+            if (t == null) {
+                ribbon.hideContext();
+            } else {
+                ribbon.showContext(t.name(), dashboard);
+            }
+            ribbon.repaint();
+        });
+        physics.setOn(SphereLive.preferred());
+        vp.physicsToggle = this::togglePhysics;
 
         vp.setStatusSink(s -> status.setText(s));
         vp.setHoverSink(in -> status.setText(Viewport.describe(model.geometry, in)));
@@ -501,55 +540,13 @@ public final class G4CodeFrame extends JFrame {
     // Toolbar and keys
     // ==================================================================
 
-    private JComponent toolbar() {
-        final JToolBar t = new JToolBar();
-        t.setFloatable(false);
-        t.add(button(Icons.file(20, "new"), "New project in C++ from a template, the detector drawn here or a GDML design"
-            + " (Ctrl+Shift+N)", this::newProject));
-        t.add(button(Icons.file(20, "open"), "Open a project folder or a file (Ctrl+O)", this::openDialog));
-        t.add(button(Icons.file(20, "save"), "Save the file (Ctrl+S); Ctrl+Shift+S saves them all", this::saveCurrent));
-        t.addSeparator();
-        t.add(text("Build", "Compile with CMake against the Geant4 found (Ctrl+B)", () -> build(false)));
-        final JButton run = text("Run", "Compile if needed, then run in batch on the open macro or run1.mac (F5)", () -> build(true));
-        run.setIcon(Icons.run(14));
-        t.add(run);
-        t.add(text("Stop", "Stop the build or the run", () -> {
-            if (Geant4AppBuilder.stop()) {
-                say("stopped");
-            }
-        }));
-        t.addSeparator();
-        final JButton insert = text("Insert", "Geant4 code to insert at the caret: volumes, loops, materials...", null);
-        insert.addActionListener(e -> snippets(insert));
-        t.add(insert);
-        t.add(text("API", "Find a Geant4 class or method (Ctrl+Shift+A); the word under the caret is searched", () -> {
-            left.setSelectedComponent(api);
-            api.focusSearch(wordAtCaret());
-        }));
-        t.addSeparator();
-        t.add(tool(Icons.select(20), "Select (Esc): a click shows the line that placed the volume", () -> null));
-        t.add(tool(Icons.move(20), "Move the selection (M): drag the gizmo, the position is rewritten in the code",
-            () -> new Tools.MoveTool(vp, false)));
-        t.add(tool(Icons.rotate(20), "Turn the selection (R): drag a ring, the rotation is rewritten in the code",
-            () -> new Tools.MoveTool(vp, true)));
-        t.addSeparator();
-        final Color c = new Color(0x8AA4C8);
-        final String into = ": written into the code, in the volume it is drawn in";
-        t.add(tool(Icons.box(20, c), "Draw a box, G4Box (B): corner, opposite corner, height" + into,
-            () -> new Tools.BoxTool(vp)));
-        t.add(tool(Icons.tube(20, c), "Draw a tube, G4Tubs (T): center, radius, length" + into, () -> new Tools.TubeTool(vp)));
-        t.add(tool(Icons.sphere(20, c), "Draw a sphere, G4Orb / G4Sphere (S): center, radius" + into,
-            () -> new Tools.SphereTool(vp)));
-        t.add(tool(Icons.cone(20, c), "Draw a cone, G4Cons (C): center, radius, height, top radius" + into,
-            () -> new Tools.ConeTool(vp)));
-        t.add(tool(Icons.torus(20, c), "Draw a torus, G4Torus: center, ring radius, tube radius" + into,
-            () -> new Tools.TorusTool(vp)));
-        t.add(tool(Icons.extrude(20, c), "Draw an extrusion, G4ExtrudedSolid (P): outline, thickness" + into,
-            () -> new Tools.PolygonTool(vp, false)));
-        t.add(tool(Icons.revolve(20, c), "Draw a revolution, G4GenericPolycone (V): (r, z) profile" + into,
-            () -> new Tools.PolygonTool(vp, true)));
+    /** The tools, by the name G4editor gives them: their buttons are kept in this order (the keys use it). */
+    private static final List<String> TOOL_NAMES = List.of("select", "move", "rotate", "box", "tube", "sphere", "cone", "torus",
+        "extrude", "revolve");
+
+    /** The material of the volumes drawn next, the live drawing and the values past the lines. */
+    private void setupControls() {
         materialBox.setEditable(true);
-        materialBox.setMaximumSize(new java.awt.Dimension(190, 28));
         for (String m : List.of("G4_Al", "G4_Si", "G4_Pb", "G4_Fe", "G4_Cu", "G4_W", "G4_AIR", "G4_Galactic", "G4_WATER",
             "G4_PLASTIC_SC_VINYLTOLUENE", "G4_PbWO4", "G4_BGO", "G4_CESIUM_IODIDE", "G4_lAr", "G4_CONCRETE",
             "G4_STAINLESS-STEEL", "G4_KAPTON")) {
@@ -570,20 +567,7 @@ public final class G4CodeFrame extends JFrame {
                 say("unknown material " + v + ": a NIST name (G4_...) or one the code defines");
             }
         });
-        t.add(materialBox);
-        t.addSeparator();
-        t.add(button(Icons.check(20), "Check overlaps finely (Geant4's CheckOverlaps with 2000 points)", () -> overlaps(2000)));
-        t.add(text("GDML", "Write the detector the code builds as a GDML file", this::exportGdml));
-        t.add(text("G4editor", "Open the detector (or the open GDML file) in G4editor", this::toG4editor));
-        t.addSeparator();
-        for (String v : new String[] {"iso", "front", "right", "top"}) {
-            t.add(button(Icons.view(20, v), "View " + v, () -> vp.setView(v, true)));
-        }
-        t.add(button(Icons.fit(20), "Fit the detector in the view", () -> vp.fitAll(true)));
-        t.addSeparator();
         live.setToolTipText("Checked: the detector is drawn again as the code is typed. Unchecked: F6 draws it");
-        live.setFocusable(false);
-        live.setOpaque(false);
         live.addActionListener(e -> {
             if (live.isSelected()) {
                 say("Live 3D on: the drawing follows the code as it is typed");
@@ -592,15 +576,247 @@ public final class G4CodeFrame extends JFrame {
                 say("Live 3D off: the drawing stays as it is; F6 draws the code again");
             }
         });
-        t.add(live);
-        t.add(text("Redraw", "Draw the detector the code builds now (F6)", this::reparse));
         values.setToolTipText("Checked: past the end of each line, what it computes (10 runs of z: -67.5 ... 67.5 mm,"
-            + " with its unit told by reading the code twice) and what it builds (sizes, materials, masses, positions)");
-        values.setFocusable(false);
-        values.setOpaque(false);
+            + " with its unit told by reading the code twice), what it builds (sizes, materials, masses, positions), and"
+            + " what the beam does there (radiation lengths crossed, share of the energy left)");
         values.addActionListener(e -> tabs.forEach(this::applyFindings));
-        t.add(values);
-        return t;
+        // the tools' toggles, not shown: the ribbon's buttons click them, the keys pick them by their order
+        final Color c = new Color(0x8AA4C8);
+        final String into = ": written into the code, in the volume it is drawn in";
+        tool(Icons.select(20), "Select (Esc): a click shows the line that placed the volume", () -> null);
+        tool(Icons.move(20), "Move the selection (M): drag the gizmo, the position is rewritten in the code",
+            () -> new Tools.MoveTool(vp, false));
+        tool(Icons.rotate(20), "Turn the selection (R): drag a ring, the rotation is rewritten in the code",
+            () -> new Tools.MoveTool(vp, true));
+        tool(Icons.box(20, c), "Draw a box, G4Box (B): corner, opposite corner, height" + into, () -> new Tools.BoxTool(vp));
+        tool(Icons.tube(20, c), "Draw a tube, G4Tubs (T): center, radius, length" + into, () -> new Tools.TubeTool(vp));
+        tool(Icons.sphere(20, c), "Draw a sphere, G4Orb / G4Sphere (S): center, radius" + into, () -> new Tools.SphereTool(vp));
+        tool(Icons.cone(20, c), "Draw a cone, G4Cons (C): center, radius, height, top radius" + into, () -> new Tools.ConeTool(vp));
+        tool(Icons.torus(20, c), "Draw a torus, G4Torus: center, ring radius, tube radius" + into, () -> new Tools.TorusTool(vp));
+        tool(Icons.extrude(20, c), "Draw an extrusion, G4ExtrudedSolid (P): outline, thickness" + into,
+            () -> new Tools.PolygonTool(vp, false));
+        tool(Icons.revolve(20, c), "Draw a revolution, G4GenericPolycone (V): (r, z) profile" + into,
+            () -> new Tools.PolygonTool(vp, true));
+    }
+
+    /** A ribbon button that picks a tool: it clicks the tool's toggle, and is lit while the tool is at work. */
+    private SphereCreo.Button toolButton(String name, SphereCreo.Size size, javax.swing.Icon icon, String label) {
+        final JToggleButton t = toolButtons.get(TOOL_NAMES.indexOf(name));
+        return new SphereCreo.Button(size, icon, label, t.getToolTipText(), t::doClick).on(t::isSelected);
+    }
+
+    private static SphereCreo.Button large(javax.swing.Icon icon, String label, String tip, Runnable r) {
+        return new SphereCreo.Button(SphereCreo.Size.LARGE, icon, label, tip, r);
+    }
+
+    private static SphereCreo.Button small(javax.swing.Icon icon, String label, String tip, Runnable r) {
+        return new SphereCreo.Button(SphereCreo.Size.SMALL, icon, label, tip, r);
+    }
+
+    /** A small button lit while an option is on: a check box of the window, clicked. */
+    private static SphereCreo.Button toggle(javax.swing.Icon icon, String label, javax.swing.JCheckBox box) {
+        return small(icon, label, box.getToolTipText(), box::doClick).on(box::isSelected);
+    }
+
+    /**
+     * G4editor's ribbon (PTC Creo's), for the code: Code (the project, writing, building), Model (the tools that
+     * draw into the code), Analysis (Physics Live, goals, overlaps, the assistant), Applications (Geant4, GDML,
+     * G4editor), View.
+     */
+    private SphereCreo.Ribbon ribbon() {
+        final SphereCreo.Ribbon r = new SphereCreo.Ribbon(() -> (project == null ? "no project" : project.getFileName()
+            + "  (Active)") + "  -  G4code");
+        r.onFile((c, box) -> fileMenu.getPopupMenu().show(c, box.x, box.y + box.height));
+        final SphereCreo.Size L = SphereCreo.Size.LARGE, S = SphereCreo.Size.SMALL, I = SphereCreo.Size.ICON;
+        final Color c = new Color(0x8AA4C8);
+
+        // Quick access, as G4editor's
+        r.quick(new SphereCreo.Button(I, Icons.file(16, "new"), "New", "New project (Ctrl+Shift+N)", this::newProject));
+        r.quick(new SphereCreo.Button(I, Icons.file(16, "open"), "Open", "Open a project folder or a file (Ctrl+O)",
+            this::openDialog));
+        r.quick(new SphereCreo.Button(I, Icons.file(16, "save"), "Save", "Save the file (Ctrl+S)", this::saveCurrent));
+        r.quick(new SphereCreo.Button(I, Icons.undo(16, false), "Undo", "Undo in the file (Ctrl+Z)", () -> {
+            if (current() != null) {
+                current().undo();
+            }
+        }));
+        r.quick(new SphereCreo.Button(I, Icons.undo(16, true), "Redo", "Redo in the file (Ctrl+Y)", () -> {
+            if (current() != null) {
+                current().redo();
+            }
+        }));
+        r.quick(new SphereCreo.Button(I, Icons.zoom(16, 0), "Find", "Find any command (Ctrl+Shift+P)",
+            () -> ActionPalette.show(this, menuBar)));
+        r.quick(new SphereCreo.Button(I, Icons.shower(16), "Physics Live", "Physics Live over the 3D view, on or off (L)",
+            this::togglePhysics).on(physics::isOn));
+
+        // Code: the project, writing, building
+        final JPanel code = r.tab("Code");
+        code.add(new SphereCreo.Group("Project")
+            .add(large(Icons.file(32, "new"), "New project", "A Geant4 application in C++ from a template, the detector"
+                + " drawn here or a GDML design (Ctrl+Shift+N)", this::newProject))
+            .add(large(Icons.file(32, "open"), "Open", "Open a project folder or a file (Ctrl+O)", this::openDialog))
+            .stack(small(Icons.file(16, "save"), "Save", "Save the file (Ctrl+S)", this::saveCurrent),
+                small(Icons.file(16, "save"), "Save all", "Save every file (Ctrl+Shift+S)", this::saveAll),
+                small(Icons.cancel(16), "Close", "Close the file (Ctrl+W)", () -> close(current()))));
+        final SphereCreo.Button[] insert = new SphereCreo.Button[1];
+        insert[0] = large(Icons.template(32), "Insert", "Geant4 code to insert at the caret: volumes, loops, materials,"
+            + " a neural network...", () -> snippets(insert[0])).menu();
+        code.add(new SphereCreo.Group("Write")
+            .add(insert[0])
+            .add(large(Icons.geant4(32), "Geant4 API", "Find a Geant4 class or method (Ctrl+Shift+A); the word under the"
+                + " caret is searched", () -> {
+                    left.show("Geant4 API");
+                    api.focusSearch(wordAtCaret());
+                }))
+            .stack(small(Icons.console(16), "Ask", "Say what to add, the C++ is written: \"10 layers of 5 mm lead\"",
+                    () -> ask.requestFocusInWindow()),
+                small(Icons.advise(16), "Assistant", "What a Geant4 expert would say of the code, with its fixes",
+                    () -> rightTabs.setSelectedComponent(assistant))));
+        // what is drawn over the 3D view and past the lines: off, the view is the detector alone while the code is typed
+        code.add(new SphereCreo.Group("Display")
+            .add(new SphereCreo.Button(L, Icons.shower(32), "Physics Live", "The beam's shower and its card over the 3D"
+                + " view, on or off (L). Narrow, the view shows the card folded into a pill; its – folds it by hand",
+                this::togglePhysics).on(physics::isOn))
+            .stack(toggle(Icons.spin(16), "Live 3D", live),
+                toggle(Icons.list(16), "Values", values),
+                small(Icons.regenerate(16), "Redraw", "Draw the detector the code builds now (F6)", this::reparse)));
+        code.add(new SphereCreo.Group("Build")
+            .add(large(Icons.code(32), "Build", "Compile with CMake against the Geant4 found (Ctrl+B)", () -> build(false)))
+            .add(large(Icons.run(32), "Run", "Compile if needed, then run in batch on the open macro or run1.mac (F5)",
+                () -> build(true)))
+            .stack(small(Icons.cancel(16), "Stop", "Stop the build or the run", () -> {
+                    if (Geant4AppBuilder.stop()) {
+                        say("stopped");
+                    }
+                }),
+                small(Icons.console(16), "Console", "What the build and the run said", () -> rightTabs.setSelectedComponent(
+                    rightTabs.getComponentAt(rightTabs.indexOfTab("Console"))))));
+
+        // Model: the tools that draw into the code, as G4editor's
+        final JPanel m = r.tab("Model");
+        m.add(new SphereCreo.Group("Operations")
+            .add(toolButton("select", L, Icons.select(32), "Select"))
+            .stack(toolButton("move", S, Icons.move(16), "Move"), toolButton("rotate", S, Icons.rotate(16), "Rotate"),
+                small(Icons.trash(16), "Delete", "Delete the selection from the code (Delete)", this::deleteSelection)));
+        m.add(new SphereCreo.Group("Shapes")
+            .add(toolButton("extrude", L, Icons.extrude(32, c), "Extrude"))
+            .add(toolButton("revolve", L, Icons.revolve(32, c), "Revolve"))
+            .stack(toolButton("box", S, Icons.box(16, c), "Box"), toolButton("tube", S, Icons.tube(16, c), "Tube"),
+                toolButton("sphere", S, Icons.sphere(16, c), "Sphere"))
+            .stack(toolButton("cone", S, Icons.cone(16, c), "Cone"), toolButton("torus", S, Icons.torus(16, c), "Torus")));
+        m.add(new SphereCreo.Group("Model Intent")
+            .stack(SphereCreo.labeled("Material", materialBox, 170),
+                small(Icons.list(16), "Properties", "The selected volume's characteristics: each change is written into"
+                    + " the code", () -> rightTabs.setSelectedIndex(rightTabs.indexOfTab("Properties"))),
+                small(Icons.tree(16), "Volumes", "The volumes the code builds, in the navigator", () -> left.show("Volumes"))));
+
+        // Analysis: physics as in G4editor, on the code
+        final JPanel a = r.tab("Analysis");
+        a.add(new SphereCreo.Group("Physics Live")
+            .add(new SphereCreo.Button(L, Icons.shower(32), "Physics Live", "What the application's beam does in the"
+                + " detector the code builds: its shower, the energy kept, where it leaks, the sampling; worked out again as"
+                + " the code is typed (L)", this::togglePhysics).on(physics::isOn))
+            .add(large(Icons.beam(32), "Beam", "The application's gun, read from its generator and run macro: a beam"
+                + " chosen in the Physics Live panel is written there", () -> {
+                    rightTabs.setSelectedComponent(physics.panel);
+                    physics.panel.energy.requestFocusInWindow();
+                }))
+            .add(large(Icons.goal(32), "Goal Seek", "The value of a constant of the code that meets a physics target (95%"
+                + " kept, 25 X0...): each value tried on a copy of the code, the answer written into it", () -> {
+                    rightTabs.setSelectedComponent(physics.panel);
+                    physics.panel.target.requestFocusInWindow();
+                    physics.panel.target.selectAll();
+                })));
+        a.add(new SphereCreo.Group("Inspect Geometry")
+            .add(large(Icons.check(32), "Check overlaps", "Geant4's CheckOverlaps with 2000 points per volume, the faults"
+                + " marked on the G4PVPlacement lines", () -> overlaps(2000)))
+            .add(large(Icons.advise(32), "Assistant", "What a Geant4 expert would say of the code and of the detector it"
+                + " builds, with the fixes", () -> rightTabs.setSelectedComponent(assistant))));
+
+        // Applications: Geant4, GDML, G4editor (the tab G4editor names so too)
+        final JPanel g = r.tab("Applications");
+        g.add(new SphereCreo.Group("Simulation")
+            .add(large(Icons.run(32), "Run in Geant4", "Compile if needed, then run in batch (F5)", () -> build(true)))
+            .stack(small(Icons.code(16), "Build", "Compile only (Ctrl+B)", () -> build(false)),
+                small(Icons.cancel(16), "Stop", "Stop the build or the run", () -> {
+                    if (Geant4AppBuilder.stop()) {
+                        say("stopped");
+                    }
+                })));
+        g.add(new SphereCreo.Group("Exchange")
+            .add(large(Icons.box(32, c), "G4editor", "Open the detector (or the open GDML file) in G4editor",
+                this::toG4editor))
+            .add(large(Icons.export(32, Icons.GREEN), "GDML", "Write the detector the code builds as a GDML file (Geant4"
+                + " and ROOT read it)", this::exportGdml)));
+
+        // View
+        final JPanel v = r.tab("View");
+        v.add(new SphereCreo.Group("Orientation")
+            .add(large(Icons.fit(32), "Refit", "Fit the detector in the view", () -> vp.fitAll(true)))
+            .stack(small(Icons.view(16, "front"), "Front", "Front view", () -> vp.setView("front", true)),
+                small(Icons.view(16, "top"), "Top", "Top view", () -> vp.setView("top", true)),
+                small(Icons.view(16, "right"), "Right", "Right view", () -> vp.setView("right", true)))
+            .stack(small(Icons.view(16, "iso"), "Standard", "Standard orientation", () -> vp.setView("iso", true)),
+                small(Icons.fit(16), "Fit selection", "Frame the selection", () -> vp.fitSelection(true))));
+        v.add(new SphereCreo.Group("Drawing")
+            .stack(toggle(Icons.spin(16), "Live 3D", live),
+                small(Icons.regenerate(16), "Redraw", "Draw the detector the code builds now (F6)", this::reparse),
+                toggle(Icons.list(16), "Values", values)));
+        r.select("Code");
+        return r;
+    }
+
+    /** The menus, not shown: the File tab's, and the command search's index (Ctrl+Shift+P). */
+    private javax.swing.JMenuBar menus() {
+        final javax.swing.JMenuBar bar = new javax.swing.JMenuBar();
+        fileMenu = new javax.swing.JMenu("File");
+        fileMenu.add(menuItem("New project...", "ctrl shift N", this::newProject));
+        fileMenu.add(menuItem("Open...", "ctrl O", this::openDialog));
+        fileMenu.add(menuItem("Save", "ctrl S", this::saveCurrent));
+        fileMenu.add(menuItem("Save all", "ctrl shift S", this::saveAll));
+        fileMenu.add(menuItem("Close the file", "ctrl W", () -> close(current())));
+        fileMenu.addSeparator();
+        fileMenu.add(menuItem("Write the detector as GDML...", null, this::exportGdml));
+        fileMenu.add(menuItem("Open the detector in G4editor", null, this::toG4editor));
+        bar.add(fileMenu);
+        final javax.swing.JMenu code = new javax.swing.JMenu("Code");
+        code.add(menuItem("Build", "ctrl B", () -> build(false)));
+        code.add(menuItem("Run", "F5", () -> build(true)));
+        code.add(menuItem("Stop", null, () -> Geant4AppBuilder.stop()));
+        code.add(menuItem("Geant4 API...", "ctrl shift A", () -> {
+            left.show("Geant4 API");
+            api.focusSearch(wordAtCaret());
+        }));
+        code.add(menuItem("Draw the detector again", "F6", this::reparse));
+        code.add(menuItem("Values past the lines", null, values::doClick));
+        code.add(menuItem("Live 3D", null, live::doClick));
+        bar.add(code);
+        final javax.swing.JMenu analysis = new javax.swing.JMenu("Analysis");
+        analysis.add(menuItem("Physics Live on the drawing (L)", null, this::togglePhysics));
+        analysis.add(menuItem("Goal seek...", null, () -> {
+            rightTabs.setSelectedComponent(physics.panel);
+            physics.panel.target.requestFocusInWindow();
+        }));
+        analysis.add(menuItem("Check overlaps", null, () -> overlaps(2000)));
+        analysis.add(menuItem("Assistant", null, () -> rightTabs.setSelectedComponent(assistant)));
+        bar.add(analysis);
+        final javax.swing.JMenu view = new javax.swing.JMenu("View");
+        for (String s : new String[] {"iso", "front", "top", "right"}) {
+            view.add(menuItem("View " + s, null, () -> vp.setView(s, true)));
+        }
+        view.add(menuItem("Fit", null, () -> vp.fitAll(true)));
+        bar.add(view);
+        return bar;
+    }
+
+    /** Physics Live on and off, as in G4editor (the choice is the same for both). */
+    private void togglePhysics() {
+        physics.setOn(!physics.isOn());
+        SphereLive.prefer(physics.isOn());
+        status.setText(physics.isOn() ? "Physics Live: " + physics.report().beam().describe() + ", the application's beam"
+            : "Physics Live off");
+        ribbon.repaint();
     }
 
     /**
@@ -733,6 +949,10 @@ public final class G4CodeFrame extends JFrame {
             deleteSelection();
             return true;
         }
+        if (e.getKeyCode() == KeyEvent.VK_L) {
+            togglePhysics();
+            return true;
+        }
         final int i = switch (e.getKeyCode()) {
             case KeyEvent.VK_ESCAPE -> 0;
             case KeyEvent.VK_M -> 1;
@@ -778,11 +998,13 @@ public final class G4CodeFrame extends JFrame {
         bind(KeyStroke.getKeyStroke(KeyEvent.VK_B, InputEvent.CTRL_DOWN_MASK), () -> build(false));
         bind(KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0), () -> build(true));
         bind(KeyStroke.getKeyStroke(KeyEvent.VK_A, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), () -> {
-            left.setSelectedComponent(api);
+            left.show("Geant4 API");
             api.focusSearch(wordAtCaret());
         });
         bind(KeyStroke.getKeyStroke(KeyEvent.VK_W, InputEvent.CTRL_DOWN_MASK), () -> close(current()));
         bind(KeyStroke.getKeyStroke(KeyEvent.VK_F6, 0), this::reparse);
+        bind(KeyStroke.getKeyStroke(KeyEvent.VK_P, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK),
+            () -> ActionPalette.show(this, menuBar));
     }
 
     private void bind(KeyStroke ks, Runnable r) {
@@ -849,7 +1071,7 @@ public final class G4CodeFrame extends JFrame {
         }
 
         public void showPalette(String prefix) {
-            left.setSelectedComponent(api);
+            left.show("Geant4 API");
             api.focusSearch(prefix);
         }
 
@@ -1270,6 +1492,8 @@ public final class G4CodeFrame extends JFrame {
         adopting = true;
         try {
             model.adopt(null, new GeometryFiles.Loaded(r.geometry(), GeometryFiles.Format.GDML, List.of(), List.of()), "");
+            // the application's gun (and Physics Live's aim), which a reading of the detector does not hold
+            model.geometry.settings().putAll(codeGun);
             final List<PhysicalVolume> again = new ArrayList<>();
             for (PhysicalVolume pv : model.geometry.placements()) {
                 if (selected.contains(key(pv))) {
@@ -1334,12 +1558,14 @@ public final class G4CodeFrame extends JFrame {
             List<CodeAdvisor.Finding> code = List.of();
             List<com.sphere.core.geant4.Advisor.Advice> design = List.of();
             Map<Path, Map<Integer, String>> lines = Map.of();
+            Map<String, String> gunRead = Map.of();
             String note = "";
             try {
                 code = CodeAdvisor.review(r, texts);
                 if (r.geometry().world() != null && gen == generation.get()) {
                     final Map<String, String> gun = CodeAdvisor.gun(texts, base);
                     r.geometry().settings().putAll(gun);
+                    gunRead = gun;
                     design = new ArrayList<>();
                     for (com.sphere.core.geant4.Advisor.Advice a : com.sphere.core.geant4.Advisor.review(r.geometry())) {
                         // the code's own findings say it of the code, with its fix; the reading's notes, the model's faults
@@ -1362,6 +1588,9 @@ public final class G4CodeFrame extends JFrame {
                 final Map<CppGeometry.Computed, Dimensions.Dim> dims = r.micros() < 300_000 && !sources.isEmpty()
                     && gen == generation.get() ? CppGeometry.dimensions(r, sources, base) : Map.of();
                 lines = inlays(r, dims);
+                if (r.geometry().world() != null && gen == generation.get()) {
+                    lines = mergeInlays(lines, physicsInlays(r));
+                }
             } catch (RuntimeException e) {
                 note = "The assistant stopped on an internal fault: " + e;
             }
@@ -1369,8 +1598,15 @@ public final class G4CodeFrame extends JFrame {
             final List<com.sphere.core.geant4.Advisor.Advice> d = design;
             final Map<Path, Map<Integer, String>> l = lines;
             final String n = note;
+            final Map<String, String> gunNow = gunRead;
             SwingUtilities.invokeLater(() -> {
                 if (gen == generation.get()) {
+                    if (!gunNow.isEmpty()) {
+                        // the code's particle and energy; Physics Live's aim kept
+                        codeGun.putAll(gunNow);
+                        model.geometry.settings().putAll(codeGun);
+                        physics.refresh();
+                    }
                     shownInsight(c, d, l, n);
                 }
             });
@@ -1390,6 +1626,168 @@ public final class G4CodeFrame extends JFrame {
         }
         inlays = lines;
         publishFindings();
+    }
+
+    // ==================================================================
+    // Physics Live on the code: the application's beam, goals on its constants, the beam's values on its lines
+    // ==================================================================
+
+    /**
+     * A beam chosen in Physics Live, written where the application takes its gun from: the generator's particle and
+     * energy, the run macro's /gun/ lines (a run obeys them last). An aim alone stays Physics Live's: the code's
+     * direction and position are the application's business.
+     */
+    private void writeGun(com.sphere.core.geant4.BeamPhysics.Beam b) {
+        final com.sphere.core.geant4.BeamPhysics.Beam was = com.sphere.core.geant4.BeamPhysics.Beam.of(model.geometry);
+        b.store(model.geometry);
+        for (String k : List.of("gun.particle", "gun.energy", "gun.position", "gun.direction")) {
+            final String v = model.geometry.settings().get(k);
+            if (v != null) {
+                codeGun.put(k, v);
+            }
+        }
+        if (was.particle() == b.particle() && Math.abs(was.energy() - b.energy()) <= 1e-9 * Math.max(1, b.energy())) {
+            status.setText("Physics Live aims " + b.describe() + "; the application's gun keeps its own direction");
+            return;
+        }
+        if (project == null) {
+            status.setText("No application open: the beam is Physics Live's alone");
+            return;
+        }
+        final Map<Path, String> texts = new LinkedHashMap<>();
+        for (CppGeometry.Source s : sources()) {
+            texts.put(s.path(), s.text());
+        }
+        final List<CodeAdvisor.Edit> edits = CodeAdvisor.gunEdits(texts, project, b.particle().g4Name, b.energy());
+        if (edits.isEmpty()) {
+            status.setText("The application takes its particle and energy from variables or a messenger: Physics Live"
+                + " shows " + b.describe() + ", the code keeps its own");
+            return;
+        }
+        applyEdits("beam " + b.particle().g4Name + " " + Units.best(b.energy(), Units.Category.ENERGY), edits);
+    }
+
+    /** G4code's goals: the code's constants, each value tried on a copy of the sources, the answer written into them. */
+    private final class CodeKnobs implements SphereLive.Levers {
+        private List<com.sphere.core.geant4.CodeLevers.Constant> constants() {
+            return last == null || project == null || readSources.isEmpty() ? List.of()
+                : com.sphere.core.geant4.CodeLevers.find(last, readSources);
+        }
+
+        public List<String> names() {
+            final List<String> out = new ArrayList<>();
+            for (com.sphere.core.geant4.CodeLevers.Constant c : constants()) {
+                out.add(c.name());
+            }
+            return out;
+        }
+
+        public SphereLive.Search prepare(com.sphere.core.geant4.BeamPhysics.Beam beam) {
+            final List<CppGeometry.Source> src = List.copyOf(readSources);
+            final List<com.sphere.core.geant4.CodeLevers.Constant> cs = constants();
+            final Map<String, String> gun = new LinkedHashMap<>(codeGun);
+            final Path base = project;
+            return new SphereLive.Search() {
+                public List<com.sphere.core.geant4.GoalSeek.Lever> rank(com.sphere.core.geant4.GoalSeek.Metric m) {
+                    return com.sphere.core.geant4.CodeLevers.rank(cs, src, base, gun, m);
+                }
+
+                public com.sphere.core.geant4.GoalSeek.Result solve(com.sphere.core.geant4.GoalSeek.Goal goal, String name)
+                    throws com.sphere.core.geant4.GeometryException {
+                    for (com.sphere.core.geant4.CodeLevers.Constant c : cs) {
+                        if (c.name().equals(name)) {
+                            return com.sphere.core.geant4.GoalSeek.solve(com.sphere.core.geant4.CodeLevers.knob(c, src, base,
+                                gun, goal.metric()), goal, beam);
+                        }
+                    }
+                    throw new com.sphere.core.geant4.GeometryException("no constant " + name + " in the code read");
+                }
+            };
+        }
+
+        public String apply(com.sphere.core.geant4.GoalSeek.Result r) {
+            for (com.sphere.core.geant4.CodeLevers.Constant c : constants()) {
+                if (c.name().equals(r.variable())) {
+                    return applyEdits("goal " + r.goal().describe(), List.of(c.edit(r.after())))
+                        ? "Written into the code: " + c.name() + " = " + r.after() + " (" + c.file().getFileName() + ":"
+                        + c.line() + "); Ctrl+Z in the editor takes it back"
+                        : "The code changed since it was read: F6 reads it again, then seek again";
+                }
+            }
+            return "The constant " + r.variable() + " is no longer in the code";
+        }
+
+        public String empty() {
+            return "no constant of the code moves it: give the sizes names set once (G4double absoThickness = 10.*mm;)";
+        }
+    }
+
+    /**
+     * What the beam does, past the lines that make the volumes it crosses: the radiation lengths crossed there and
+     * the share of its energy left; past the line making the world, what the whole detector keeps of it.
+     */
+    static Map<Path, Map<Integer, String>> physicsInlays(CppGeometry.Result r) {
+        final Map<Path, Map<Integer, String>> out = new LinkedHashMap<>();
+        final Geometry g = r.geometry();
+        if (g == null || g.world() == null) {
+            return out;
+        }
+        final com.sphere.core.geant4.BeamPhysics.Report rep = com.sphere.core.geant4.BeamPhysics.analyze(g,
+            com.sphere.core.geant4.BeamPhysics.Beam.of(g));
+        if (!rep.hit()) {
+            return out;
+        }
+        final String who = rep.beam().particle().symbol() + " " + Units.best(rep.beam().energy(), Units.Category.ENERGY);
+        final Map<String, double[]> by = new LinkedHashMap<>();
+        for (com.sphere.core.geant4.BeamPhysics.Layer l : rep.layers()) {
+            if (l.dense()) {
+                final double[] v = by.computeIfAbsent(l.volume(), k -> new double[3]);
+                v[0]++;
+                v[1] += l.x0();
+                v[2] += l.edep();
+            }
+        }
+        for (Map.Entry<String, double[]> e : by.entrySet()) {
+            final LogicalVolume lv = g.volume(e.getKey());
+            final CppGeometry.Origin o = lv == null ? null : r.origin(lv);
+            if (o == null || o.file() == null) {
+                continue;
+            }
+            final double[] v = e.getValue();
+            final String crossed = v[0] > 1 ? String.format(Locale.ROOT, "%d × %.3g X₀", (int) v[0], v[1] / v[0])
+                : String.format(Locale.ROOT, "%.3g X₀", v[1]);
+            final String left = v[2] >= 0.0005 ? String.format(Locale.ROOT, ", %.1f %% of the %s left here", 100 * v[2], who)
+                : "";
+            physicsInlay(out, o.file(), o.lastLine(), "beam: " + crossed + left);
+        }
+        final CppGeometry.Origin w = r.origin(g.world());
+        if (w != null && w.file() != null) {
+            final String kept = rep.shower() != null ? String.format(Locale.ROOT, "keeps %.1f %% of the %s", 100
+                * rep.contained(), who) : rep.hadronic() != null ? String.format(Locale.ROOT, "keeps about %.0f %% of the %s"
+                + " shower", 100 * rep.contained(), who) : rep.muon() != null ? "a " + who + " loses " + Units.best(
+                rep.muon().loss(), Units.Category.ENERGY) : who;
+            physicsInlay(out, w.file(), w.lastLine(), String.format(Locale.ROOT, "beam: the detector %s (%.1f X₀, %.2f"
+                + " λI)", kept, rep.x0(), rep.lambda()));
+        }
+        return out;
+    }
+
+    private static void physicsInlay(Map<Path, Map<Integer, String>> out, Path file, int line, String text) {
+        out.computeIfAbsent(file.toAbsolutePath().normalize(), k -> new LinkedHashMap<>()).merge(line, text,
+            (a, b) -> a + "  ·  " + b);
+    }
+
+    /** The beam's values first on a line, the computed values after them. */
+    static Map<Path, Map<Integer, String>> mergeInlays(Map<Path, Map<Integer, String>> values,
+                                                       Map<Path, Map<Integer, String>> beam) {
+        final Map<Path, Map<Integer, String>> out = new LinkedHashMap<>();
+        values.forEach((f, lines) -> out.put(f, new LinkedHashMap<>(lines)));
+        beam.forEach((f, lines) -> lines.forEach((line, text) -> out.computeIfAbsent(f, k -> new LinkedHashMap<>())
+            .merge(line, text, (old, b) -> {
+                final String s = b + "  ·  " + old;
+                return s.length() > 160 ? s.substring(0, 157) + "..." : s;
+            })));
+        return out;
     }
 
     /** The assistant's window: where its cards go, what their buttons do. */
@@ -1822,7 +2220,7 @@ public final class G4CodeFrame extends JFrame {
                 m.add(showLv);
                 if (plv.solid() != null) {
                     m.add(menuItem("Geant4 API: " + plv.solid().g4Class(), null, () -> {
-                        left.setSelectedComponent(api);
+                        left.show("Geant4 API");
                         api.showClass(plv.solid().g4Class());
                     }));
                 }
@@ -2916,6 +3314,30 @@ public final class G4CodeFrame extends JFrame {
     }
 
     /** The open G4code window, if any. */
+    // what the other windows (and the tests) see of this one
+    Viewport viewport() {
+        return vp;
+    }
+
+    SphereLive physics() {
+        return physics;
+    }
+
+    SphereCreo.Ribbon ribbonBar() {
+        return ribbon;
+    }
+
+    /** What is shown past the end of each line, by file. */
+    Map<Path, Map<Integer, String>> lineValues() {
+        return inlays;
+    }
+
+    /** The text of a file's editor, or null when it is not open. */
+    String editorText(Path p) {
+        final CodeTab t = tabOf(p);
+        return t == null ? null : t.getEditorArea().getText();
+    }
+
     static G4CodeFrame window() {
         return shared != null && shared.isDisplayable() ? shared : null;
     }
@@ -3663,7 +4085,21 @@ public final class G4CodeFrame extends JFrame {
         c.gridx = 1;
         c.gridwidth = 2;
         c.weightx = 1;
-        form.add(what, c);
+        // the template gallery, G4editor's: each template drawn in 3D with its beam, its parameters set there
+        final JPanel from = new JPanel(new BorderLayout(6, 0));
+        from.add(what, BorderLayout.CENTER);
+        final JButton gallery = new JButton("Gallery...");
+        gallery.setToolTipText("Every template drawn in 3D with the beam it is made for: search them, set their parameters,"
+            + " see their physics; the C++ is written with them");
+        gallery.addActionListener(e -> {
+            final TemplateGallery.Choice ch = TemplateGallery.choose(this, "Use this template", isDark());
+            if (ch != null) {
+                galleryChoice = ch;
+                what.setSelectedItem("Template: " + ch.kind());
+            }
+        });
+        from.add(gallery, BorderLayout.EAST);
+        form.add(from, c);
         c.gridx = 0;
         c.gridy = 3;
         c.gridwidth = 3;
@@ -3710,7 +4146,14 @@ public final class G4CodeFrame extends JFrame {
         final Geometry g = Geometry.blank();
         try {
             if (choice.startsWith("Template: ")) {
-                Templates.build(g, choice.substring(10), Map.of(), "mm");
+                // the parameters and the beam the gallery set, when it chose this template
+                final String kind = choice.substring(10);
+                final TemplateGallery.Choice gc = galleryChoice != null && galleryChoice.kind().equals(kind) ? galleryChoice
+                    : null;
+                Templates.build(g, kind, gc == null ? Map.of() : gc.params(), "mm");
+                if (gc != null) {
+                    g.settings().putAll(gc.gun());
+                }
                 g.rebuild();
             } else if (choice.startsWith("From a GDML")) {
                 final JFileChooser c = chooser();

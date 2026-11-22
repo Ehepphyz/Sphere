@@ -31,13 +31,20 @@ public class SettingsManager {
     // LOADING / SAVING
     // -------------------------------------------------------------------------
 
+    /** The values as they were read, section by section: what this instance changed is told from them at saving. */
+    private Map<String, List<Map.Entry<String, String>>> loaded = new LinkedHashMap<>();
+
     public synchronized void loadSettings() {
         File file = new File(CONFIG_FILENAME);
         if (!file.exists()) return;
+        parse(file);
+        reportDuplicates();
+    }
 
+    private void parse(File file) {
         sections.clear();
         rawLines.clear();
-        
+
         // Root tracking initialization: Avoid hardcoded magic section strings.
         // Unmapped keys at the top of the file automatically stream to a "GLOBAL" scope.
         String currentSection = null;
@@ -71,7 +78,86 @@ public class SettingsManager {
         } catch (IOException e) {
             com.sphere.utils.AppLogger.error("Critical Error: Unable to read " + CONFIG_FILENAME);
         }
-        reportDuplicates();
+        loaded = copyOf(sections);
+    }
+
+    private static Map<String, List<Map.Entry<String, String>>> copyOf(Map<String, List<Map.Entry<String, String>>> from) {
+        Map<String, List<Map.Entry<String, String>>> out = new LinkedHashMap<>();
+        for (var e : from.entrySet()) {
+            List<Map.Entry<String, String>> rows = new ArrayList<>();
+            for (var kv : e.getValue()) {
+                rows.add(new AbstractMap.SimpleEntry<>(kv.getKey(), kv.getValue()));
+            }
+            out.put(e.getKey(), rows);
+        }
+        return out;
+    }
+
+    /** section -> key -> its values in order (a key such as PATH repeats). */
+    private static Map<String, Map<String, List<String>>> valuesOf(Map<String, List<Map.Entry<String, String>>> from) {
+        Map<String, Map<String, List<String>>> out = new LinkedHashMap<>();
+        for (var e : from.entrySet()) {
+            Map<String, List<String>> keys = out.computeIfAbsent(e.getKey(), k -> new LinkedHashMap<>());
+            for (var kv : e.getValue()) {
+                keys.computeIfAbsent(kv.getKey(), k -> new ArrayList<>()).add(kv.getValue());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The file changed on disk since this instance read it -- the user editing it while Sphere runs, the network's
+     * cortex writing [SNN], another part of Sphere saving a setting: the file as it is now becomes the base, and only
+     * what this instance changed is applied on top of it. A save never takes back what someone else wrote meanwhile.
+     */
+    private void rebaseOnDisk() {
+        File file = new File(CONFIG_FILENAME);
+        if (!file.exists() || rawLines.isEmpty()) {
+            return;
+        }
+        List<String> disk;
+        try {
+            disk = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+        } catch (IOException | UncheckedIOException e) {
+            return;
+        }
+        if (disk.equals(rawLines)) {
+            return;
+        }
+        Map<String, Map<String, List<String>>> mine = valuesOf(sections), was = valuesOf(loaded);
+        Map<String, Map<String, List<String>>> changed = new LinkedHashMap<>();
+        Set<String> names = new LinkedHashSet<>(mine.keySet());
+        names.addAll(was.keySet());
+        for (String section : names) {
+            Map<String, List<String>> now = mine.getOrDefault(section, Map.of()), before = was.getOrDefault(section, Map.of());
+            Set<String> keys = new LinkedHashSet<>(now.keySet());
+            keys.addAll(before.keySet());
+            for (String key : keys) {
+                if (!Objects.equals(now.get(key), before.get(key))) {
+                    changed.computeIfAbsent(section, k -> new LinkedHashMap<>()).put(key, now.get(key));
+                }
+            }
+        }
+        parse(file);
+        for (var s : changed.entrySet()) {
+            List<Map.Entry<String, String>> rows = sections.computeIfAbsent(s.getKey(), k -> new ArrayList<>());
+            for (var k : s.getValue().entrySet()) {
+                int at = -1;
+                for (int i = rows.size() - 1; i >= 0; i--) {
+                    if (rows.get(i).getKey().equals(k.getKey())) {
+                        rows.remove(i);
+                        at = i;
+                    }
+                }
+                if (k.getValue() == null) {
+                    continue;               // this instance removed it
+                }
+                int pos = at < 0 ? rows.size() : at;
+                for (String v : k.getValue()) {
+                    rows.add(pos++, new AbstractMap.SimpleEntry<>(k.getKey(), v));
+                }
+            }
+        }
     }
 
     /**
@@ -86,6 +172,7 @@ public class SettingsManager {
      * whole version or the other.
      */
     public synchronized void saveSettings() {
+        rebaseOnDisk();
         List<String> out = rawLines.isEmpty() ? renderFromScratch() : merge();
         final Path target = new File(CONFIG_FILENAME).toPath().toAbsolutePath();
         final Path folder = target.getParent() == null ? Path.of(".") : target.getParent();
@@ -124,6 +211,7 @@ public class SettingsManager {
         }
         rawLines.clear();
         rawLines.addAll(out);
+        loaded = copyOf(sections);
     }
 
     /** Used only when there is no file yet: everything comes from the parsed map. */

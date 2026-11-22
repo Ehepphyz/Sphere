@@ -61,7 +61,11 @@ public final class Bridge {
         // one differentiable computation across PyTorch, TensorFlow and JAX
         "sphere_xgrad.py",
         // TensorFlow, PyTorch and pyhf for every program: the gateway and a client in each language
-        "sphere_mlink.py", "sphere_mlink.hpp", "sphere_mlink.f90", "SphereMLink.jl");
+        "sphere_mlink.py", "sphere_mlink.hpp", "sphere_mlink.f90", "SphereMLink.jl",
+        // the Sphere Neural Network: the cortex (every module found, chosen together, checked, learned from), its synapses
+        // in C++ and Julia, and the import finder Sphere's sitecustomize gives the Pythons Sphere starts (ROOT importable
+        // where it is, served from WSL where it is not) -- with no file written in any Python of the machine
+        "sphere_snn.py", "sphere_snn.hpp", "SphereSNN.jl", "sphere_snn_hook.py", "sitecustomize.py");
 
     private static volatile boolean materialized;
 
@@ -134,6 +138,7 @@ public final class Bridge {
             env.put("SPHERE_PLOTS", com.sphere.components.rootview.RootPlotsPanel.plotsFolder().toString());
             env.putIfAbsent("MPLBACKEND", "module://sphere_mpl");
             com.sphere.core.ml.MlLink.environment(env);
+            com.sphere.core.snn.Snn.environment(env);
             BridgeOutbox.start();
         } catch (IOException | RuntimeException unavailable) {
             // An engine without the bridge still runs; it only cannot see the others.
@@ -149,6 +154,7 @@ public final class Bridge {
         try {
             libraries(env);
             com.sphere.core.ml.MlLink.environment(env);
+            com.sphere.core.snn.Snn.environment(env);
         } catch (IOException | RuntimeException unavailable) {
             AppLogger.warn("Bridge not available to this shell: " + unavailable.getMessage());
         }

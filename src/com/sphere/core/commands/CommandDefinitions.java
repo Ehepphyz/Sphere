@@ -270,6 +270,66 @@ public class CommandDefinitions {
         register(":root pipeline watch", "Call a pipeline and print every value its code named. Usage: :root pipeline watch <name> [args...]", RootEngineCommands::rootPipelineWatch);
         register(":root pipeline check", "Sweep the inputs and count the answers that are not a number. Usage: :root pipeline check <name> [low] [high]", RootEngineCommands::rootPipelineCheck);
         register(":root pipeline scan", "Walk one input across a range and print the curve. Usage: :root pipeline scan <name> [input] [low] [high] [others-at]", RootEngineCommands::rootPipelineScan);
+        // --- the pipeline laboratory: review, repair, corner cases, sensitivity,
+        // --- uncertainty, equivalence, fast-math, statelessness, audit, formulas, TF bridge
+        register(":root pipeline lint", "Review the source for the classic physics-code mistakes and grade it. Usage: :root pipeline lint <name>", RootPipelineLabCommands::lint);
+        register(":root pipeline fix", "Apply the safe mechanical repairs (atan2, std::abs, folded delta phi, 1.0/2, x*x), history kept. Usage: :root pipeline fix <name> [--dry]", RootPipelineLabCommands::fix);
+        register(":root pipeline fuzz", "Every corner value of every input (0, -0, tiny, huge, NaN, inf), crashes caught with their input. Usage: :root pipeline fuzz <name>", RootPipelineLabCommands::fuzz);
+        register(":root pipeline domain", "Where each input gives a number and where it does not. Usage: :root pipeline domain <name> [low] [high] [others-at]", RootPipelineLabCommands::domain);
+        register(":root pipeline state", "Check that a pipeline keeps no state (the thread-safe claim). Usage: :root pipeline state <name>", RootPipelineLabCommands::state);
+        register(":root pipeline grad", "Derivatives, curvature and elasticity of each input at a point, ranked. Usage: :root pipeline grad <name> [x1 x2 ...]", RootPipelineLabCommands::grad);
+        register(":root pipeline propagate", "Errors in, error out: Monte Carlo against linear propagation, with the error budget. Usage: :root pipeline propagate <name> <v1+-s1> ... [n=200000]", RootPipelineLabCommands::propagate);
+        register(":root pipeline diff", "Compare two pipelines bit by bit on the same inputs (ulps, worst cases). Usage: :root pipeline diff <a> <b> [low] [high] [samples]", RootPipelineLabCommands::diff);
+        register(":root pipeline fastmath", "Is -ffast-math / -march=native safe here? Strict IEEE against each, in ulps. Usage: :root pipeline fastmath <name> [low] [high]", RootPipelineLabCommands::fastmath);
+        register(":root pipeline audit", "Review, corner cases, statelessness and domain, then one grade. Usage: :root pipeline audit <name>", RootPipelineLabCommands::audit);
+        register(":root pipeline formula", "Write, build and load a pipeline from one line of math. Usage: :root pipeline formula <name> <expression> [--force]", RootPipelineLabCommands::formula);
+        register(":root pipeline tf", "Make a loaded pipeline a TF1/TF2/TF3, other inputs as fit parameters. Usage: :root pipeline tf <name> [vars=a,b] [range=lo:hi,...] [at=v,...] [as=fname]", RootPipelineLabCommands::tf);
+        // --- ROOT's function classes beyond TF1, and their neighbors
+        register(":root tf list", "Every function ROOT holds, with class, dimension and parameters", RootFunctionCommands::tfList);
+        register(":root tf info", "One function in full: class, ranges, parameters, chi2. Usage: :root tf info <name>", RootFunctionCommands::tfInfo);
+        register(":root tf eval", "Evaluate any TF1/TF2/TF3/TF12. Usage: :root tf eval <name> <x> [y] [z]", RootFunctionCommands::tfEval);
+        register(":root tf gradpar", "Gradient with respect to the parameters at a point. Usage: :root tf gradpar <name> <x> [y] [z]", RootFunctionCommands::tfGradient);
+        register(":root tf save", "Write a function to a .root file or as a .C macro. Usage: :root tf save <name> <file>", RootFunctionCommands::tfSave);
+        register(":root tf2 new", "Create a TF2. Usage: :root tf2 new <name> <formula> [xmin xmax ymin ymax]", RootFunctionCommands::tf2New);
+        register(":root tf2 eval", "f(x, y). Usage: :root tf2 eval <name> <x> <y>", RootFunctionCommands::tf2Eval);
+        register(":root tf2 integral", "Double integral, over the range or a box. Usage: :root tf2 integral <name> [ax bx ay by] [epsrel]", RootFunctionCommands::tf2Integral);
+        register(":root tf2 min", "Minimum of a TF2 and where. Usage: :root tf2 min <name>", RootFunctionCommands::tf2Min);
+        register(":root tf2 max", "Maximum of a TF2 and where. Usage: :root tf2 max <name>", RootFunctionCommands::tf2Max);
+        register(":root tf2 stats", "A TF2 as a density: means, sigmas, covariance, correlation. Usage: :root tf2 stats <name>", RootFunctionCommands::tf2Stats);
+        register(":root tf2 random", "Draw (x, y) pairs from a TF2. Usage: :root tf2 random <name> [n]", RootFunctionCommands::tf2Random);
+        register(":root tf2 hist", "A TH2D from a TF2, sampled or tabulated. Usage: :root tf2 hist <name> <hist> [entries|0] [nx] [ny]", RootFunctionCommands::tf2Hist);
+        register(":root tf2 npx", "Sampling of a TF2 for drawing and random draws. Usage: :root tf2 npx <name> <nx> <ny>", RootFunctionCommands::tf2Npx);
+        register(":root tf2 draw", "Draw a TF2. Usage: :root tf2 draw <name> [colz|surf1|cont1|lego2]", RootFunctionCommands::tf2Draw);
+        register(":root tf3 new", "Create a TF3. Usage: :root tf3 new <name> <formula> [xmin xmax ymin ymax zmin zmax]", RootFunctionCommands::tf3New);
+        register(":root tf3 eval", "f(x, y, z). Usage: :root tf3 eval <name> <x> <y> <z>", RootFunctionCommands::tf3Eval);
+        register(":root tf3 integral", "Triple integral, over the range or a box. Usage: :root tf3 integral <name> [ax bx ay by az bz] [epsrel]", RootFunctionCommands::tf3Integral);
+        register(":root tf3 min", "Minimum of a TF3 and where. Usage: :root tf3 min <name>", RootFunctionCommands::tf3Min);
+        register(":root tf3 random", "Draw (x, y, z) from a TF3. Usage: :root tf3 random <name> [n]", RootFunctionCommands::tf3Random);
+        register(":root tf3 draw", "Draw a TF3. Usage: :root tf3 draw <name> [option]", RootFunctionCommands::tf3Draw);
+        register(":root tf12 new", "A TF2 seen along x (or y) at a fixed other value. Usage: :root tf12 new <name> <tf2> <value> [x|y]", RootFunctionCommands::tf12New);
+        register(":root tf12 set", "Move the fixed value of a TF12. Usage: :root tf12 set <name> <value>", RootFunctionCommands::tf12Set);
+        register(":root tf12 eval", "Evaluate a TF12. Usage: :root tf12 eval <name> <t>", RootFunctionCommands::tf12Eval);
+        register(":root tf12 integral", "Integral of a TF12. Usage: :root tf12 integral <name> [a b]", RootFunctionCommands::tf12Integral);
+        register(":root tf12 draw", "Draw a TF12. Usage: :root tf12 draw <name> [option]", RootFunctionCommands::tf12Draw);
+        register(":root tf12 slices", "Cut a TF2 into slices: integral, peak and peak position of each. Usage: :root tf12 slices <tf2> [x|y] [n]", RootFunctionCommands::tf12Slices);
+        register(":root tfconv new", "TF1Convolution: a shape folded with a resolution, ready to fit. Usage: :root tfconv new <name> <f1> <f2> <xmin> <xmax> [nofft] [points]", RootFunctionCommands::tfConvNew);
+        register(":root tfnormsum new", "TF1NormSum: normalized shapes with yields as parameters. Usage: :root tfnormsum new <name> <f1>[:yield] <f2>[:yield] ...", RootFunctionCommands::tfNormSumNew);
+        register(":root cutg new", "A graphical cut (TCutG) in two tree variables. Usage: :root cutg new <name> <varx> <vary> x1 y1 x2 y2 x3 y3 ...", RootFunctionCommands::cutgNew);
+        register(":root cutg inside", "Is a point inside a TCutG. Usage: :root cutg inside <name> <x> <y>", RootFunctionCommands::cutgInside);
+        register(":root cutg area", "Area and centroid of a TCutG. Usage: :root cutg area <name>", RootFunctionCommands::cutgArea);
+        register(":root cutg count", "Entries of a tree inside a TCutG. Usage: :root cutg count <tree> <cutg> [extra selection]", RootFunctionCommands::cutgCount);
+        register(":root cutg draw", "Draw a TCutG over the current pad. Usage: :root cutg draw <name>", RootFunctionCommands::cutgDraw);
+        register(":root gae divide", "Efficiency pass/total with asymmetric intervals (cp, wilson, b(1,1) mode...). Usage: :root gae divide <name> <pass> <total> [option]", RootFunctionCommands::gaeDivide);
+        register(":root gae new", "A TGraphAsymmErrors. Usage: :root gae new <name> <points>", RootFunctionCommands::gaeNew);
+        register(":root gae set", "Set a point and its four errors. Usage: :root gae set <name> <i> <x> <y> <exl> <exh> <eyl> <eyh>", RootFunctionCommands::gaeSet);
+        register(":root gae print", "The points and their asymmetric errors. Usage: :root gae print <name>", RootFunctionCommands::gaePrint);
+        register(":root gae draw", "Draw a TGraphAsymmErrors. Usage: :root gae draw <name> [option]", RootFunctionCommands::gaeDraw);
+        register(":root graph smooth", "TGraphSmooth: kernel, LOWESS or super smoother. Usage: :root graph smooth <graph> <new> <kern|lowess|supsmu> [param]", RootFunctionCommands::graphSmooth);
+        register(":root poly new", "A TH2Poly, empty or honeycomb. Usage: :root poly new <name> <xmin> <xmax> <ymin> <ymax> [cell-size]", RootFunctionCommands::polyNew);
+        register(":root poly bin", "Add a polygon bin. Usage: :root poly bin <name> x1 y1 x2 y2 x3 y3 ...", RootFunctionCommands::polyBin);
+        register(":root poly fill", "Fill a TH2Poly. Usage: :root poly fill <name> <x> <y> [weight]", RootFunctionCommands::polyFill);
+        register(":root hist fitslices", "FitSlicesY of a TH2: mean and width per x slice (resolution curves). Usage: :root hist fitslices <th2> [function] [min-entries]", RootFunctionCommands::histFitSlices);
+        register(":root minimize", "Minimize any formula of x, y, z, t with Minuit2 (errors from Hesse). Usage: :root minimize <formula> [start=v1,v2] [algo=Minuit2|Migrad|Simplex|GSLMultiMin|Genetic]", RootFunctionCommands::minimize);
         register(":root pdf open", "Open a parton distribution set from its folder. Usage: :root pdf open <name> <folder> [--all] [--weighted]", RootPdfCommands::rootPdfOpen);
         register(":root pdf list", "The sets open right now, and what each one is", RootPdfCommands::rootPdfList);
         register(":root pdf info", "Range, knots, flavors and seams of a set. Usage: :root pdf info <name>", RootPdfCommands::rootPdfInfo);
@@ -324,6 +384,8 @@ public class CommandDefinitions {
         RootDemoCommands.register();
         // --- The bridge: every engine reads what the others export ---
         BridgeCommands.register();
+        // --- The Sphere Neural Network: every module a neuron, wired to every other, from C++, Python and Julia ---
+        SnnCommands.register();
         // --- The Code Vault: snippets/ and user_scripts/ searched, checked and run ---
         VaultCommands.register();
         register(":root cut new", "Name a selection so it can be reused and combined", RootGraphicsCommands::rootCutNew);
