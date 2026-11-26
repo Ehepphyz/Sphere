@@ -23,7 +23,7 @@ import java.util.stream.Stream;
 
 /**
  * The Sphere Neural Network seen from Java: every module of the machine a neuron (ROOT and its parts, Geant4, CLHEP,
- * FastJet and fjcontrib, HepMC3, LHAPDF, Pythia8, YODA, Rivet, PyTorch, TensorFlow, JAX, pyhf, Julia's packages,
+ * FastJet and fjcontrib, HepMC3, LHAPDF, Pythia8, YODA, Rivet, Golem95, PyTorch, TensorFlow, JAX, pyhf, Julia's packages,
  * Sphere's own translations...), the ways data goes from one to another its synapses. The cortex, sphere_snn.py, finds
  * the neurons on this side of WSL and the other, chooses installations that can share one program, writes how every
  * language reaches them, learns from what it runs and runs each neuron and synapse for real.

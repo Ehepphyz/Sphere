@@ -53,6 +53,12 @@ public final class RootPipelineWindow extends JFrame {
     private static RootPipelineWindow open;
 
     private final ThemePalette palette = ThemeManager.getCurrentPalette();
+
+    /** Sphere's own controls and fonts, compact: a field, a list and a button at one height. */
+    private final RootForgeStyle style = new RootForgeStyle(palette);
+
+    /** What the Inspect tab found, drawn: a walk's curve, a call's values, a sweep's answers. */
+    private final RootPipelinePlot inspectPicture = new RootPipelinePlot(palette);
     private final RootBackend engine;
     private final String activeProject;
 
@@ -74,16 +80,55 @@ public final class RootPipelineWindow extends JFrame {
     private final java.util.Map<RootPipelineModules, JCheckBox> moduleBoxes =
         new java.util.EnumMap<>(RootPipelineModules.class);
 
-    private final JComboBox<RootPipelineRecipes.Recipe> recipeBox =
-        new JComboBox<>(RootPipelineRecipes.all().toArray(new RootPipelineRecipes.Recipe[0]));
+    private final DefaultComboBoxModel<RootPipelineRecipes.Recipe> recipeModel =
+        new DefaultComboBoxModel<>(RootPipelineRecipes.all().toArray(new RootPipelineRecipes.Recipe[0]));
+    private final JComboBox<RootPipelineRecipes.Recipe> recipeBox = new JComboBox<>(recipeModel);
+
+    /** Narrows the catalog as it is typed in: "dr", "mjj", "bw" all find their recipe. */
+    private final JTextField recipeFind = new JTextField(9);
+    private final JButton fromFormulaButton = new JButton("Formula…");
+    private final JButton fromCopyButton = new JButton("Copy of…");
+    private final JButton fromMacroButton = new JButton("Macro…");
+    /** What the pipeline's name points to, offered rather than imposed. */
+    private final JButton suggestion = new JButton();
+    private RootPipelineRecipes.Recipe suggested;
+
+    /**
+     * The recipe the form was last filled from. The box may be showing a search
+     * result the user has not picked yet, so the generator never reads the box.
+     */
+    private RootPipelineRecipes.Recipe applied;
+
+    /**
+     * The name the last start put in the form. Like the description, the name
+     * follows the starts until the user writes one: a copy's mt_v2 must not
+     * stay on the macro function chosen next.
+     */
+    private String namedByStart;
 
     private final JCheckBox threadSafe = new JCheckBox("stateless", true);
     private final JCheckBox openMp = new JCheckBox("OpenMP");
-    private final JCheckBox optimize = new JCheckBox("-O3", true);
+    /** The compiler's own choices: how hard it optimizes, the standard, its review, symbols, fast math. */
+    private final JComboBox<String> level = new JComboBox<>(new String[]{"-O0", "-O1", "-O2", "-O3", "-Ofast"});
+    private final JComboBox<String> standard = new JComboBox<>(new String[]{"C++17", "C++20", "C++23"});
+    private final JCheckBox warnings = new JCheckBox("warnings");
+    private final JCheckBox debug = new JCheckBox("debug symbols");
+    private final JCheckBox fastMath = new JCheckBox("fast math");
     private final JCheckBox nativeArch = new JCheckBox("-march=native");
     private final JCheckBox generateTest = new JCheckBox("test macro");
     private final JCheckBox showInHelp = new JCheckBox("show in :help", true);
     private final JTextField extraFlags = new JTextField(20);
+
+    /** What the pipeline can do besides answering for one entry (RootPipelineExtras). */
+    private final JCheckBox perObject = new JCheckBox("per object");
+    private final JCheckBox uncertainty = new JCheckBox("uncertainty σ");
+    private final JCheckBox monitor = new JCheckBox("monitor");
+    /** What the form makes of the inputs and the code, and the one click that takes it. */
+    private final JLabel extrasHint = new JLabel(" ");
+    private final JButton extrasAction = new JButton(" ");
+    private final java.awt.CardLayout extrasCards = new java.awt.CardLayout();
+    private final JPanel extrasActionCard = new JPanel(extrasCards);
+    private RootPipelineExtras.Suggestion extrasSuggested;
 
     private final CodeTextPane sourceArea = new CodeTextPane();
     private final SyntaxHighlighter highlighter =
@@ -148,6 +193,7 @@ public final class RootPipelineWindow extends JFrame {
 
     /** Splits the form from the tabs, so either can be given the height. */
     private JSplitPane divider;
+    private JComponent formPanel;
     private int formPreferredHeight = 400;
 
     /** The pipeline the form is showing, or null for one that is not written yet. */
@@ -166,8 +212,33 @@ public final class RootPipelineWindow extends JFrame {
      * is not taken yet starts a blank form already carrying it.
      */
     public static void show(RootBackend engine, String activeProject, String name) {
+        show(engine, activeProject, name, null);
+    }
+
+    /**
+     * Shows the window on a new pipeline already filled from a start: a recipe,
+     * a formula, a copy or a macro. With no start it is the plain form.
+     */
+    public static void show(RootBackend engine, String activeProject, String name,
+                            RootPipelineStarts.Start start) {
         if (!SwingUtilities.isEventDispatchThread()) {
-            SwingUtilities.invokeLater(() -> show(engine, activeProject, name));
+            SwingUtilities.invokeLater(() -> show(engine, activeProject, name, start));
+            return;
+        }
+        if (start != null) {
+            if (open == null || !open.isDisplayable()) {
+                open = new RootPipelineWindow(engine, activeProject);
+                open.setVisible(true);
+            } else {
+                open.refresh();
+            }
+            open.blank();
+            if (name != null && !name.isBlank()) {
+                open.nameField.setText(name.trim());
+            }
+            open.start(start);
+            open.toFront();
+            open.requestFocus();
             return;
         }
         if (open == null || !open.isDisplayable()) {
@@ -198,26 +269,223 @@ public final class RootPipelineWindow extends JFrame {
     }
 
     private RootPipelineWindow(RootBackend engine, String activeProject) {
-        super("ROOT pipeline builder");
+        super("ROOT forge — pipeline builder");
         com.sphere.utils.IconManager.applyAppIcon(this);
         this.engine = engine;
         this.activeProject = activeProject;
 
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout());
-        setMinimumSize(new Dimension(1040, 700));
-        setSize(1180, 860);
-        setLocationRelativeTo(null);
 
-        add(header(), BorderLayout.NORTH);
-        add(left(), BorderLayout.WEST);
-        add(middlePart(), BorderLayout.CENTER);
-        add(footer(), BorderLayout.SOUTH);
+        final JComponent band = header();
+        add(band, BorderLayout.NORTH);
+        // The list of pipelines folds away with its own triangles, for the
+        // room the form and the code want.
+        final JComponent list = left();
+        final JComponent work = middlePart();
+        list.setMinimumSize(new Dimension(0, 0));
+        work.setMinimumSize(new Dimension(0, 0));
+        final JSplitPane sides = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, list, work);
+        sides.setOneTouchExpandable(true);
+        sides.setDividerSize(11);
+        sides.setDividerLocation(250);
+        sides.setResizeWeight(0.0);
+        sides.setBorder(null);
+        sides.setBackground(palette.getTerminalBackground());
+        add(sides, BorderLayout.CENTER);
+        final JComponent bar = footer();
+        add(bar, BorderLayout.SOUTH);
 
         wire();
         dress();
         refresh();
         blank();
+        fitForm();
+        final Insets margins = divider.getParent().getInsets();
+        fitWindow(band.getPreferredSize().height + bar.getPreferredSize().height + margins.top + margins.bottom);
+        // How thick the system draws the frame is known for sure once the window shows -- late under X11, where WSLg
+        // counts its shadow in it: the window and the bar are fitted again then.
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowOpened(java.awt.event.WindowEvent e) {
+                SwingUtilities.invokeLater(() -> {
+                    keepOnScreen();
+                    placeDivider();
+                });
+            }
+        });
+    }
+
+    /**
+     * The bar between the form and the code, just under the form. Measured
+     * before the form was styled, the form still had Sphere's taller
+     * controls, and the bar sat some 40 pixels too low: three lines of code
+     * given up for a band of nothing.
+     */
+    private void fitForm() {
+        formPreferredHeight = formPanel.getPreferredSize().height;
+        placeDivider();
+    }
+
+    // ---- the window's size and the bar's place ----------------------------------
+
+    /** The room the forge's content was laid out for, the frame not counted: 1180 x 860 with Windows' frame. */
+    private static final Dimension ROOM = new Dimension(1174, 835);
+
+    /** The least room the content stays usable in, the frame not counted. */
+    private static final Dimension LEAST_ROOM = new Dimension(1034, 675);
+
+    /** The height the form keeps when the tab shown takes the rest: its first rows, scrolled. */
+    private static final int FORM_LEAST = 120;
+
+    /** Where the window itself last put the bar; -1 before it did. A place the user dragged the bar to is theirs. */
+    private int placedAt = -1;
+
+    /**
+     * Sizes the window by its content and the screen. The content gets the room it was laid out for -- more height
+     * when the form and a few lines of code need it, as with Linux's taller fonts -- never more than the screen
+     * leaves free, and the frame comes on top of that, however thick the system draws it.
+     *
+     * The window used to be given Windows' outer size, 1180 x 860. Under WSLg, whose frame counts its shadow (38
+     * pixels a side, 59 on top), that left the content 1104 x 763: the form took its whole height and the tabs got
+     * 56 pixels, their strip under the command line and Try it's fields at a negative height, drawn over one
+     * another. Packed, the window keeps its content's size when X11 tells late how thick the frame is. On a Windows
+     * screen of 864 points, 860 also put Build and Load under the taskbar.
+     *
+     * The window is placed before it is made displayable: WSLg's window manager shows a window where it was first
+     * put, and put the forge in the screen's corner when its place came after.
+     *
+     * @param around what the window holds besides the form and the tabs: its header, its footer, the margins
+     */
+    private void fitWindow(int around) {
+        final JComponent content = (JComponent) getContentPane();
+        final Rectangle free = freeArea();
+        final int wanted = around + formPreferredHeight + 6 + divider.getDividerSize() + tabsNeed();
+        final Dimension room = new Dimension(ROOM.width, Math.max(ROOM.height, wanted));
+        setSize(room);
+        setLocationRelativeTo(null);
+        content.setPreferredSize(room);
+        pack(); // displayable: the frame's thickness is known (under X11, a guess until the window shows)
+        final Insets frame = getInsets();
+        room.width = Math.min(room.width, free.width - frame.left - frame.right);
+        room.height = Math.min(room.height, free.height - frame.top - frame.bottom);
+        content.setPreferredSize(room);
+        pack();
+        content.setPreferredSize(null);
+        setMinimumSize(new Dimension(
+            Math.min(LEAST_ROOM.width + frame.left + frame.right, free.width),
+            Math.min(LEAST_ROOM.height + frame.top + frame.bottom, free.height)));
+        setLocationRelativeTo(null);
+        keepOnScreen();
+    }
+
+    /** The part of the screen a window may take: the screen less its taskbars and docks. */
+    private Rectangle freeArea() {
+        final GraphicsConfiguration screen = getGraphicsConfiguration();
+        final Rectangle all = screen.getBounds();
+        final Insets bars = Toolkit.getDefaultToolkit().getScreenInsets(screen);
+        return new Rectangle(all.x + bars.left, all.y + bars.top,
+            Math.max(1, all.width - bars.left - bars.right), Math.max(1, all.height - bars.top - bars.bottom));
+    }
+
+    /**
+     * Brings the window inside the screen's free area, smaller if it must be: never a button under a taskbar. What
+     * must be inside is the window less the thickness of its frame's sides on every edge -- its content and its
+     * title bar; the sides themselves may fall outside, which under WSLg are mostly a shadow, 38 pixels wide.
+     */
+    private void keepOnScreen() {
+        final Rectangle free = freeArea();
+        final Rectangle now = getBounds();
+        final Insets frame = getInsets();
+        final int edge = Math.max(0, Math.min(frame.left, Math.min(frame.right, frame.bottom)));
+        final Rectangle seen = new Rectangle(now.x + edge, now.y + edge,
+            Math.max(1, now.width - 2 * edge), Math.max(1, now.height - 2 * edge));
+        if (free.contains(seen)) {
+            return;
+        }
+        final int w = Math.min(seen.width, free.width), h = Math.min(seen.height, free.height);
+        final int x = Math.max(free.x, Math.min(seen.x, free.x + free.width - w));
+        final int y = Math.max(free.y, Math.min(seen.y, free.y + free.height - h));
+        final Dimension least = getMinimumSize();
+        setMinimumSize(new Dimension(Math.min(least.width, w + 2 * edge), Math.min(least.height, h + 2 * edge)));
+        setBounds(x - edge, y - edge, w + 2 * edge, h + 2 * edge);
+    }
+
+    /**
+     * Puts the bar where the tab shown wants it: under the whole form, or high for Inspect and Chain, which need the
+     * height -- but never so low that the tabs lose the room they need (see tabsNeed); the form scrolls instead.
+     */
+    private void placeDivider() {
+        if (divider == null) {
+            return;
+        }
+        placedAt = fitDivider(tabs.getSelectedIndex() >= 3 ? FORM_LEAST : formPreferredHeight + 6);
+        divider.setDividerLocation(placedAt);
+    }
+
+    /**
+     * After the window changed size: the window's own place for the bar is worked out again, and a place the user
+     * chose is only raised if the tabs no longer had their room. Folded away with the triangles, it stays folded.
+     */
+    private void refitDivider() {
+        if (divider == null) {
+            return;
+        }
+        final int at = divider.getDividerLocation();
+        if (placedAt < 0 || at == placedAt) {
+            placeDivider();
+            return;
+        }
+        if (at >= divider.getMaximumDividerLocation() || at <= divider.getMinimumDividerLocation()) {
+            return;
+        }
+        final int fitted = fitDivider(at);
+        if (fitted < at) {
+            divider.setDividerLocation(fitted);
+        }
+    }
+
+    /**
+     * The place for the bar nearest the one wanted that leaves the tabs their room, the form keeping at least its
+     * first rows. Before the window is laid out, its height unknown, the place wanted.
+     */
+    private int fitDivider(int wanted) {
+        final Insets in = divider.getInsets();
+        final int height = divider.getHeight() - in.top - in.bottom;
+        if (height <= 0) {
+            return wanted;
+        }
+        final int lowest = height - divider.getDividerSize() - tabsNeed();
+        return Math.max(Math.min(wanted, lowest), Math.min(FORM_LEAST, wanted));
+    }
+
+    /**
+     * The height the tabs need under the bar: their strip, what the tab shown needs to be read and used -- two
+     * lines of code at the least (the form comes first; the bar gives the code more), or the whole of Try it,
+     * Inspect or Chain, their fields and answers -- and the command line.
+     */
+    private int tabsNeed() {
+        final int line = sourceArea.getFontMetrics(sourceArea.getFont()).getHeight();
+        final Component shown = tabs.getSelectedComponent();
+        int content = 2 * line + 8;
+        if (shown != null && !(shown instanceof JScrollPane)) {
+            content = Math.max(content, shown.getPreferredSize().height);
+        }
+        // The strip as laid out (all its rows, if the titles wrap); before the tabs have a width, a guess.
+        int strip = 2 * line + 8;
+        if (tabs.getWidth() > 0) {
+            int bottom = 0;
+            for (int i = 0; i < tabs.getTabCount(); i++) {
+                final Rectangle tab = tabs.getBoundsAt(i);
+                if (tab != null) {
+                    bottom = Math.max(bottom, tab.y + tab.height);
+                }
+            }
+            if (bottom > 0) {
+                strip = bottom + 6;
+            }
+        }
+        return strip + content + 4 + commandLine.getPreferredSize().height;
     }
 
     // ---- the pieces ---------------------------------------------------------
@@ -229,12 +497,13 @@ public final class RootPipelineWindow extends JFrame {
             BorderFactory.createMatteBorder(0, 0, 1, 0, palette.getBorder()),
             new EmptyBorder(11, 16, 11, 16)));
 
-        JLabel title = new JLabel("Your own ROOT pipeline");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 15f));
+        JLabel title = new JLabel("ROOT forge");
+        title.setFont(style.font(Font.BOLD, 16));
         title.setForeground(palette.getTextPrimary());
 
-        JLabel hint = new JLabel("Compiled into includes/, loaded when Sphere starts, "
-                                 + "and callable by name from :root afterward.");
+        JLabel hint = new JLabel("Your own C++ pipelines: compiled into includes/, loaded when Sphere starts, "
+                                 + "callable by name from :root and RDataFrame.");
+        hint.setFont(style.font());
         hint.setForeground(palette.getTextSecondary());
 
         band.add(title);
@@ -243,37 +512,55 @@ public final class RootPipelineWindow extends JFrame {
     }
 
     /**
-     * Paints what the look and feel does not.
+     * Gives every control Sphere's look.
      *
-     * Sphere themes what it can through UIManager, but a table's selection, a
-     * tab strip's own background and a viewport are not among those keys, so
-     * they stay at whatever the look and feel chose. They are set here instead,
-     * from the same palette, so the window is one piece.
+     * Sphere themes what it can through UIManager, but a tab strip's delegate,
+     * a viewport's ground and the font of a check box, a list or a table are
+     * not among those keys, so they stay at whatever the look and feel chose.
+     * They are set here instead, from Sphere's own delegates, fonts and
+     * palette, so the window is one piece with the rest of Sphere. Fields keep
+     * Sphere's as they are.
      */
     private void dress() {
-        for (JTextField field : new JTextField[]{nameField, descriptionField, extraFlags}) {
-            field.setBackground(palette.getBackgroundSurface());
-            field.setForeground(palette.getTextPrimary());
-            field.setCaretColor(palette.getAccent());
-            field.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(palette.getBorder()),
-                new EmptyBorder(3, 6, 3, 6)));
+        // The search box is measured in columns, so it keeps its width
+        // whatever measures it again later.
+        recipeFind.setColumns(15);
+        scanInput.setPrototypeDisplayValue("dphi_lead_err");
+        // One pass over everything: every list, button and table, whatever
+        // tab it lives in.
+        for (Component one : all(getContentPane())) {
+            if (one instanceof JComboBox<?> box) {
+                style.combo(box);
+            } else if (one instanceof JButton button && button != suggestion) {
+                style.button(button);
+            } else if (one instanceof JTable table) {
+                style.table(table);
+            } else if (one instanceof JCheckBox || one instanceof JRadioButton) {
+                style.toggle((AbstractButton) one);
+            }
         }
+        style.caption(commandLine, commandLine.getBorder());
+        extrasHint.setFont(style.font(Font.PLAIN, 11));
+        // What to type, said where the pointer rests: Sphere's fields write nothing in themselves.
+        nameField.setToolTipText("A C++ identifier, the name :root calls it by: mt, deltaR, myCut.");
+        descriptionField.setToolTipText("What it computes, in a few words.");
+        extraFlags.setToolTipText("More compiler flags, e.g. -DNDEBUG.");
+        // Lists sized to their purpose, not to their longest entry: a catalog
+        // title of fifty letters used to widen the form past the window and
+        // squeeze the labels until they were cut ("Descriptior"). A typical
+        // entry is what they are measured on, with whatever font they end up
+        // with -- never a width fixed in pixels. The four kinds are short, and
+        // measured all of them: HISTOGRAM, taken for the widest, is not, and
+        // TRANSFORM was cut.
+        recipeBox.setPrototypeDisplayValue(new RootPipelineRecipes.Recipe(
+            RootPipelineRecipes.Family.KINEMATICS, "Invariant mass of two objects", "",
+            RootPipelineManifest.Kind.TRANSFORM, java.util.List.of(), java.util.List.of(), null));
 
-        kindBox.setBackground(palette.getBackgroundSurface());
-        kindBox.setForeground(palette.getTextPrimary());
-
-        inputTable.setBackground(palette.getTerminalBackground());
-        inputTable.setForeground(palette.getTextPrimary());
-        inputTable.setGridColor(palette.getBorder());
-        inputTable.setSelectionBackground(palette.getTerminalSelection());
-        inputTable.setSelectionForeground(palette.getTextWhite());
-        inputTable.getTableHeader().setBackground(palette.getBackgroundSurface());
-        inputTable.getTableHeader().setForeground(palette.getTextSecondary());
-        inputTable.getTableHeader().setReorderingAllowed(false);
+        inputTable.setSelectionForeground(palette.getTextPrimary());
 
         tabs.setBackground(palette.getTerminalBackground());
         tabs.setForeground(palette.getTextPrimary());
+        style.tabs(tabs);
 
         progress.setBackground(palette.getBackgroundTrack());
         pipelines.setSelectionBackground(palette.getTerminalSelection());
@@ -289,16 +576,30 @@ public final class RootPipelineWindow extends JFrame {
         }
     }
 
-    /** Every component under one, however deep. */
+    /** Every component under one, however deep -- but not the parts a control is made of. */
     private static List<Component> all(Container root) {
         List<Component> found = new ArrayList<>();
         for (Component one : root.getComponents()) {
             found.add(one);
-            if (one instanceof Container deeper) {
+            if (one instanceof Container deeper && !madeOfParts(one)) {
                 found.addAll(all(deeper));
             }
         }
         return found;
+    }
+
+    /**
+     * A list's arrow, a scroll bar's arrows, a divider's triangles: buttons
+     * that belong to their control's delegate, which lays them out itself.
+     * Styled as buttons, they took a button's 12-pixel padding, and a list
+     * gives its arrow that padding on top of the room it counted when it
+     * measured itself: its text lost 24 pixels and read "TRAN..." for
+     * TRANSFORM, and nothing but "..." for -O3.
+     */
+    private static boolean madeOfParts(Component one) {
+        return one instanceof JComboBox<?> || one instanceof javax.swing.JScrollBar
+            || one instanceof javax.swing.JSpinner
+            || one instanceof javax.swing.plaf.basic.BasicSplitPaneDivider;
     }
 
     private JComponent left() {
@@ -344,11 +645,13 @@ public final class RootPipelineWindow extends JFrame {
         middle.setBackground(palette.getTerminalBackground());
         middle.setBorder(new EmptyBorder(10, 12, 6, 12));
         JComponent theForm = form();
+        formPanel = theForm;
 
         // Read only, but colored by the same highlighter the editor uses, so
         // what the form generates reads the way the file will in the editor.
         sourceArea.setEditable(false);
-        sourceArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        // The editor's own font, not the toolkit's Courier.
+        sourceArea.setFont(style.code(12));
         sourceArea.applyTheme();
         sourceArea.setHighlightCurrentLine(false);
         JScrollPane sourceScroll = new JScrollPane(sourceArea);
@@ -357,7 +660,7 @@ public final class RootPipelineWindow extends JFrame {
         sourceScroll.setRowHeaderView(numbers);
 
         logArea.setEditable(false);
-        logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        logArea.setFont(style.code(12));
         logArea.setBackground(palette.getTerminalBackground());
         logArea.setForeground(palette.getTerminalForeground());
 
@@ -367,8 +670,8 @@ public final class RootPipelineWindow extends JFrame {
         tabs.addTab("Inspect", inspectPanel());
         tabs.addTab("Chain", chainPanel());
         // Choosing the Chain tab gives it the room it needs, and leaving it
-        // gives the form its own back.
-        tabs.addChangeListener(e -> roomForTabs(tabs.getSelectedIndex() >= 3));
+        // gives the form its own back (see placeDivider).
+        tabs.addChangeListener(e -> placeDivider());
 
         JPanel below = new JPanel(new BorderLayout(0, 4));
         below.setBackground(palette.getTerminalBackground());
@@ -379,7 +682,13 @@ public final class RootPipelineWindow extends JFrame {
         // not, so which of the two gets the space is the user's to decide.
         // The form scrolls, so giving its height to the tabs cuts nothing off:
         // what no longer fits is still reachable rather than simply gone.
-        JScrollPane formScroll = new JScrollPane(theForm,
+        // The form keeps to the top of its pane: whatever height the pane has
+        // beyond the form's own goes below it. Stretched to the pane, the grid
+        // centered itself and left a band of nothing above the name.
+        JPanel atTop = new JPanel(new BorderLayout());
+        atTop.setBackground(palette.getTerminalBackground());
+        atTop.add(theForm, BorderLayout.NORTH);
+        JScrollPane formScroll = new JScrollPane(atTop,
             JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
             JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         formScroll.setBorder(null);
@@ -391,12 +700,26 @@ public final class RootPipelineWindow extends JFrame {
         between.setResizeWeight(0.0);
         between.setBorder(null);
         between.setBackground(palette.getTerminalBackground());
-        between.setDividerSize(7);
-        between.setDividerLocation(theForm.getPreferredSize().height + 6);
-        formPreferredHeight = theForm.getPreferredSize().height;
+        // The triangles of Sphere's other windows: one click folds the code
+        // away, or gives it the whole height. With no minimum on either side
+        // the bar goes wherever it is dragged; the tabs' own minimum used to
+        // stop it a third of the way down.
+        between.setOneTouchExpandable(true);
+        between.setDividerSize(11);
+        formScroll.setMinimumSize(new Dimension(0, 0));
+        below.setMinimumSize(new Dimension(0, 0));
+        // Where the bar starts is decided once the form is styled (see fitForm).
+        // A window made shorter takes the height from the form, which scrolls,
+        // not from the tabs (see refitDivider).
+        between.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                refitDivider();
+            }
+        });
 
         commandLine.setEditable(false);
-        commandLine.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
+        commandLine.setFont(style.code(11));
         commandLine.setForeground(palette.getTextSecondary());
         commandLine.setBackground(palette.getTerminalBackground());
         commandLine.setBorder(BorderFactory.createCompoundBorder(
@@ -419,29 +742,31 @@ public final class RootPipelineWindow extends JFrame {
 
         int row = 0;
 
+        // The name takes the width; the kind is a short word and keeps a short box.
         c.gridx = 0; c.gridy = row; c.weightx = 0;
-        grid.add(label("Name"), c);
-        c.gridx = 1; c.weightx = 0.4;
+        grid.add(style.formLabel("Name"), c);
+        c.gridx = 1; c.weightx = 1;
         grid.add(nameField, c);
         c.gridx = 2; c.weightx = 0;
-        grid.add(label("Kind"), c);
-        c.gridx = 3; c.weightx = 0.6;
+        grid.add(style.formLabel("Kind"), c);
+        c.gridx = 3; c.weightx = 0; c.fill = GridBagConstraints.NONE;
         grid.add(kindBox, c);
+        c.fill = GridBagConstraints.HORIZONTAL;
         row++;
 
         c.gridx = 0; c.gridy = row; c.weightx = 0;
-        grid.add(label("Start from"), c);
+        grid.add(style.formLabel("Start from"), c);
         c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
         recipeBox.setToolTipText("A quantity that is already written correctly. "
                                  + "It brings its own inputs and its own ROOT modules.");
         recipeBox.setRenderer(new RecipeRenderer());
         recipeBox.setMaximumRowCount(20);
-        grid.add(recipeBox, c);
+        grid.add(startRow(), c);
         c.gridwidth = 1;
         row++;
 
         c.gridx = 0; c.gridy = row; c.weightx = 0;
-        grid.add(label("Description"), c);
+        grid.add(style.formLabel("Description"), c);
         c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
         grid.add(descriptionField, c);
         c.gridwidth = 1;
@@ -465,20 +790,23 @@ public final class RootPipelineWindow extends JFrame {
         layerRow.add(projectLayer);
 
         c.gridx = 0; c.gridy = row; c.weightx = 0;
-        grid.add(label("Lives"), c);
+        grid.add(style.formLabel("Lives"), c);
         c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
         grid.add(layerRow, c);
         c.gridwidth = 1;
         row++;
 
         c.gridx = 0; c.gridy = row; c.weightx = 0; c.anchor = GridBagConstraints.NORTHWEST;
-        grid.add(label("Inputs"), c);
+        grid.add(style.formLabel("Inputs"), c);
         c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
         grid.add(inputs(), c);
         c.gridwidth = 1; c.anchor = GridBagConstraints.WEST;
         row++;
 
-        JPanel parts = new JPanel(new GridLayout(3, 4, 8, 2));
+        // Tight rows at their own width rather than spread across the whole
+        // form: the boxes read as one group. Five across: seven made the form
+        // wider than the window, and the layout then cut every label short.
+        JPanel parts = new JPanel(new GridLayout(3, 5, 14, 0));
         parts.setBackground(palette.getTerminalBackground());
         for (RootPipelineModules module : RootPipelineModules.values()) {
             JCheckBox box = new JCheckBox(module.token);
@@ -492,16 +820,17 @@ public final class RootPipelineWindow extends JFrame {
         moduleBoxes.get(RootPipelineModules.MATH).setSelected(true);
 
         c.gridx = 0; c.gridy = row; c.weightx = 0; c.anchor = GridBagConstraints.NORTHWEST;
-        grid.add(label("ROOT"), c);
+        grid.add(style.formLabel("ROOT modules"), c);
         c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
+        c.fill = GridBagConstraints.NONE; c.anchor = GridBagConstraints.WEST;
         grid.add(parts, c);
+        c.fill = GridBagConstraints.HORIZONTAL;
         c.gridwidth = 1; c.anchor = GridBagConstraints.WEST;
         row++;
 
-        JPanel options = new JPanel(new GridLayout(2, 3, 8, 2));
+        JPanel options = new JPanel(new GridLayout(2, 3, 14, 0));
         options.setBackground(palette.getTerminalBackground());
-        for (JCheckBox box : new JCheckBox[]{threadSafe, openMp, optimize,
-                                             nativeArch, generateTest, showInHelp}) {
+        for (JCheckBox box : new JCheckBox[]{threadSafe, openMp, nativeArch, generateTest, showInHelp}) {
             box.setBackground(palette.getTerminalBackground());
             box.setForeground(palette.getTextPrimary());
             options.add(box);
@@ -509,21 +838,61 @@ public final class RootPipelineWindow extends JFrame {
         threadSafe.setToolTipText("Keeps no state between calls, so :root mt on may run it "
                                   + "on several entries at once.");
         openMp.setToolTipText("Build with -fopenmp.");
-        optimize.setToolTipText("Build with -O3 rather than -O0.");
         nativeArch.setToolTipText("Build with -march=native. The library then runs only "
                                   + "on this kind of processor.");
         generateTest.setToolTipText("Write a macro in user_scripts/ that calls the entry point.");
         showInHelp.setToolTipText("List the pipeline in :help root once it is loaded.");
 
         c.gridx = 0; c.gridy = row; c.weightx = 0; c.anchor = GridBagConstraints.NORTHWEST;
-        grid.add(label("Build"), c);
+        grid.add(style.formLabel("Build"), c);
         c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
+        c.fill = GridBagConstraints.NONE; c.anchor = GridBagConstraints.WEST;
         grid.add(options, c);
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.gridwidth = 1; c.anchor = GridBagConstraints.WEST;
+        row++;
+
+        // The compiler's own choices, each a click away rather than a flag to remember.
+        final JPanel compiler = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        compiler.setBackground(palette.getTerminalBackground());
+        compiler.add(label("optimization"));
+        compiler.add(level);
+        compiler.add(label("standard"));
+        compiler.add(standard);
+        for (JCheckBox box : new JCheckBox[]{warnings, debug, fastMath}) {
+            box.setBackground(palette.getTerminalBackground());
+            box.setForeground(palette.getTextPrimary());
+            compiler.add(box);
+        }
+        level.setSelectedItem("-O3");
+        standard.setSelectedItem("C++20");
+        level.setToolTipText("-O0 builds fastest and debugs best; -O3 runs fastest; -Ofast also"
+            + " relaxes the floating-point rules, as fast math does.");
+        standard.setToolTipText("The C++ standard the body is written in.");
+        warnings.setToolTipText("-Wall -Wextra: the compiler's own review of the code, in the build log.");
+        debug.setToolTipText("-g: symbols a debugger can stop on.");
+        fastMath.setToolTipText("-ffast-math: faster arithmetic that may assume no NaN or infinity ever"
+            + " appears -- so a NaN check can be compiled away.");
+
+        c.gridx = 0; c.gridy = row; c.weightx = 0; c.anchor = GridBagConstraints.WEST;
+        grid.add(style.formLabel("Compiler"), c);
+        c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
+        c.fill = GridBagConstraints.NONE; c.anchor = GridBagConstraints.WEST;
+        grid.add(compiler, c);
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.gridwidth = 1; c.anchor = GridBagConstraints.WEST;
+        row++;
+
+        c.gridx = 0; c.gridy = row; c.weightx = 0; c.anchor = GridBagConstraints.NORTHWEST;
+        grid.add(style.formLabel("Runtime"), c);
+        c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
+        c.anchor = GridBagConstraints.WEST;
+        grid.add(runtimeRow(), c);
         c.gridwidth = 1; c.anchor = GridBagConstraints.WEST;
         row++;
 
         c.gridx = 0; c.gridy = row; c.weightx = 0;
-        grid.add(label("Extra flags"), c);
+        grid.add(style.formLabel("Extra flags"), c);
         c.gridx = 1; c.gridwidth = 3; c.weightx = 1;
         grid.add(extraFlags, c);
         c.gridwidth = 1;
@@ -531,18 +900,185 @@ public final class RootPipelineWindow extends JFrame {
         return grid;
     }
 
+    /**
+     * What the pipeline can do besides answering for one entry, and, on the
+     * line below, what the form makes of its inputs and code: a branch named
+     * like Muon_pt asks for per object, pt_err beside pt for the uncertainty,
+     * a filter's && return for a cutflow -- with the one click that does it.
+     */
+    private JComponent runtimeRow() {
+        final JPanel boxes = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        boxes.setBackground(palette.getTerminalBackground());
+        for (JCheckBox box : new JCheckBox[]{perObject, uncertainty, monitor}) {
+            box.setBackground(palette.getTerminalBackground());
+            box.setForeground(palette.getTextPrimary());
+            boxes.add(box);
+        }
+        extrasHint.setForeground(palette.getTextSecondary());
+        // The button's place is kept when there is nothing to offer, so the
+        // form does not move by a line each time a suggestion comes and goes.
+        final JPanel none = new JPanel();
+        none.setOpaque(false);
+        extrasActionCard.setOpaque(false);
+        extrasActionCard.add(extrasAction, "act");
+        extrasActionCard.add(none, "none");
+        extrasCards.show(extrasActionCard, "none");
+        final JPanel said = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        said.setBackground(palette.getTerminalBackground());
+        said.add(extrasActionCard);
+        said.add(extrasHint);
+        final JPanel row = new JPanel(new BorderLayout(0, 2));
+        row.setBackground(palette.getTerminalBackground());
+        row.add(boxes, BorderLayout.NORTH);
+        row.add(said, BorderLayout.CENTER);
+        return row;
+    }
+
+    /** What each extra does, for its tooltip while it can be ticked. */
+    private static final String PER_OBJECT_TIP = "<html>Also callable on collections &mdash; a ROOT::RVec or a std::vector &mdash;"
+        + " for any input:<br><b>mt(Muon_pt, MET_pt, Muon_dphi)</b> gives one value per muon, and a filter a mask,"
+        + " as in Muon_pt[cut(...)].<br>Declared to the interpreter when the library loads: nothing more is compiled.</html>";
+    private static final String SIGMA_TIP = "<html>Also gives <b>name_sigma(inputs..., errors...)</b>: each input moved"
+        + " by its error, the others held,<br>the swings added in quadrature &mdash; one side only where the other"
+        + " leaves the domain.<br>An input called x_err beside x is taken as x's error.</html>";
+    private static final String MONITOR_TIP = "<html>Keeps score per thread, without a lock, about 20 ns a call:"
+        + " the calls, inputs and answers that were<br>not numbers with the first of each, where each input lived"
+        + " &mdash; with a word when it looks like MeV,<br>degrees or a -999 marker &mdash; the cost of a call, and"
+        + " the cutflow of every SPHERE_CUT(...).<br><b>:root pipeline report name</b></html>";
+
+    /**
+     * The extras the pipeline can have, the reason for those it cannot, and
+     * what the form suggests. A box that no longer applies -- the kind became
+     * a histogram, an input a collection -- is unticked and says why.
+     *
+     * @param preview the source as Save would write it, read for the cuts
+     */
+    private void fitExtras(RootPipelineManifest manifest, String preview) {
+        fitExtra(perObject, RootPipelineExtras.whyNotPerObject(manifest), PER_OBJECT_TIP);
+        fitExtra(uncertainty, RootPipelineExtras.whyNotSigma(manifest), SIGMA_TIP);
+        fitExtra(monitor, RootPipelineExtras.whyNotMonitor(manifest), MONITOR_TIP);
+        extrasSuggested = RootPipelineExtras.suggest(manifest, preview);
+        if (extrasSuggested == null) {
+            extrasHint.setText(" ");
+            extrasHint.setToolTipText(null);
+            extrasCards.show(extrasActionCard, "none");
+            return;
+        }
+        extrasHint.setText(extrasSuggested.text());
+        extrasHint.setToolTipText(extrasSuggested.detail());
+        extrasAction.setText(extrasSuggested.button());
+        extrasAction.setToolTipText(extrasSuggested.detail());
+        extrasCards.show(extrasActionCard, "act");
+    }
+
+    private static void fitExtra(JCheckBox box, String whyNot, String tip) {
+        box.setEnabled(whyNot == null);
+        if (whyNot != null) {
+            box.setSelected(false);
+        }
+        box.setToolTipText(whyNot == null ? tip : whyNot);
+    }
+
+    /** Takes what the form suggested about the extras. */
+    private void takeExtrasSuggestion() {
+        final RootPipelineExtras.Suggestion taken = extrasSuggested;
+        if (taken == null) {
+            return;
+        }
+        switch (taken.act()) {
+            case PER_OBJECT -> perObject.setSelected(true);
+            case SIGMA -> uncertainty.setSelected(true);
+            case COUNT_CUTS -> {
+                monitor.setSelected(true);
+                markCuts();
+                return;
+            }
+            case MARK_CUTS -> {
+                markCuts();
+                return;
+            }
+            default -> { }
+        }
+        regenerate();
+    }
+
+    /**
+     * Wraps each condition of the filter's return in SPHERE_CUT, in the file
+     * itself: the one edit the forge makes inside the user's code, on a click,
+     * with the version before kept for Revert. Saved first, so the function
+     * already has the name the monitor gives it.
+     */
+    private void markCuts() {
+        if (!save(false) || current == null) {
+            return;
+        }
+        final RootPipelineManifest manifest = collect();
+        final Path file = current.source;
+        final String marked = RootPipelineExtras.markCuts(read(file), manifest);
+        if (marked == null) {
+            say("Nothing left to mark: every condition of the return already counts.", false);
+            regenerate();
+            return;
+        }
+        try {
+            RootPipelineHistory.keep(file);
+            Files.writeString(file, marked, StandardCharsets.UTF_8);
+        } catch (IOException failure) {
+            say("Could not write " + file + ": " + failure.getMessage(), true);
+            return;
+        }
+        regenerate();
+        say("Each cut is now counted. Build and load " + manifest.name + ", run it, then :root pipeline report "
+            + manifest.name + " gives the cutflow.", false);
+    }
+
+    /** The runtime row, showing what a manifest asks for. */
+    private void showRuntime(RootPipelineManifest m) {
+        perObject.setSelected(m.each);
+        uncertainty.setSelected(m.sigma);
+        monitor.setSelected(m.monitor);
+    }
+
+    /** What the runtime row says, into a manifest: only what can be had. */
+    private void readRuntime(RootPipelineManifest m) {
+        m.each = perObject.isSelected() && perObject.isEnabled();
+        m.sigma = uncertainty.isSelected() && uncertainty.isEnabled();
+        m.monitor = monitor.isSelected() && monitor.isEnabled();
+    }
+
+    /** What the extras add, for the line under the code. */
+    private static String extrasLine(RootPipelineManifest m) {
+        final List<String> parts = new ArrayList<>();
+        // Named once the pipeline is; before that, by what they are.
+        final boolean named = m.name != null && !m.name.isBlank();
+        if (RootPipelineExtras.perObject(m)) {
+            parts.add(named ? m.name + "(collections)" : "per object");
+        }
+        if (RootPipelineExtras.sigma(m)) {
+            parts.add(named ? RootPipelineExtras.sigmaName(m) + "(...)" : "its uncertainty");
+        }
+        if (RootPipelineExtras.monitored(m)) {
+            parts.add(named ? ":root pipeline report " + m.name : "a report");
+        }
+        return parts.isEmpty() ? "" : "      also:  " + String.join(",  ", parts);
+    }
+
     private JComponent inputs() {
         inputTable.setRowHeight(21);
-        inputTable.setBackground(palette.getTerminalBackground());
-        inputTable.setForeground(palette.getTextPrimary());
-        inputTable.setGridColor(palette.getBorder());
-        inputTable.getColumnModel().getColumn(1)
-                  .setCellEditor(new DefaultCellEditor(
-                      new JComboBox<>(RootPipelineManifest.TYPES)));
+        // The editors a cell opens are Sphere's field and list, with no more
+        // padding than a row has room for: with their own, the text of a
+        // 21-pixel row was cut at the top and the bottom.
+        final JComboBox<String> types = new JComboBox<>(RootPipelineManifest.TYPES);
+        style.cellCombo(types);
+        inputTable.getColumnModel().getColumn(1).setCellEditor(new DefaultCellEditor(types));
+        final JTextField cell = new JTextField();
+        style.cellField(cell);
+        inputTable.setDefaultEditor(Object.class, new DefaultCellEditor(cell));
 
         JScrollPane scroll = new JScrollPane(inputTable);
-        // Five rows fit without pushing the rest of the form off the panel.
-        scroll.setPreferredSize(new Dimension(360, 5 * 21 + 24));
+        // Four rows show, at the compact row height; more scroll.
+        scroll.setPreferredSize(new Dimension(360, 4 * 22 + 26));
+        scroll.setBorder(BorderFactory.createLineBorder(palette.getBorder()));
 
         JButton add = small("Add");
         JButton remove = small("Remove");
@@ -635,7 +1171,7 @@ public final class RootPipelineWindow extends JFrame {
         tryAnswer.setEditable(false);
         tryAnswer.setLineWrap(true);
         tryAnswer.setWrapStyleWord(true);
-        tryAnswer.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        tryAnswer.setFont(style.code(12));
         tryAnswer.setBackground(palette.getTerminalBackground());
         tryAnswer.setForeground(palette.getTerminalForeground());
 
@@ -984,12 +1520,12 @@ public final class RootPipelineWindow extends JFrame {
         stageList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         stageList.setBackground(palette.getTerminalBackground());
         stageList.setForeground(palette.getTextPrimary());
-        stageList.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        stageList.setFont(style.code(12));
         JScrollPane stageScroll = new JScrollPane(stageList);
         stageScroll.setPreferredSize(new Dimension(360, 150));
 
         chainPreview.setEditable(false);
-        chainPreview.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
+        chainPreview.setFont(style.code(11));
         chainPreview.setBackground(palette.getTerminalBackground());
         chainPreview.setForeground(palette.getTerminalForeground());
 
@@ -1018,10 +1554,11 @@ public final class RootPipelineWindow extends JFrame {
         runChain.addActionListener(e -> runChain());
         loadChain.addActionListener(e -> openChain());
 
-        JPanel top = new JPanel(new GridLayout(2, 1, 0, 6));
+        // Each line as tall as what it holds (see the Inspect tab).
+        JPanel top = new JPanel(new BorderLayout(0, 6));
         top.setBackground(palette.getTerminalBackground());
-        top.add(source);
-        top.add(adding);
+        top.add(source, BorderLayout.NORTH);
+        top.add(adding, BorderLayout.SOUTH);
 
         panel.add(top, BorderLayout.NORTH);
         panel.add(split, BorderLayout.CENTER);
@@ -1037,14 +1574,6 @@ public final class RootPipelineWindow extends JFrame {
         chainFile.getDocument().addDocumentListener(watcher);
         chainTree.setText("Events");
         return panel;
-    }
-
-    /** Gives the tabs most of the height, or hands it back to the form. */
-    private void roomForTabs(boolean wide) {
-        if (divider == null) {
-            return;
-        }
-        divider.setDividerLocation(wide ? 120 : formPreferredHeight + 6);
     }
 
     /**
@@ -1095,27 +1624,47 @@ public final class RootPipelineWindow extends JFrame {
         watchTable.setRowHeight(21);
         watchTable.setFillsViewportHeight(true);
         JScrollPane watchScroll = new JScrollPane(watchTable);
-        watchScroll.setPreferredSize(new Dimension(360, 150));
+        watchScroll.setPreferredSize(new Dimension(360, 110));
 
         inspectSaid.setEditable(false);
-        inspectSaid.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        inspectSaid.setFont(style.code(12));
         inspectSaid.setBackground(palette.getTerminalBackground());
         inspectSaid.setForeground(palette.getTerminalForeground());
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
-            watchScroll, new JScrollPane(inspectSaid));
-        split.setResizeWeight(0.4);
+        // The picture first: a curve or bars say at a glance what a column of
+        // numbers says only to whoever reads it all.
+        inspectPicture.setFont(style.font());
+        inspectPicture.showMessage("Walk an input to see its curve, watch a call to see what it named,\n"
+            + "or check its health to see how often it answers a number.");
+        inspectPicture.setPreferredSize(new Dimension(460, 220));
+        final JSplitPane left = new JSplitPane(JSplitPane.VERTICAL_SPLIT, inspectPicture, watchScroll);
+        left.setResizeWeight(0.75);
+        left.setBorder(null);
+        left.setOneTouchExpandable(true);
+        left.setDividerSize(11);
+        inspectPicture.setMinimumSize(new Dimension(0, 0));
+        watchScroll.setMinimumSize(new Dimension(0, 0));
+
+        final JScrollPane saidScroll = new JScrollPane(inspectSaid);
+        saidScroll.setMinimumSize(new Dimension(0, 0));
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, saidScroll);
+        split.setOneTouchExpandable(true);
+        split.setDividerSize(11);
+        split.setResizeWeight(0.6);
         split.setBorder(null);
         split.setBackground(palette.getTerminalBackground());
 
-        JPanel rows = new JPanel(new GridLayout(2, 1, 0, 6));
+        // Each line as tall as what it holds: equal grid rows gave the line of
+        // fields the height of the list below it, and a band under it.
+        JPanel rows = new JPanel(new BorderLayout(0, 6));
         rows.setBackground(palette.getTerminalBackground());
-        rows.add(top);
-        rows.add(scanRow);
+        rows.add(top, BorderLayout.NORTH);
+        rows.add(scanRow, BorderLayout.SOUTH);
 
         watch.addActionListener(e -> inspect("watch"));
         health.addActionListener(e -> inspect("health"));
         scan.addActionListener(e -> inspect("scan"));
+        scanInput.addActionListener(e -> walkedChanged());
 
         panel.add(rows, BorderLayout.NORTH);
         panel.add(split, BorderLayout.CENTER);
@@ -1153,14 +1702,22 @@ public final class RootPipelineWindow extends JFrame {
 
         new SwingWorker<String, Void>() {
             private List<RootPipelineProbe.Watched> values = List.of();
+            private RootPipelineProbe.Health swept;
+            private RootPipelineProbe.Scan walked;
+            private String problem;
 
             @Override
             protected String doInBackground() {
                 RootUserCompiler compiler = new RootUserCompiler(new SettingsManager(), engine);
                 switch (how) {
                     case "watch" -> {
-                        values = RootPipelineProbe.watch(
+                        final RootPipelineProbe.Watching watching = RootPipelineProbe.watch(
                             compiler, manifest, entry.source, arguments);
+                        values = watching.values();
+                        problem = watching.problem();
+                        if (problem != null) {
+                            return problem;
+                        }
                         return values.isEmpty()
                             ? "Nothing was recorded. Name a value with SPHERE_WATCH(x) "
                               + "inside the body, then look again."
@@ -1168,9 +1725,18 @@ public final class RootPipelineWindow extends JFrame {
                               + (values.size() == 1 ? "" : "s") + " recorded.";
                     }
                     case "health" -> {
+                        // Each input where its name says it lives: an angle
+                        // swept to 100 radians is not a fault of the pipeline.
+                        final double[][] ranges = RootPipelineProbe.rangesByName(manifest);
                         RootPipelineProbe.Health found = RootPipelineProbe.health(
-                            compiler, manifest, entry.source, 20000, low, high);
-                        return "Sweeping every input over [" + low + ", " + high + "]\n\n"
+                            compiler, manifest, entry.source, 20000, ranges);
+                        swept = found;
+                        if (!found.succeeded()) {
+                            problem = found.message();
+                            return problem;
+                        }
+                        return "Sweeping each input where its name says it lives:\n  "
+                             + RootPipelineProbe.describeRanges(manifest, ranges) + "\n\n"
                              + found.summary() + "\n\n"
                              + (found.isClean()
                                 ? "Every call answered a number."
@@ -1180,6 +1746,11 @@ public final class RootPipelineWindow extends JFrame {
                     default -> {
                         RootPipelineProbe.Scan found = RootPipelineProbe.scan(
                             compiler, manifest, entry.source, which, low, high, 61, held);
+                        walked = found;
+                        if (!found.succeeded()) {
+                            problem = found.message();
+                            return problem;
+                        }
                         StringBuilder out = new StringBuilder();
                         final String name = which < manifest.inputs.size()
                             ? manifest.inputs.get(which).name() : "input";
@@ -1210,19 +1781,100 @@ public final class RootPipelineWindow extends JFrame {
                     say("The pipeline could not be inspected: " + failure.getMessage(), true);
                     return;
                 }
+                inspectSaid.setText(said);
+                inspectSaid.setCaretPosition(0);
+                if (problem != null) {
+                    inspectPicture.showMessage(problem);
+                    say(said.lines().findFirst().orElse("It could not be inspected."), true);
+                    return;
+                }
                 if ("watch".equals(how)) {
                     watchModel.setRowCount(0);
                     for (RootPipelineProbe.Watched one : values) {
                         watchModel.addRow(new Object[]{one.name(), one.value()});
                     }
-                    inspectSaid.setText(said);
-                } else {
-                    inspectSaid.setText(said);
                 }
-                inspectSaid.setCaretPosition(0);
+                drawInspection(how, manifest, values, swept, walked, which, low, high, held);
                 say(said.lines().findFirst().orElse("Done."), false);
             }
         }.execute();
+    }
+
+    /**
+     * What an inspection found, as a picture: the walk as a curve with its
+     * NaN marked, a watched call as bars (an error budget when the values are
+     * the c_ contributions an uncertainty pipeline names), a sweep as the
+     * share of its answers that were numbers.
+     */
+    private void drawInspection(String how, RootPipelineManifest manifest,
+                                List<RootPipelineProbe.Watched> values, RootPipelineProbe.Health swept,
+                                RootPipelineProbe.Scan walked, int which, double low, double high, double held) {
+        switch (how) {
+            case "watch" -> {
+                if (values.isEmpty()) {
+                    inspectPicture.showMessage("Nothing named: SPHERE_WATCH(x) inside the body shows x here.");
+                    return;
+                }
+                final boolean budget = values.stream()
+                    .filter(one -> !one.name().equals("(returned)"))
+                    .allMatch(one -> one.name().startsWith("c_"));
+                double total = 0;
+                double largest = 0;
+                for (RootPipelineProbe.Watched one : values) {
+                    if (one.name().equals("(returned)") || !Double.isFinite(one.value())) {
+                        continue;
+                    }
+                    total += one.value() * one.value();
+                    largest = Math.max(largest, Math.abs(one.value()));
+                }
+                final java.util.List<RootPipelinePlot.Bar> bars = new java.util.ArrayList<>();
+                for (RootPipelineProbe.Watched one : values) {
+                    if (one.name().equals("(returned)")) {
+                        continue;
+                    }
+                    final double v = one.value();
+                    final double share = !Double.isFinite(v) ? 0
+                        : budget ? (total > 0 ? v * v / total : 0)
+                        : (largest > 0 ? Math.abs(v) / largest : 0);
+                    bars.add(new RootPipelinePlot.Bar(budget ? one.name().substring(2) : one.name(), v, share));
+                }
+                inspectPicture.showBars(budget
+                    ? "Error budget of this call: what each input brings (share of the variance)"
+                    : "What the call named with SPHERE_WATCH (bars against the largest)", bars, budget);
+            }
+            case "health" -> {
+                if (swept == null || swept.tried() == 0) {
+                    inspectPicture.showMessage("The sweep made no call.");
+                    return;
+                }
+                final double tried = swept.tried();
+                final long numbers = swept.tried() - swept.notANumber() - swept.infinite();
+                inspectPicture.showBars("What " + swept.tried() + " calls answered, each input where its name says it lives",
+                    java.util.List.of(
+                        new RootPipelinePlot.Bar("a number", numbers, numbers / tried),
+                        new RootPipelinePlot.Bar("NaN", swept.notANumber(), swept.notANumber() / tried),
+                        new RootPipelinePlot.Bar("infinite", swept.infinite(), swept.infinite() / tried)));
+            }
+            default -> {
+                if (walked == null || walked.points().isEmpty()) {
+                    inspectPicture.showMessage("The walk gave no point.");
+                    return;
+                }
+                final double[] xs = new double[walked.points().size()];
+                final double[] ys = new double[xs.length];
+                for (int k = 0; k < xs.length; k++) {
+                    xs[k] = walked.points().get(k).x();
+                    ys[k] = walked.points().get(k).y();
+                }
+                final String name = which < manifest.inputs.size() ? manifest.inputs.get(which).name() : "input";
+                // The compiled pipeline is known only at the points it answered.
+                inspectPicture.setExact(null);
+                inspectPicture.showCurves(name + " from " + RootFormula.shortNumber(low) + " to "
+                        + RootFormula.shortNumber(high) + ", the others at " + RootFormula.shortNumber(held)
+                        + "  (compiled, as the engine runs it)", name, xs,
+                    new RootPipelinePlot.Series(manifest.name, ys, palette.getAccent()), null, Double.NaN, "");
+            }
+        }
     }
 
     private static double asDouble(String text, double fallback) {
@@ -1504,6 +2156,16 @@ public final class RootPipelineWindow extends JFrame {
             + (taken.written().size() == 1 ? "" : "s") + " into " + layer);
     }
 
+    /**
+     * The catalog and its search belong to a new pipeline only. A copy can be
+     * made from any pipeline, so that button stays, and so do the formula and
+     * the macro, which start a new one from what is open.
+     */
+    private void setStartEnabled(boolean fresh) {
+        recipeBox.setEnabled(fresh);
+        recipeFind.setEnabled(fresh);
+    }
+
     /** Ticks exactly the modules a manifest names. */
     private void setModules(java.util.List<RootPipelineModules> wanted) {
         for (var entry : moduleBoxes.entrySet()) {
@@ -1525,30 +2187,743 @@ public final class RootPipelineWindow extends JFrame {
         }
         final RootPipelineRecipes.Recipe recipe =
             (RootPipelineRecipes.Recipe) recipeBox.getSelectedItem();
-        if (recipe == null) {
-            return;
+        // Picking again the recipe already applied is how its inputs are reset.
+        if (recipe != null) {
+            // A name a start suggested belongs to that start, not to this recipe.
+            if (recipe != applied && namedByStart != null
+                    && nameField.getText().strip().equals(namedByStart)) {
+                nameField.setText("");
+                namedByStart = null;
+            }
+            apply(recipe, java.util.List.of());
         }
+    }
+
+    /** Fills the form from one recipe, whatever it was made from. */
+    private void apply(RootPipelineRecipes.Recipe recipe, java.util.List<String> notes) {
+        // The description follows the recipe for as long as the user has not
+        // written one: it is blank, or still the previous recipe's own.
+        final String description = descriptionField.getText();
+        final boolean ours = description.isBlank()
+            || (applied != null && description.equals(applied.about()));
         filling = true;
+        applied = recipe;
         kindBox.setSelectedItem(recipe.kind());
         inputModel.setRowCount(0);
         for (RootPipelineManifest.Input input : recipe.inputs()) {
             inputModel.addRow(new Object[]{input.name(), input.type()});
         }
         setModules(recipe.modules());
-        if (descriptionField.getText().isBlank() && recipe.body() != null) {
-            descriptionField.setText(recipe.about());
+        if (ours) {
+            descriptionField.setText(recipe.body() == null ? "" : recipe.about());
         }
         filling = false;
         regenerate();
-        say(recipe.body() == null
+        updateSuggestion();
+        final String said = recipe.body() == null
             ? "Blank body. Fill it in yourself."
-            : recipe.title() + " is ready. Change the names if your branches differ.", false);
+            : recipe.title() + " is ready."
+              + (recipe.family().written() ? "" : " Change the names if your branches differ.");
+        final java.util.List<String> told = notes == null ? java.util.List.of() : notes;
+        if (told.isEmpty()) {
+            say(said, false);
+        } else {
+            // The line has room for one note: the one that matters most -- a
+            // place where it stops being a number, else what it gives.
+            final String headline = headline(told);
+            say(said + (told.size() > 1 ? "  (" + told.size() + " notes in the Build log)  " : "  ")
+                + headline, headline.contains("NaN") || headline.contains("inf ") || headline.startsWith("WARNING"));
+        }
+        if (!told.isEmpty()) {
+            logArea.append("---- " + recipe.title() + "\n");
+            for (String one : told) {
+                logArea.append("  " + one + "\n");
+            }
+        }
+    }
+
+    /**
+     * Fills the form from a start the command line or a dialog made.
+     *
+     * A start that is not in the catalog -- a formula, a copy, a macro -- is put
+     * at the top of the box, so what the form was filled from stays visible.
+     * A start always makes a new pipeline, whatever the form was showing.
+     */
+    void start(RootPipelineStarts.Start start) {
+        if (start == null) {
+            return;
+        }
+        if (!start.ok()) {
+            say(RootPipelineStarts.firstLine(start.error()), true);
+            return;
+        }
+        if (current != null) {
+            blank();
+        }
+        final RootPipelineRecipes.Recipe recipe = start.recipe();
+        final boolean was = filling;
+        filling = true;
+        if (recipeModel.getIndexOf(recipe) < 0) {
+            recipeModel.insertElementAt(recipe, 0);
+        }
+        recipeBox.setSelectedItem(recipe);
+        filling = was;
+        final String typed = nameField.getText().strip();
+        if (typed.isEmpty() || typed.equals(namedByStart)) {
+            nameField.setText(start.suggestedName() == null ? "" : start.suggestedName());
+            namedByStart = start.suggestedName();
+        }
+        if (start.options() != null) {
+            applyOptions(start.options());
+        }
+        apply(recipe, start.notes());
+        if (nameField.getText().isBlank()) {
+            nameField.requestFocusInWindow();
+        }
+    }
+
+    /** The note worth the status line: a warning first, then a preview, then the first. */
+    private static String headline(java.util.List<String> notes) {
+        for (String one : notes) {
+            if (one.startsWith("WARNING") || one.contains("is NaN") || one.contains("gives NaN")
+                    || one.contains(" is inf") || one.contains("keeps state")) {
+                return one;
+            }
+        }
+        for (String one : notes) {
+            if (one.startsWith("At ") || one.startsWith("With 5% errors") || one.startsWith("It ")) {
+                return one;
+            }
+        }
+        return notes.get(0);
+    }
+
+    /** The compiler row, showing what a manifest asks for. */
+    private void showCompiler(RootPipelineManifest m) {
+        level.setSelectedItem("-" + m.effectiveLevel());
+        standard.setSelectedItem("C++" + m.standard);
+        warnings.setSelected(m.warnings);
+        debug.setSelected(m.debug);
+        fastMath.setSelected(m.fastMath);
+    }
+
+    /** What the compiler row says, into a manifest. */
+    private void readCompiler(RootPipelineManifest m) {
+        final String chosen = String.valueOf(level.getSelectedItem()).replace("-", "");
+        m.optimize = !chosen.equals("O0");
+        m.level = m.optimize ? chosen : "O3";
+        final String std = String.valueOf(standard.getSelectedItem()).replace("C++", "");
+        m.standard = std.equals("17") ? 17 : std.equals("23") ? 23 : 20;
+        m.warnings = warnings.isSelected();
+        m.debug = debug.isSelected();
+        m.fastMath = fastMath.isSelected();
+    }
+
+    /**
+     * Says what fast math costs, the moment it is chosen: the compiler may
+     * then take for granted that no value is NaN, and a check such as
+     * std::isnan can be compiled into "never" -- which is what the health
+     * check and the probes count on.
+     */
+    private void fastMathWarning() {
+        if (filling) {
+            return;
+        }
+        if (fastMath.isSelected() || "-Ofast".equals(level.getSelectedItem())) {
+            say("Fast math may compile isnan() into \"never\": the health check and :root pipeline check"
+                + " can no longer see a NaN in this pipeline.", palette.getLogWarnText());
+        }
+    }
+
+    /** The build settings a start brings: a copy's own, or stateless switched off. */
+    private void applyOptions(RootPipelineManifest options) {
+        filling = true;
+        threadSafe.setSelected(options.threadSafe);
+        openMp.setSelected(options.openMp);
+        showCompiler(options);
+        showRuntime(options);
+        nativeArch.setSelected(options.nativeArch);
+        showInHelp.setSelected(options.showInHelp);
+        extraFlags.setText(options.extraFlags == null ? "" : options.extraFlags);
+        if (!options.global && projectLayer.isEnabled()) {
+            projectLayer.setSelected(true);
+        } else {
+            globalLayer.setSelected(true);
+        }
+        if (options.description != null && !options.description.isBlank()) {
+            descriptionField.setText(options.description);
+        }
+        filling = false;
     }
 
     /** The recipe the form starts from, or null once a pipeline exists on disk. */
     private RootPipelineRecipes.Recipe chosenRecipe() {
-        return current != null ? null
-            : (RootPipelineRecipes.Recipe) recipeBox.getSelectedItem();
+        return current != null ? null : applied;
+    }
+
+    /** The search, the catalog, the other ways in, and what the name suggests. */
+    private JComponent startRow() {
+        recipeFind.setToolTipText("<html>Narrows the catalog. Physicists' shorthand works:<br>"
+            + "dr, dphi, mt, mjj, ht, met, iso, z, pval, eff, bw, cb, pu, sf, xsec, alphas, chi2,<br>"
+            + "and so do typos. Down and Up walk the results, Enter takes one, Escape clears.</html>");
+        recipeFind.putClientProperty("JTextField.placeholderText", "find…");
+        fromFormulaButton.setToolTipText("<html>One line of math, read as it is typed: its value, or a filter<br>"
+            + "when it compares -- or its uncertainty by linear propagation, or its derivative,<br>"
+            + "both exact and checked against finite differences.</html>");
+        fromCopyButton.setToolTipText("<html>A pipeline already written, under its next free version name,<br>"
+            + "with its build options and what surrounds its entry point.</html>");
+        fromMacroButton.setToolTipText("<html>One function of a ROOT macro, with the helpers, constants and<br>"
+            + "includes it uses. A function that keeps state is not declared stateless.</html>");
+        for (JButton one : new JButton[]{fromFormulaButton, fromCopyButton, fromMacroButton}) {
+            one.setFocusPainted(false);
+            one.setMargin(new Insets(2, 6, 2, 6));
+        }
+        suggestion.setVisible(false);
+        suggestion.setFocusPainted(false);
+        suggestion.setBorderPainted(false);
+        suggestion.setContentAreaFilled(false);
+        suggestion.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        suggestion.setForeground(palette.getAccent());
+        suggestion.setMargin(new Insets(0, 4, 0, 4));
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        buttons.setBackground(palette.getTerminalBackground());
+        buttons.add(fromFormulaButton);
+        buttons.add(fromCopyButton);
+        buttons.add(fromMacroButton);
+        buttons.add(suggestion);
+
+        // Each control at its own height, the search field centered beside the
+        // taller list, and each line as tall as what it holds: two equal grid
+        // rows stretched the field to the list's height and left a band under
+        // the buttons.
+        JPanel both = new JPanel(new GridBagLayout());
+        both.setBackground(palette.getTerminalBackground());
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0; c.gridy = 0; c.weightx = 0;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.insets = new Insets(0, 0, 0, 6);
+        both.add(recipeFind, c);
+        c.gridx = 1; c.weightx = 1;
+        c.insets = new Insets(0, 0, 0, 0);
+        both.add(recipeBox, c);
+        c.gridx = 0; c.gridy = 1; c.gridwidth = 2;
+        c.fill = GridBagConstraints.NONE; c.anchor = GridBagConstraints.WEST;
+        c.insets = new Insets(4, 0, 0, 0);
+        both.add(buttons, c);
+        return both;
+    }
+
+    /** Shows the catalog narrowed to what the search field says, best first. */
+    private void filterRecipes() {
+        final String query = recipeFind.getText();
+        // blank() empties the field while it is itself filling the form, so
+        // the flag is put back as it was rather than simply cleared.
+        final boolean was = filling;
+        filling = true;
+        recipeModel.removeAllElements();
+        // What the form was filled from stays at the top while the catalog is searched.
+        final boolean keepApplied = applied != null && applied.family().written();
+        if (keepApplied) {
+            recipeModel.addElement(applied);
+        }
+        for (RootPipelineStarts.Hit hit : RootPipelineStarts.search(query, 0)) {
+            recipeModel.addElement(hit.recipe());
+        }
+        if (query.isBlank() && applied != null && recipeModel.getIndexOf(applied) >= 0) {
+            recipeBox.setSelectedItem(applied);
+        } else {
+            recipeBox.setSelectedIndex(-1);
+        }
+        filling = was;
+        if (was) {
+            return;
+        }
+        if (query.isBlank()) {
+            recipeBox.hidePopup();
+            return;
+        }
+        final int found = recipeModel.getSize() - (keepApplied ? 1 : 0);
+        say(found == 0
+            ? "Nothing in the catalog answers \"" + query.trim() + "\"."
+            : found + (found == 1 ? " recipe answers" : " recipes answer") + " \"" + query.trim()
+              + "\". Down and Up to choose, Enter to take it.", false);
+        if (found > 0 && recipeBox.isShowing() && current == null && recipeFind.hasFocus()) {
+            // Hidden and shown again, so the list takes the size of what it now holds.
+            recipeBox.hidePopup();
+            recipeBox.showPopup();
+        }
+    }
+
+    /** Enter in the search field: the result chosen with the arrows, or else the best one. */
+    private void takeBestMatch() {
+        if (current != null || recipeModel.getSize() == 0) {
+            return;
+        }
+        recipeBox.hidePopup();
+        RootPipelineRecipes.Recipe chosen = (RootPipelineRecipes.Recipe) recipeBox.getSelectedItem();
+        if (chosen == null) {
+            final boolean skip = recipeModel.getSize() > 1 && recipeModel.getElementAt(0) == applied
+                && applied.family().written();
+            chosen = recipeModel.getElementAt(skip ? 1 : 0);
+        }
+        final boolean was = filling;
+        filling = true;
+        recipeBox.setSelectedItem(chosen);
+        filling = was;
+        apply(chosen, java.util.List.of());
+    }
+
+    /** Down and Up in the search field walk the results without applying them. */
+    private void moveRecipe(int step) {
+        final int size = recipeModel.getSize();
+        if (current != null || size == 0) {
+            return;
+        }
+        final int at = recipeBox.getSelectedIndex();
+        final int next = at < 0 ? (step > 0 ? 0 : size - 1) : Math.max(0, Math.min(size - 1, at + step));
+        final boolean was = filling;
+        filling = true;
+        recipeBox.setSelectedIndex(next);
+        filling = was;
+        if (!recipeBox.isPopupVisible() && recipeBox.isShowing()) {
+            recipeBox.showPopup();
+        }
+    }
+
+    /** Escape: the search is cleared, and a second Escape closes the list. */
+    private void clearSearch() {
+        if (!recipeFind.getText().isEmpty()) {
+            recipeFind.setText("");
+        } else {
+            recipeBox.hidePopup();
+        }
+    }
+
+    /** Offers the recipe the pipeline's name points to, while the form is still new. */
+    private void updateSuggestion() {
+        // Offered only while the form starts from nothing: once a start was
+        // chosen, a suggestion would second-guess it.
+        final boolean fromNothing = applied == null || applied.body() == null;
+        suggested = current != null || !fromNothing ? null : RootPipelineStarts.suggest(nameField.getText());
+        suggestion.setVisible(suggested != null);
+        if (suggested != null) {
+            suggestion.setText("<html><u>→ " + suggested.title() + "?</u></html>");
+            suggestion.setToolTipText("The name looks like this recipe. Click to start from it: "
+                + suggested.about());
+        }
+    }
+
+    /**
+     * The Formula button: a line of math, read as it is typed.
+     *
+     * Every keystroke reads the formula again, so a mistake is shown with a
+     * caret under it before anything is compiled, and a correct one shows its
+     * inputs, its kind, where it can stop being a number, and what it gives at
+     * typical values. The same formula can start its uncertainty or its
+     * derivative instead of its value.
+     */
+    private void askFormula() {
+        final JDialog dialog = new JDialog(this, "Start from a formula", true);
+        final JTextField field = new JTextField(52);
+        field.setFont(style.code(14));
+        // Sphere's field, whose border turns to the warning color while what it holds is wrong.
+        style.checked(field);
+
+        final JRadioButton asValue = new JRadioButton("its value (a filter when it compares)", true);
+        final JRadioButton asError = new JRadioButton("its uncertainty, by linear propagation");
+        final JRadioButton asSlope = new JRadioButton("its derivative in");
+        final ButtonGroup modes = new ButtonGroup();
+        final JComboBox<String> slopeOf = new JComboBox<>();
+        // A fixed width: filled as the formula is typed, the box must not grow
+        // past the dialog's edge and wrap out of sight.
+        slopeOf.setPrototypeDisplayValue("dphi_lead_err");
+        final JPanel modeRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        modeRow.setBackground(palette.getTerminalBackground());
+        for (JRadioButton one : new JRadioButton[]{asValue, asError, asSlope}) {
+            modes.add(one);
+            one.setBackground(palette.getTerminalBackground());
+            style.toggle(one);
+            modeRow.add(one);
+        }
+        modeRow.add(slopeOf);
+
+        // The formula as a curve, drawn as it is typed: computed here, in Java,
+        // so it needs neither a compiler nor ROOT.
+        final RootPipelinePlot picture = new RootPipelinePlot(palette);
+        picture.setFont(style.font());
+        picture.setPreferredSize(new Dimension(680, 230));
+        final JComboBox<String> against = new JComboBox<>();
+        against.setPrototypeDisplayValue("dphi_lead_err");
+        against.setToolTipText("The input the curve walks, across the range its name suggests; "
+            + "the others stay at typical values.");
+        final JPanel pictureRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        pictureRow.setBackground(palette.getTerminalBackground());
+        final JLabel drawnAgainst = label("drawn against");
+        drawnAgainst.setBorder(new EmptyBorder(0, 0, 0, 4));
+        pictureRow.add(drawnAgainst);
+        pictureRow.add(against);
+        final JPanel pictureBox = new JPanel(new BorderLayout(0, 4));
+        pictureBox.setBackground(palette.getTerminalBackground());
+        pictureBox.setBorder(new EmptyBorder(0, 12, 8, 12));
+        pictureBox.add(pictureRow, BorderLayout.NORTH);
+        pictureBox.add(picture, BorderLayout.CENTER);
+
+        // Formulas a physicist types every week, one click away: the fastest
+        // way to see what the dialog does is to see it do it.
+        final JPanel examples = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        examples.setBackground(palette.getTerminalBackground());
+        final JLabel tryOne = label("try");
+        tryOne.setBorder(new EmptyBorder(0, 0, 0, 2));
+        examples.add(tryOne);
+        for (String[] one : new String[][]{
+                {"transverse mass", "sqrt(2*pt*met*(1-cos(dphi)))"},
+                {"ΔR", "sqrt((eta1-eta2)^2 + dphi^2)"},
+                {"invariant mass", "sqrt(2*pt1*pt2*(cosh(eta1-eta2)-cos(phi1-phi2)))"},
+                {"turn-on", "plateau/(1+exp(-(pt-threshold)/width))"},
+                {"Breit-Wigner", "1/((m*m-mz*mz)^2 + mz*mz*width*width)"},
+                {"Asimov Z", "sqrt(2*((s+b)*log(1+s/b)-s))"},
+                {"central jet", "pt > 30 and abs(eta) < 2.5"}}) {
+            final JButton chip = new JButton(one[0]);
+            style.button(chip);
+            chip.setToolTipText(one[1]);
+            chip.addActionListener(e -> {
+                field.setText(one[1]);
+                field.requestFocusInWindow();
+            });
+            examples.add(chip);
+        }
+
+        final JTextArea live = new JTextArea(8, 80);
+        live.setEditable(false);
+        live.setLineWrap(true);
+        live.setWrapStyleWord(true);
+        live.setFont(style.code(12));
+        live.setBackground(palette.getTerminalBackground());
+        live.setBorder(new EmptyBorder(6, 8, 6, 8));
+
+        final JButton take = new JButton("Start from it");
+        final JButton cancel = new JButton("Cancel");
+        style.button(take);
+        style.button(cancel);
+        style.combo(slopeOf);
+        style.combo(against);
+        final RootPipelineStarts.Start[] made = {null};
+        final boolean[] busy = {false};
+        final String hint = "Type a formula: its names become the inputs, in the order they appear.\n\n"
+            + "  sqrt(2*pt*met*(1-cos(dphi)))        a value\n"
+            + "  pt > 25 && abs(eta) < 2.4           a filter\n"
+            + "  0 < x < 1,  x^2,  x**2,  1/2,  %    read as mathematics reads them\n"
+            + "  TMath::Pi(),  TMath::Gaus(x,0,1)    ROOT's own functions\n\n"
+            + "Nothing is compiled until you start from it.";
+
+        final Runnable read = () -> {
+            if (busy[0]) {
+                return;
+            }
+            busy[0] = true;
+            try {
+                final String text = field.getText();
+                final java.util.List<String> inputs = RootPipelineStarts.formulaInputs(text);
+                final java.util.List<String> offered = new java.util.ArrayList<>();
+                for (int i = 0; i < slopeOf.getItemCount(); i++) {
+                    offered.add(slopeOf.getItemAt(i));
+                }
+                if (!inputs.isEmpty() && !offered.equals(inputs)) {
+                    final Object had = slopeOf.getSelectedItem();
+                    slopeOf.removeAllItems();
+                    for (String one : inputs) {
+                        slopeOf.addItem(one);
+                    }
+                    if (had != null && inputs.contains(had)) {
+                        slopeOf.setSelectedItem(had);
+                    }
+                    final Object drawn = against.getSelectedItem();
+                    against.removeAllItems();
+                    for (String one : inputs) {
+                        against.addItem(one);
+                    }
+                    if (drawn != null && inputs.contains(drawn)) {
+                        against.setSelectedItem(drawn);
+                    }
+                }
+                slopeOf.setEnabled(asSlope.isSelected());
+                against.setEnabled(!asError.isSelected());
+                if (text.isBlank()) {
+                    made[0] = null;
+                    take.setEnabled(false);
+                    style.wrong(field, false);
+                    live.setForeground(palette.getTextSecondary());
+                    live.setText(hint);
+                    picture.showMessage("Its curve appears here as you type: one input across the range"
+                        + " its name suggests,\nthe others at typical values, and in red where it is not a number.");
+                    return;
+                }
+                final RootPipelineStarts.Start s = asError.isSelected()
+                    ? RootPipelineStarts.fromUncertainty(text)
+                    : asSlope.isSelected()
+                      ? RootPipelineStarts.fromDerivative(text, (String) slopeOf.getSelectedItem())
+                      : RootPipelineStarts.fromFormula(text);
+                made[0] = s.ok() ? s : null;
+                take.setEnabled(s.ok());
+                style.wrong(field, !s.ok());
+                if (s.ok()) {
+                    final RootPipelineManifest preview = new RootPipelineManifest();
+                    preview.name = nameField.getText().isBlank() ? "pipeline" : nameField.getText().trim();
+                    RootPipelineRecipes.applyTo(s.recipe(), preview);
+                    final StringBuilder told = new StringBuilder(s.recipe().kind().token)
+                        .append(":  ").append(preview.signature()).append("\n\n");
+                    for (String one : s.notes()) {
+                        told.append("  ").append(one).append('\n');
+                    }
+                    live.setForeground(palette.getTerminalForeground());
+                    live.setText(told.toString());
+                    drawFormula(picture, text, asError.isSelected(),
+                        asSlope.isSelected() ? (String) slopeOf.getSelectedItem() : null,
+                        (String) against.getSelectedItem());
+                } else {
+                    // The last picture stays while the formula is half typed.
+                    live.setForeground(palette.getLogWarnText());
+                    live.setText(s.error());
+                }
+                live.setCaretPosition(0);
+            } finally {
+                busy[0] = false;
+            }
+        };
+        field.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { read.run(); }
+            @Override public void removeUpdate(DocumentEvent e) { read.run(); }
+            @Override public void changedUpdate(DocumentEvent e) { read.run(); }
+        });
+        for (JRadioButton one : new JRadioButton[]{asValue, asError, asSlope}) {
+            one.addActionListener(e -> read.run());
+        }
+        slopeOf.addActionListener(e -> read.run());
+        against.addActionListener(e -> read.run());
+        take.addActionListener(e -> {
+            if (made[0] != null) {
+                final RootPipelineStarts.Start chosen = made[0];
+                dialog.dispose();
+                start(chosen);
+            }
+        });
+        cancel.addActionListener(e -> dialog.dispose());
+        dialog.getRootPane().setDefaultButton(take);
+        dialog.getRootPane().registerKeyboardAction(e -> dialog.dispose(),
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+            JComponent.WHEN_IN_FOCUSED_WINDOW);
+
+        final JPanel top = new JPanel(new BorderLayout(0, 8));
+        top.setBackground(palette.getTerminalBackground());
+        top.setBorder(new EmptyBorder(12, 12, 8, 12));
+        top.add(field, BorderLayout.NORTH);
+        top.add(examples, BorderLayout.CENTER);
+        top.add(modeRow, BorderLayout.SOUTH);
+        final JScrollPane scroll = new JScrollPane(live);
+        scroll.setBorder(BorderFactory.createCompoundBorder(new EmptyBorder(0, 12, 0, 12),
+            BorderFactory.createLineBorder(palette.getBorder())));
+        scroll.getViewport().setBackground(palette.getTerminalBackground());
+        final JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 8));
+        buttons.setBackground(palette.getTerminalBackground());
+        buttons.add(cancel);
+        buttons.add(take);
+
+        final JPanel middle = new JPanel(new BorderLayout());
+        middle.setBackground(palette.getTerminalBackground());
+        middle.add(pictureBox, BorderLayout.NORTH);
+        middle.add(scroll, BorderLayout.CENTER);
+
+        dialog.getContentPane().setBackground(palette.getTerminalBackground());
+        dialog.setLayout(new BorderLayout());
+        dialog.add(top, BorderLayout.NORTH);
+        dialog.add(middle, BorderLayout.CENTER);
+        dialog.add(buttons, BorderLayout.SOUTH);
+        read.run();
+        dialog.pack();
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+    /**
+     * The picture under a formula: its curve along one input, the others at
+     * typical values; with its derivative in front when that is what is being
+     * made; or, for an uncertainty, the error budget at typical values. All of
+     * it is computed by Sphere's own evaluator, so it is there before anything
+     * is compiled, and on a machine with no ROOT at all.
+     */
+    private void drawFormula(RootPipelinePlot picture, String text, boolean error,
+                             String slope, String against) {
+        final RootFormula.Parsed parsed;
+        try {
+            parsed = RootFormula.parse(text);
+        } catch (RootFormula.Problem unreadable) {
+            return;
+        }
+        final java.util.List<String> inputs = parsed.inputs();
+        try {
+            if (inputs.isEmpty()) {
+                picture.showMessage("A constant: " + RootFormula.shortNumber(
+                    RootFormula.eval(parsed.root(), java.util.Map.of())));
+                return;
+            }
+            final java.util.Map<String, Double> typical = RootFormula.typical(inputs);
+            if (error) {
+                final java.util.List<RootFormula.Share> shares =
+                    RootFormula.budget(parsed.root(), inputs, typical, 0.05);
+                double variance = 0;
+                final java.util.List<RootPipelinePlot.Bar> bars = new java.util.ArrayList<>();
+                for (RootFormula.Share one : shares) {
+                    variance += one.contribution() * one.contribution();
+                    bars.add(new RootPipelinePlot.Bar(one.input(), one.contribution(), one.fraction()));
+                }
+                picture.showBars("Error budget at typical values, every input known to 5%:   "
+                    + RootFormula.shortNumber(RootFormula.eval(parsed.root(), typical))
+                    + " ± " + RootFormula.shortNumber(Math.sqrt(variance))
+                    + "   (share of the variance)", bars);
+                return;
+            }
+            final String x = against != null && inputs.contains(against) ? against
+                : slope != null && inputs.contains(slope) ? slope : inputs.get(0);
+            final double[] lives = RootFormula.range(x);
+            final double at = typical.get(x);
+            final double[] xs = RootFormula.grid(Math.min(lives[0], at), Math.max(lives[1], at), 241);
+            final double[] values = RootFormula.sample(parsed.root(), x, xs, typical);
+            final String held = inputs.size() > 1 ? ", the others at typical values" : "";
+            final String mark = x + " = " + RootFormula.shortNumber(at);
+            if (slope != null && inputs.contains(slope)) {
+                final RootFormula.Node derivative = RootFormula.derivative(parsed.root(), slope);
+                picture.setExact(along(derivative, x, typical));
+                final double[] slopes = RootFormula.sample(derivative, x, xs, typical);
+                picture.showCurves("d/d" + slope + " along " + x + held, x, xs,
+                    new RootPipelinePlot.Series("d/d" + slope, slopes, palette.getAccent()),
+                    new RootPipelinePlot.Series("the formula", values, palette.getTextSecondary()),
+                    at, exactly(derivative, typical), mark);
+            } else {
+                picture.setExact(along(parsed.root(), x, typical));
+                picture.showCurves((parsed.condition() ? "Kept (1) or not (0)" : "The formula")
+                        + " along " + x + held, x, xs,
+                    new RootPipelinePlot.Series(parsed.condition() ? "kept" : "value", values,
+                        palette.getAccent()),
+                    null, at, exactly(parsed.root(), typical), mark);
+            }
+        } catch (RootFormula.NotEvaluable cannot) {
+            picture.showMessage("No picture: " + cannot.getMessage()
+                + "\nOnly the compiled pipeline can say what it gives.");
+        } catch (RootFormula.Problem noSlope) {
+            picture.showMessage("No picture of the derivative: " + noSlope.getMessage());
+        }
+    }
+
+    /** f along x, the others held: what the pointer reads off a curve, exactly. */
+    private static java.util.function.DoubleUnaryOperator along(RootFormula.Node f, String x,
+                                                                java.util.Map<String, Double> held) {
+        final java.util.Map<String, Double> at = new java.util.HashMap<>(held);
+        return value -> {
+            at.put(x, value);
+            return exactly(f, at);
+        };
+    }
+
+    /** f at a point, or NaN when it is not a number there. */
+    private static double exactly(RootFormula.Node f, java.util.Map<String, Double> at) {
+        try {
+            return RootFormula.eval(f, at);
+        } catch (RootFormula.NotEvaluable cannot) {
+            return Double.NaN;
+        }
+    }
+
+    /** The Copy button. */
+    private void askCopy() {
+        final java.util.List<Path> sources = RootPipelineStarts.copyable(activeProject);
+        if (sources.isEmpty()) {
+            say("No pipeline is written yet, so there is nothing to copy.", false);
+            return;
+        }
+        // Each line says what the pipeline is and where it lives, so a project's
+        // pipeline and a global one of the same name cannot be mistaken.
+        final Path global = RootUserPipeline.globalRoot();
+        final String[] labels = new String[sources.size()];
+        int initial = 0;
+        final Entry selected = pipelines.getSelectedValue();
+        for (int i = 0; i < labels.length; i++) {
+            final RootPipelineManifest m = RootPipelineManifest.fromSource(sources.get(i));
+            final String where = sources.get(i).toAbsolutePath().normalize().startsWith(global)
+                ? "global" : "project";
+            labels[i] = (m == null ? sources.get(i).getFileName().toString() : m.signature())
+                + "   -   " + where;
+            if (selected != null && selected.source != null
+                    && selected.source.toAbsolutePath().normalize()
+                           .equals(sources.get(i).toAbsolutePath().normalize())) {
+                initial = i;
+            }
+        }
+        final Object picked = JOptionPane.showInputDialog(this, "Which pipeline?",
+            "Start from a copy", JOptionPane.PLAIN_MESSAGE, null, labels, labels[initial]);
+        if (picked == null) {
+            return;
+        }
+        for (int i = 0; i < labels.length; i++) {
+            if (labels[i].equals(picked)) {
+                start(RootPipelineStarts.fromPipeline(sources.get(i), activeProject));
+                return;
+            }
+        }
+    }
+
+    /** The Macro button: a file, then one of its functions. */
+    private void askMacro() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Which macro?");
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+            "ROOT macros and C++", "C", "c", "cc", "cxx", "cpp", "h", "hh", "hpp", "hxx"));
+        final Path scripts = (activeProject != null && !activeProject.isBlank()
+            ? RootUserPipeline.projectRoot(activeProject) : RootUserPipeline.globalRoot())
+            .resolve(RootUserPipeline.SCRIPTS_DIR);
+        if (Files.isDirectory(scripts)) {
+            chooser.setCurrentDirectory(scripts.toFile());
+        }
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        final Path file = chooser.getSelectedFile().toPath();
+        final RootPipelineStarts.Macro macro = RootPipelineStarts.readMacro(file);
+        if (macro == null) {
+            say("Cannot read " + file.getFileName() + ".", true);
+            return;
+        }
+        final java.util.List<RootPipelineStarts.Function> functions = macro.functions();
+        if (functions.isEmpty()) {
+            say(macro.origin() + " defines no function at file scope.", true);
+            return;
+        }
+        RootPipelineStarts.Function chosen = functions.get(0);
+        if (functions.size() > 1) {
+            // Each function says what it would become, or why it cannot, so the
+            // choice is made knowing; the first that can is offered first.
+            final String[] lines = new String[functions.size()];
+            int first = -1;
+            for (int i = 0; i < lines.length; i++) {
+                lines[i] = RootPipelineStarts.verdict(macro, functions.get(i));
+                if (first < 0 && RootPipelineStarts.fromFunction(macro, functions.get(i), null).ok()) {
+                    first = i;
+                }
+            }
+            final Object picked = JOptionPane.showInputDialog(this,
+                "Which function of " + macro.origin() + "?", "Start from a macro",
+                JOptionPane.PLAIN_MESSAGE, null, lines, lines[Math.max(first, 0)]);
+            if (picked == null) {
+                return;
+            }
+            for (int i = 0; i < lines.length; i++) {
+                if (lines[i].equals(picked)) {
+                    chosen = functions.get(i);
+                    break;
+                }
+            }
+        }
+        start(RootPipelineStarts.fromFunction(macro, chosen, activeProject));
     }
 
     private JLabel label(String text) {
@@ -1576,14 +2951,62 @@ public final class RootPipelineWindow extends JFrame {
         descriptionField.getDocument().addDocumentListener(watcher);
         extraFlags.getDocument().addDocumentListener(watcher);
         kindBox.addActionListener(e -> regenerate());
-        for (JCheckBox box : new JCheckBox[]{threadSafe, openMp,
-                                             optimize, nativeArch, generateTest, showInHelp}) {
+        for (JCheckBox box : new JCheckBox[]{threadSafe, openMp, nativeArch, generateTest, showInHelp,
+                                             warnings, debug}) {
             box.addActionListener(e -> regenerate());
         }
+        level.addActionListener(e -> {
+            regenerate();
+            fastMathWarning();
+        });
+        standard.addActionListener(e -> regenerate());
+        fastMath.addActionListener(e -> {
+            regenerate();
+            fastMathWarning();
+        });
         for (JCheckBox box : moduleBoxes.values()) {
             box.addActionListener(e -> regenerate());
         }
+        for (JCheckBox box : new JCheckBox[]{perObject, uncertainty, monitor}) {
+            box.addActionListener(e -> regenerate());
+        }
+        extrasAction.addActionListener(e -> takeExtrasSuggestion());
         recipeBox.addActionListener(e -> chooseRecipe());
+        recipeFind.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { filterRecipes(); }
+            @Override public void removeUpdate(DocumentEvent e) { filterRecipes(); }
+            @Override public void changedUpdate(DocumentEvent e) { filterRecipes(); }
+        });
+        recipeFind.addActionListener(e -> takeBestMatch());
+        // The arrows walk the results from the search field itself, so finding
+        // a recipe never needs the mouse.
+        final InputMap keys = recipeFind.getInputMap(JComponent.WHEN_FOCUSED);
+        final ActionMap acts = recipeFind.getActionMap();
+        keys.put(KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DOWN, 0), "sphere-next-recipe");
+        keys.put(KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_UP, 0), "sphere-previous-recipe");
+        keys.put(KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), "sphere-clear-search");
+        acts.put("sphere-next-recipe", new AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) { moveRecipe(1); }
+        });
+        acts.put("sphere-previous-recipe", new AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) { moveRecipe(-1); }
+        });
+        acts.put("sphere-clear-search", new AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) { clearSearch(); }
+        });
+        nameField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { updateSuggestion(); }
+            @Override public void removeUpdate(DocumentEvent e) { updateSuggestion(); }
+            @Override public void changedUpdate(DocumentEvent e) { updateSuggestion(); }
+        });
+        suggestion.addActionListener(e -> {
+            if (suggested != null) {
+                start(RootPipelineStarts.Start.of(suggested));
+            }
+        });
+        fromFormulaButton.addActionListener(e -> askFormula());
+        fromCopyButton.addActionListener(e -> askCopy());
+        fromMacroButton.addActionListener(e -> askMacro());
         tryButton.addActionListener(e -> callIt());
         timeButton.addActionListener(e -> timeIt());
         globalLayer.addActionListener(e -> regenerate());
@@ -1641,19 +3064,29 @@ public final class RootPipelineWindow extends JFrame {
         current = null;
         pipelines.clearSelection();
         nameField.setText("");
+        namedByStart = null;
         descriptionField.setText("");
         kindBox.setSelectedItem(RootPipelineManifest.Kind.TRANSFORM);
         globalLayer.setSelected(true);
         inputModel.setRowCount(0);
         inputModel.addRow(new Object[]{"pt", "double"});
         setModules(java.util.List.of(RootPipelineModules.MATH));
+        // The catalog comes back whole, without the formulas and copies a
+        // previous start put at its top.
+        recipeFind.setText("");
+        recipeModel.removeAllElements();
+        for (RootPipelineRecipes.Recipe one : RootPipelineRecipes.all()) {
+            recipeModel.addElement(one);
+        }
         recipeBox.setSelectedIndex(0);
-        recipeBox.setEnabled(true);
+        applied = recipeModel.getElementAt(0);
+        setStartEnabled(true);
         recipeBox.setToolTipText("A quantity that is already written correctly. "
                                  + "It brings its own inputs and its own ROOT modules.");
         threadSafe.setSelected(true);
         openMp.setSelected(false);
-        optimize.setSelected(true);
+        showCompiler(new RootPipelineManifest());
+        showRuntime(new RootPipelineManifest());
         nativeArch.setSelected(false);
         generateTest.setSelected(false);
         showInHelp.setSelected(true);
@@ -1696,15 +3129,21 @@ public final class RootPipelineWindow extends JFrame {
         threadSafe.setSelected(manifest.threadSafe);
         setModules(manifest.modules);
         openMp.setSelected(manifest.openMp);
-        optimize.setSelected(manifest.optimize);
+        showCompiler(manifest);
+        showRuntime(manifest);
         nativeArch.setSelected(manifest.nativeArch);
         showInHelp.setSelected(manifest.showInHelp);
-        recipeBox.setEnabled(false);
+        setStartEnabled(false);
         recipeBox.setToolTipText("The file already exists. Its body is yours from now on.");
         filling = false;
+        updateSuggestion();
 
-        showSource(read(entry.source));
-        commandLine.setText("added flags:  " + String.join(" ", manifest.flags()));
+        final String text = read(entry.source);
+        showSource(text);
+        fitExtras(manifest, text);
+        commandLine.setText("added flags:  " + String.join(" ", manifest.flags()) + extrasLine(manifest));
+        // The Inspect tab walks this pipeline's inputs, not the last form's.
+        fillScanInputs(manifest);
         say(entry.stale
             ? entry.manifest.name + " needs building: the source is newer than the library."
             : entry.manifest.name + " is up to date.",
@@ -1718,13 +3157,20 @@ public final class RootPipelineWindow extends JFrame {
             return;
         }
         RootPipelineManifest manifest = collect();
+        // An extra that no longer applies is unticked first, so the preview
+        // never carries it; then the form is read again.
+        fitExtras(manifest, null);
+        manifest = collect();
         // An open pipeline shows what Save would write: the form's header and
         // declaration around the body on disk. Showing the file as it stands
         // made every field look as if it did nothing until Save was pressed.
-        showSource(current == null
+        final String preview = current == null
             ? RootPipelineTemplates.source(manifest, chosenRecipe())
-            : RootPipelineTemplates.reheader(read(current.source), manifest));
-        commandLine.setText("added flags:  " + String.join(" ", manifest.flags()));
+            : RootPipelineTemplates.reheader(read(current.source), manifest);
+        showSource(preview);
+        // What the form suggests is read in that same text, saved or not.
+        fitExtras(manifest, preview);
+        commandLine.setText("added flags:  " + String.join(" ", manifest.flags()) + extrasLine(manifest));
         fillScanInputs(manifest);
         validateForm();
     }
@@ -1732,13 +3178,44 @@ public final class RootPipelineWindow extends JFrame {
     /** Keeps the list of inputs the scan offers in step with the form. */
     private void fillScanInputs(RootPipelineManifest manifest) {
         final Object had = scanInput.getSelectedItem();
-        scanInput.removeAllItems();
-        for (RootPipelineManifest.Input input : manifest.inputs) {
-            scanInput.addItem(input.name());
+        refillingScan = true;
+        try {
+            scanInput.removeAllItems();
+            for (RootPipelineManifest.Input input : manifest.inputs) {
+                scanInput.addItem(input.name());
+            }
+            if (had != null) {
+                scanInput.setSelectedItem(had);
+            }
+        } finally {
+            refillingScan = false;
         }
-        if (had != null) {
-            scanInput.setSelectedItem(had);
+        walkedChanged();
+    }
+
+    /** True while the list is refilled, which is not the user choosing an input. */
+    private boolean refillingScan;
+
+    /** The input the range fields were last set for. */
+    private String walked;
+
+    /**
+     * A newly chosen input to walk brings the range its name suggests: eta
+     * from -5 to 5, an angle from -pi to pi, a mass from 0 to 1000. A range
+     * typed by hand stays until another input is chosen.
+     */
+    private void walkedChanged() {
+        if (refillingScan) {
+            return;
         }
+        final Object picked = scanInput.getSelectedItem();
+        if (picked == null || picked.toString().equals(walked)) {
+            return;
+        }
+        walked = picked.toString();
+        final double[] lives = RootFormula.range(walked);
+        scanLow.setText(RootFormula.shortNumber(lives[0]));
+        scanHigh.setText(RootFormula.shortNumber(lives[1]));
     }
 
     /** What the form says, as a manifest. */
@@ -1755,7 +3232,8 @@ public final class RootPipelineWindow extends JFrame {
                 manifest.modules.add(entry.getKey());
             }
         }
-        manifest.optimize = optimize.isSelected();
+        readCompiler(manifest);
+        readRuntime(manifest);
         manifest.nativeArch = nativeArch.isSelected();
         manifest.generateTest = generateTest.isSelected();
         manifest.showInHelp = showInHelp.isSelected();
@@ -1790,7 +3268,10 @@ public final class RootPipelineWindow extends JFrame {
         buildButton.setEnabled(problem == null);
         editButton.setEnabled(problem == null);
         loadButton.setEnabled(current != null && Files.isRegularFile(current.library));
-        if (problem != null) {
+        if (problem != null && manifest.name.isBlank()) {
+            // Not an error yet: the next step of a form just opened.
+            say("Name it to save and build it; start from a recipe, a formula, a copy or a macro.", false);
+        } else if (problem != null) {
             say(problem, true);
         } else if (current == null) {
             say("Ready: " + manifest.signature(), false);
@@ -1993,37 +3474,47 @@ public final class RootPipelineWindow extends JFrame {
         }
         working(true, "Loading " + entry.library.getFileName() + " into the engine...");
 
-        new SwingWorker<String, Void>() {
+        new SwingWorker<RootUserPipeline.Loaded, Void>() {
             @Override
-            protected String doInBackground() {
-                final String answer = engine.executeClingAwait(
-                    "gSystem->Load(\"" + entry.library.toAbsolutePath().toString()
-                        .replace("\\", "/") + "\")", 20_000L);
-                if (answer != null && !answer.startsWith("ERROR")) {
-                    // Reading the manifest back is what makes it a pipeline
-                    // rather than one more anonymous library in the process.
-                    RootUserPipeline.refresh(engine, layerOf(entry), entry.library);
-                }
-                return answer;
+            protected RootUserPipeline.Loaded doInBackground() {
+                // The load, the manifest read back and the declaration that
+                // lets the engine call it by name, as at startup.
+                return RootUserPipeline.loadOne(engine, layerOf(entry), entry.library);
             }
 
             @Override
             protected void done() {
                 working(false, null);
-                String answer;
+                // The dot beside the name says where it stands now.
+                pipelines.repaint();
+                RootUserPipeline.Loaded loaded;
                 try {
-                    answer = get();
+                    loaded = get();
                 } catch (Exception failure) {
                     say("The engine did not answer: " + failure.getMessage(), true);
                     return;
                 }
-                if (answer == null || answer.startsWith("ERROR")) {
-                    say("The engine refused the library: "
-                        + (answer == null ? "no answer" : answer), true);
+                final String name = entry.manifest.name;
+                if (!loaded.ok()) {
+                    say("The engine refused the library: " + loaded.problem(), true);
                     return;
                 }
-                say(entry.manifest.name + " is loaded. Try :root pipeline list.", false);
-                AppLogger.success("Pipeline " + entry.manifest.name + " loaded into the engine.");
+                if (loaded.stale()) {
+                    // "Loaded" would be a lie: the engine runs the build it read first.
+                    say(name + " was rebuilt after the engine loaded it, and the engine still runs that"
+                        + " first build. " + RootUserPipeline.RESTART, true);
+                    AppLogger.warn("Pipeline " + name + ": the engine still runs its earlier build. "
+                        + RootUserPipeline.RESTART);
+                    return;
+                }
+                if (loaded.shadowedBy() != null) {
+                    say(name + " is loaded, but calls by name still reach the " + name + " the engine read first ("
+                        + loaded.shadowedBy() + "). " + RootUserPipeline.RESTART, true);
+                    return;
+                }
+                say(name + (loaded.code() == 1 ? " was loaded already" : " is loaded")
+                    + ": call it by name, or see :root pipeline list.", false);
+                AppLogger.success("Pipeline " + name + " loaded into the engine.");
             }
         }.execute();
     }
@@ -2085,12 +3576,26 @@ public final class RootPipelineWindow extends JFrame {
         }
     }
 
-    /** The family beside the title, so a long catalog keeps its shape. */
+    /**
+     * The family beside the title, so a long catalog keeps its shape -- at the
+     * padding SPComboBoxUI gives every other list of Sphere, so the catalog is
+     * as tall as the lists around it, and with the item under the pointer lit
+     * as they light it.
+     */
     private final class RecipeRenderer extends DefaultListCellRenderer {
+        /** Where SPComboBoxUI's open list keeps the item under the pointer. */
+        private static final String HOVER = "popupHoverIndex";
+        private final javax.swing.border.Border padding = new EmptyBorder(6, 12, 6, 12);
+
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,
                                                       boolean selected, boolean focused) {
             super.getListCellRendererComponent(list, value, index, selected, focused);
+            setBorder(padding);
+            if (!selected && index >= 0 && list.getClientProperty(HOVER) instanceof Integer under
+                    && under == index) {
+                setBackground(palette.getButtonHover());
+            }
             if (!(value instanceof RootPipelineRecipes.Recipe recipe)) {
                 return this;
             }
@@ -2103,7 +3608,33 @@ public final class RootPipelineWindow extends JFrame {
         }
     }
 
-    /** Name, kind and layer on one line, with the state shown beside the name. */
+    /**
+     * Where a pipeline stands, as a color and a few words: what its next step
+     * is. The last case is the one a session would otherwise never see -- a
+     * rebuild the engine did not take, still running the build before it.
+     */
+    private String[] state(Entry entry) {
+        final boolean built = Files.isRegularFile(entry.library);
+        final RootUserPipeline.Pipeline loaded = RootUserPipeline.pipeline(entry.manifest.name);
+        final boolean ours = loaded != null && loaded.library() != null
+            && loaded.library().toAbsolutePath().normalize()
+                     .equals(entry.library.toAbsolutePath().normalize());
+        if (ours && RootUserPipeline.stale(entry.library)) {
+            return new String[]{hex(palette.getError()), "an older build runs in the engine"};
+        }
+        if (ours) {
+            return new String[]{hex(palette.getSuccess()), "in the engine"};
+        }
+        if (!built) {
+            return new String[]{hex(palette.getTextSecondary()), "not built yet"};
+        }
+        if (entry.stale) {
+            return new String[]{hex(palette.getLogWarnText()), "changed since its build"};
+        }
+        return new String[]{hex(palette.getAccent()), "built, not loaded"};
+    }
+
+    /** Name, kind and layer, then where the pipeline stands, as a colored dot and words. */
     private final class Renderer extends DefaultListCellRenderer {
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,
@@ -2116,15 +3647,17 @@ public final class RootPipelineWindow extends JFrame {
             // the list follows the theme the way the rest of the window does.
             final Color name = selected ? palette.getTextWhite() : palette.getTextPrimary();
             final Color faint = selected ? palette.getTextWhite() : palette.getTextSecondary();
+            final String[] state = state(entry);
+            // &nbsp; rather than spaces: Swing's HTML drops the ones after a tag.
             setText("<html><b><font color='" + hex(name) + "'>" + entry.manifest.name
-                    + "</font></b><font color='" + hex(faint) + "'>  "
+                    + "</font></b><font color='" + hex(faint) + "'>&nbsp;&nbsp;"
                     + entry.manifest.kind.token
-                    + "  &middot;  " + (entry.global ? "global" : "project")
-                    + "</font>"
-                    + (entry.stale
-                       ? "<font color='" + hex(palette.getLogWarnText()) + "'>  &bull;</font>"
-                       : "")
-                    + "</html>");
+                    + "&nbsp;&middot;&nbsp;" + (entry.global ? "global" : "project")
+                    + "</font><br><font color='" + state[0] + "'>&#9679;</font>"
+                    + "<font color='" + hex(faint) + "'>&nbsp;" + state[1] + "</font></html>");
+            setToolTipText(entry.manifest.signature()
+                + (entry.manifest.description == null || entry.manifest.description.isBlank()
+                   ? "" : "  --  " + entry.manifest.description));
             setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(0, 3, 0, 0,
                     selected ? palette.getAccent() : palette.getTerminalBackground()),

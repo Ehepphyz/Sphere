@@ -47,7 +47,9 @@ public final class FortranRunner {
         File binary = binaryFor(source);
         final List<String> flags = new ArrayList<>(compileFlags);
         flags.addAll(FortranBridge.flagsFor(source, compiler));
-        if (!build(compiler, source, flags, binary, workingDirectory)) {
+        // libraries after the source: a static library gives only what the files before it ask for
+        final List<String> libraries = FortranBridge.librariesFor(source, compiler);
+        if (!build(compiler, source, flags, libraries, binary, workingDirectory)) {
             return;
         }
         execute(binary, arguments, workingDirectory);
@@ -107,13 +109,14 @@ public final class FortranRunner {
                         base + "_run" + (windows ? ".exe" : ""));
     }
 
-    private static boolean build(String compiler, File source, List<String> flags,
+    private static boolean build(String compiler, File source, List<String> flags, List<String> libraries,
                                  File binary, Path workingDirectory) {
         final long started = System.nanoTime();
         List<String> command = new ArrayList<>();
         command.add(compiler);
         command.addAll(flags);
         command.add(source.getAbsolutePath());
+        command.addAll(libraries);
         command.add("-o");
         command.add(binary.getAbsolutePath());
 

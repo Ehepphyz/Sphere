@@ -254,22 +254,25 @@ public class CommandDefinitions {
         register(":root includes compile", "Add an include path to the compiler. Usage: :root includes compile <dir>", RootEngineCommands::rootCompileIncludes);
         register(":root script list", "List the macros in user_scripts/, global then project", RootEngineCommands::rootScriptList);
         register(":root includes list", "List the libraries and sources in includes/", RootEngineCommands::rootIncludesList);
-        register(":root includes reload", "Load again what is in includes/, after a rebuild", RootEngineCommands::rootIncludesReload);
+        register(":root includes reload", "Load what is new in includes/. A library the engine holds keeps the build it read first: it says so, and a restart of the ROOT backend runs the new one", RootEngineCommands::rootIncludesReload);
         register(":root includes build", "Build includes/ into shared libraries. Usage: :root includes build <file.cpp> | --all [--force]", RootEngineCommands::rootIncludesBuild);
         register(":root build", "Build includes/ then user_scripts/, the whole pipeline", RootEngineCommands::rootBuildAll);
-        register(":root personal pipeline", "Open the builder where a pipeline is written, built and loaded", RootEngineCommands::rootPersonalPipeline);
+        register(":root forge", "The pipeline forge: write, build and load your own pipeline. Usage: :root forge [<name>] [from <recipe words | = formula | err = formula | d/dx = formula | copy <pipeline> | file.C[:function]>] [--build [--force]]", RootEngineCommands::rootForge);
+        register(":root forge recipes", "The forge's catalog, or what answers a search, typos and shorthand included (dr, mjj, z, bw...). Usage: :root forge recipes [words]", RootEngineCommands::rootForgeRecipes);
+        register(":root personal pipeline", "Old name of :root forge, kept for habits and scripts", RootEngineCommands::rootPersonalPipeline);
         register(":root pipeline list", "Pipelines loaded in the engine, and those still waiting on disk", RootEngineCommands::rootPipelineList);
         register(":root pipeline new", "Start a pipeline in the builder. Usage: :root pipeline new <name>", RootEngineCommands::rootPipelineNew);
         register(":root pipeline show", "What a pipeline declares about itself. Usage: :root pipeline show <name>", RootEngineCommands::rootPipelineShow);
         register(":root pipeline edit", "Open a pipeline source in the editor. Usage: :root pipeline edit <name>", RootEngineCommands::rootPipelineEdit);
         register(":root pipeline build", "Build one pipeline with its own flags. Usage: :root pipeline build <name>", RootEngineCommands::rootPipelineBuild);
         register(":root pipeline load", "Give a built pipeline to the running engine. Usage: :root pipeline load <name>", RootEngineCommands::rootPipelineLoad);
-        register(":root pipeline drop", "Take a pipeline back out of the engine. Usage: :root pipeline drop <name>", RootEngineCommands::rootPipelineDrop);
+        register(":root pipeline drop", "Take a pipeline out of Sphere's list and commands; its library stays in the engine until the ROOT backend restarts. Usage: :root pipeline drop <name>", RootEngineCommands::rootPipelineDrop);
         register(":root pipeline run", "Call a loaded pipeline. Usage: :root pipeline run <name> [args...]", RootEngineCommands::rootPipelineRun);
         register(":root pipeline time", "Time a pipeline once per set of build flags. Usage: :root pipeline time <name> [calls]", RootEngineCommands::rootPipelineTime);
         register(":root pipeline watch", "Call a pipeline and print every value its code named. Usage: :root pipeline watch <name> [args...]", RootEngineCommands::rootPipelineWatch);
-        register(":root pipeline check", "Sweep the inputs and count the answers that are not a number. Usage: :root pipeline check <name> [low] [high]", RootEngineCommands::rootPipelineCheck);
-        register(":root pipeline scan", "Walk one input across a range and print the curve. Usage: :root pipeline scan <name> [input] [low] [high] [others-at]", RootEngineCommands::rootPipelineScan);
+        register(":root pipeline check", "Sweep the inputs and count the answers that are not a number; each input where its name says it lives (an angle in [-pi, pi], eta in [-5, 5]...) unless a range is given. Usage: :root pipeline check <name> [low] [high]", RootEngineCommands::rootPipelineCheck);
+        register(":root pipeline report", "What a monitored pipeline saw in the engine: calls, inputs and answers that were not numbers (the first of each), where each input lived (MeV, degrees and -999 markers flagged), the cost of a call, and the cutflow of every SPHERE_CUT(...). No name: every monitored one. Usage: :root pipeline report [name] [reset]", RootEngineCommands::rootPipelineReport);
+        register(":root pipeline scan","Walk one input across a range and print the curve; by default the range its name suggests. Usage: :root pipeline scan <name> [input] [low] [high] [others-at]", RootEngineCommands::rootPipelineScan);
         // --- the pipeline laboratory: review, repair, corner cases, sensitivity,
         // --- uncertainty, equivalence, fast-math, statelessness, audit, formulas, TF bridge
         register(":root pipeline lint", "Review the source for the classic physics-code mistakes and grade it. Usage: :root pipeline lint <name>", RootPipelineLabCommands::lint);
@@ -377,6 +380,8 @@ public class CommandDefinitions {
         Minuit2Commands.register();
         // --- TMinuit, ROOT's first minimizer, in Java bit for bit: MINUIT's command language, its plots, beside Minuit2 ---
         MinuitCommands.register();
+        // --- Golem95 and OneLOop, translated from Fortran: one-loop integrals, each answer with the digits it can be trusted to ---
+        GolemCommands.register();
         // --- ping, diag, mode and exit for the engines inside Sphere, as ROOT and Python have them ---
         EngineCommands.register();
         LhapdfCommands.register();

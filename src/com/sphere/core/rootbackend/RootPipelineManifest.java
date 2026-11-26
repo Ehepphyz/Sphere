@@ -95,16 +95,80 @@ public final class RootPipelineManifest {
     public boolean showInHelp = true;
     public String extraFlags = "";
 
+    /** How hard the compiler optimizes when {@link #optimize} is on: O1, O2, O3 or Ofast. */
+    public String level = "O3";
+    /** The C++ standard the pipeline is written in: 17, 20 or 23. */
+    public int standard = 20;
+    /** -Wall -Wextra: the compiler's own review, in the build log. */
+    public boolean warnings = false;
+    /** -g: symbols a debugger can stop on. */
+    public boolean debug = false;
+    /** -ffast-math: faster, and allowed to assume no NaN or infinity ever appears. */
+    public boolean fastMath = false;
+
+    /** Also callable on collections, one answer per object (RootPipelineExtras). */
+    public boolean each = false;
+    /** Also gives its uncertainty, as name_sigma(inputs..., errors...). */
+    public boolean sigma = false;
+    /** Keeps score of its calls, for :root pipeline report. */
+    public boolean monitor = false;
+
+    /**
+     * Every build option of another manifest, in one place: copying them field
+     * by field where a copy or a start needs them forgets the newest ones.
+     */
+    public void takeBuildOptions(RootPipelineManifest from) {
+        threadSafe = from.threadSafe;
+        openMp = from.openMp;
+        optimize = from.optimize;
+        level = from.level;
+        standard = from.standard;
+        warnings = from.warnings;
+        debug = from.debug;
+        fastMath = from.fastMath;
+        nativeArch = from.nativeArch;
+        showInHelp = from.showInHelp;
+        extraFlags = from.extraFlags == null ? "" : from.extraFlags;
+        each = from.each;
+        sigma = from.sigma;
+        monitor = from.monitor;
+    }
+
+    /** The optimization level the flags carry: O0 when optimize is off, else the level. */
+    public String effectiveLevel() {
+        if (!optimize) {
+            return "O0";
+        }
+        return level == null || level.isBlank() || level.equals("O0") ? "O3" : level;
+    }
+
     // -------------------------------------------------------------------------
 
     /** The entry point as it is written in C++. */
     public String signature() {
+        return signatureNamed(name.isBlank() ? "pipeline" : name);
+    }
+
+    /**
+     * The first line of the user's function, as the source writes it. A
+     * monitored pipeline's own code is compiled under an inner name, and the
+     * entry point the engine calls -- written by Sphere after it -- keeps the
+     * score around it.
+     */
+    public String writtenSignature() {
+        if (!RootPipelineExtras.monitored(this)) {
+            return signature();
+        }
+        return "static " + signatureNamed(RootPipelineExtras.innerName(this));
+    }
+
+    private String signatureNamed(String function) {
         StringBuilder out = new StringBuilder();
         out.append(kind.returnType);
         if (!kind.returnType.endsWith("*")) {
             out.append(' ');
         }
-        out.append(name.isBlank() ? "pipeline" : name).append('(');
+        out.append(function).append('(');
         if (kind == Kind.HISTOGRAM) {
             out.append("TTree *tree");
             for (Input input : inputs) {
@@ -124,12 +188,26 @@ public final class RootPipelineManifest {
     /** The compiler flags the options ask for, on top of what the compiler already uses. */
     public List<String> flags() {
         List<String> out = new ArrayList<>();
-        out.add(optimize ? "-O3" : "-O0");
+        out.add("-" + effectiveLevel());
+        if (standard != 20) {
+            // After the compiler's own -std=c++20, so this one wins.
+            out.add("-std=c++" + standard);
+        }
         if (nativeArch) {
             out.add("-march=native");
         }
         if (openMp) {
             out.add("-fopenmp");
+        }
+        if (fastMath) {
+            out.add("-ffast-math");
+        }
+        if (warnings) {
+            out.add("-Wall");
+            out.add("-Wextra");
+        }
+        if (debug) {
+            out.add("-g");
         }
         // A module that is included must also be linked, or the library loads
         // and then fails on a symbol, which reads as a mystery from the engine.
@@ -147,9 +225,18 @@ public final class RootPipelineManifest {
         StringBuilder out = new StringBuilder();
         if (threadSafe) { out.append("threadsafe,"); }
         if (openMp)     { out.append("openmp,"); }
-        if (optimize)   { out.append("O3,"); }
+        // O3 as before; another level is its own word, which an older Sphere
+        // reads as no optimization rather than as something it does not know.
+        if (optimize)   { out.append(effectiveLevel()).append(','); }
         if (nativeArch) { out.append("native,"); }
         if (showInHelp) { out.append("help,"); }
+        if (standard != 20) { out.append("std").append(standard).append(','); }
+        if (warnings)   { out.append("warn,"); }
+        if (debug)      { out.append("debug,"); }
+        if (fastMath)   { out.append("fastmath,"); }
+        if (each)       { out.append("each,"); }
+        if (sigma)      { out.append("sigma,"); }
+        if (monitor)    { out.append("monitor,"); }
         return out.length() == 0 ? "-" : out.substring(0, out.length() - 1);
     }
 
@@ -243,6 +330,25 @@ public final class RootPipelineManifest {
         manifest.optimize = options.contains("o3");
         manifest.nativeArch = options.contains("native");
         manifest.showInHelp = options.contains("help");
+        // The words added later are read one by one, not as substrings.
+        final java.util.Set<String> words = new java.util.HashSet<>(List.of(options.split(",")));
+        for (String level : new String[]{"o1", "o2", "o3", "ofast"}) {
+            if (words.contains(level)) {
+                manifest.optimize = true;
+                manifest.level = level.equals("ofast") ? "Ofast" : level.toUpperCase(Locale.ROOT);
+            }
+        }
+        if (words.contains("std17")) {
+            manifest.standard = 17;
+        } else if (words.contains("std23")) {
+            manifest.standard = 23;
+        }
+        manifest.warnings = words.contains("warn");
+        manifest.debug = words.contains("debug");
+        manifest.fastMath = words.contains("fastmath");
+        manifest.each = words.contains("each");
+        manifest.sigma = words.contains("sigma");
+        manifest.monitor = words.contains("monitor");
 
         if (version >= 2) {
             manifest.modules.addAll(
@@ -297,6 +403,53 @@ public final class RootPipelineManifest {
         return null;
     }
 
+    /** C++ keywords and alternative tokens: never a name. */
+    private static final java.util.Set<String> KEYWORDS = java.util.Set.of(
+        "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break",
+        "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class", "compl", "concept",
+        "const", "consteval", "constexpr", "constinit", "const_cast", "continue", "co_await",
+        "co_return", "co_yield", "decltype", "default", "delete", "do", "double", "dynamic_cast",
+        "else", "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto",
+        "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", "not_eq",
+        "nullptr", "operator", "or", "or_eq", "private", "protected", "public", "register",
+        "reinterpret_cast", "requires", "return", "short", "signed", "sizeof", "static",
+        "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local",
+        "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
+        "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq");
+
+    /**
+     * Names the C library already gives a function at global scope. A pipeline
+     * called sqrt taking one double does not even fail to compile: it becomes a
+     * definition of the C function itself, and once loaded it would stand in
+     * for libm's sqrt in the whole engine. ROOT's own namespaces and main too.
+     */
+    private static final java.util.Set<String> TAKEN = java.util.Set.of(
+        "abs", "fabs", "labs", "sqrt", "cbrt", "exp", "exp2", "expm1", "log", "log2", "log10",
+        "log1p", "logb", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh",
+        "cosh", "tanh", "asinh", "acosh", "atanh", "erf", "erfc", "tgamma", "lgamma", "ceil",
+        "floor", "round", "lround", "trunc", "rint", "nearbyint", "fmod", "remainder", "hypot",
+        "fmin", "fmax", "fdim", "fma", "copysign", "nan", "ldexp", "frexp", "modf", "scalbn",
+        "ilogb", "isnan", "isinf", "isfinite", "signbit", "main", "exit", "abort", "printf",
+        "rand", "srand", "time", "clock", "malloc", "free", "atof", "atoi", "strtod", "strlen",
+        "memcpy", "memset", "TMath", "ROOT", "std");
+
+    /** Why a name cannot be a pipeline's, or null when it can. */
+    static String unusable(String candidate) {
+        if (KEYWORDS.contains(candidate)) {
+            return "'" + candidate + "' is a C++ keyword.";
+        }
+        if (TAKEN.contains(candidate)) {
+            return "'" + candidate + "' is already taken by the C library or ROOT: a pipeline of that"
+                + " name would collide with it, or silently replace it in the whole engine.";
+        }
+        for (String own : new String[]{"sphere_pipeline_", "sphere_inner_", "sphere_monitor_", "sphere_forge"}) {
+            if (candidate.startsWith(own)) {
+                return "Names starting with " + own + " are Sphere's own.";
+            }
+        }
+        return null;
+    }
+
     /** Why this manifest cannot be built yet, or null when it can. */
     public String validate(List<String> takenNames) {
         if (name == null || name.isBlank()) {
@@ -305,10 +458,21 @@ public final class RootPipelineManifest {
         if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
             return "'" + name + "' is not a C++ identifier.";
         }
+        final String unusable = unusable(name);
+        if (unusable != null) {
+            return unusable;
+        }
         if (takenNames != null) {
             for (String taken : takenNames) {
                 if (taken.equalsIgnoreCase(name)) {
                     return "A pipeline called '" + name + "' already exists.";
+                }
+                // What the extras add would be declared over that pipeline.
+                for (String added : RootPipelineExtras.namesAdded(this)) {
+                    if (taken.equals(added)) {
+                        return "A pipeline called '" + added + "' already exists, and the extras of '" + name
+                            + "' would declare a function of that name: rename one of them.";
+                    }
                 }
             }
         }
@@ -316,6 +480,9 @@ public final class RootPipelineManifest {
         for (Input input : inputs) {
             if (input.name() == null || !input.name().matches("[A-Za-z_][A-Za-z0-9_]*")) {
                 return "'" + input.name() + "' is not a valid input name.";
+            }
+            if (KEYWORDS.contains(input.name())) {
+                return "The input '" + input.name() + "' is a C++ keyword; call it something else.";
             }
             if (seen.contains(input.name())) {
                 return "Two inputs are both called '" + input.name() + "'.";

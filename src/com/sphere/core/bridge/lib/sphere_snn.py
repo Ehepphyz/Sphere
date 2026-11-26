@@ -2,7 +2,7 @@
 """sphere_snn -- the Sphere Neural Network: every module of this machine, wired to every other.
 
 A neuron is a module: ROOT and its parts (RDataFrame, RooFit, TMVA, Minuit2, GenVector, TGeo), Geant4, CLHEP, VecGeom,
-FastJet and fjcontrib, HepMC3, LHAPDF, Pythia 8, YODA, Rivet, Herwig, MadGraph, Delphes; PyTorch (and libtorch),
+FastJet and fjcontrib, HepMC3, LHAPDF, Pythia 8, YODA, Rivet, Herwig, MadGraph, Delphes, Golem95; PyTorch (and libtorch),
 TensorFlow (and its C API), Keras, JAX, pyhf, iminuit, scikit-learn, uproot, awkward, vector...; Julia and its
 JetReconstruction; Sphere's own Java translations, its networks and its gateway. A synapse is a way data goes from one
 neuron to another: a HepMC3 event becomes FastJet's particles, jets become a ROOT tree, a tree becomes a tensor of
@@ -103,6 +103,7 @@ NEURONS = {
     "madgraph": _n("MadGraph5_aMC@NLO", "generators"),
     "herwig": _n("Herwig", "generators"),
     "thepeg": _n("ThePEG", "generators"),
+    "golem95": _n("Golem95 and OneLOop (one-loop integrals)", "generators"),
     "yoda": _n("YODA", "analysis"),
     "rivet": _n("Rivet", "analysis", ["fastjet", "hepmc3", "yoda"]),
     "coffea": _n("coffea", "analysis"),
@@ -136,7 +137,7 @@ NEURONS = {
     "geant4jl": _n("Geant4.jl", "julia", ["julia"]),
     "fhist": _n("FHist.jl", "julia", ["julia"]),
     "java": _n("Java (22 or later), which runs Sphere's translations", "sphere"),
-    "sphere-java": _n("Sphere's Java FastJet, fjcontrib, HepMC3, CLHEP, Minuit2, TMinuit, ROOT I/O", "sphere"),
+    "sphere-java": _n("Sphere's Java FastJet, fjcontrib, HepMC3, CLHEP, Minuit2, TMinuit, Golem95, ROOT I/O", "sphere"),
     "sphere-nn": _n("Sphere's networks and portable graphs", "sphere"),
     "mlink": _n("the gateway, sphere_mlink", "sphere"),
 }
@@ -169,7 +170,8 @@ ALIASES = {"ROOT": "root", "pyroot": "root", "cppyy": "root", "pytorch": "torch"
            "tf": "tensorflow", "fj": "fastjet", "contrib": "fjcontrib", "pyhepmc": "hepmc3", "HepMC3": "hepmc3",
            "g4": "geant4", "Geant4": "geant4", "Pythia8": "pythia8", "pythia": "pythia8", "ak": "awkward",
            "np": "numpy", "jnp": "jax", "scikit-learn": "sklearn", "LHAPDF": "lhapdf", "Rivet": "rivet",
-           "YODA": "yoda", "CLHEP": "clhep", "mg5": "madgraph", "JetReconstruction": "jetreconstruction"}
+           "YODA": "yoda", "CLHEP": "clhep", "mg5": "madgraph", "JetReconstruction": "jetreconstruction",
+           "Golem95": "golem95", "golem": "golem95", "OneLOop": "golem95", "avh_olo": "golem95"}
 
 # The parts of ROOT a neuron is: its libraries (the first ones required) and a header.
 ROOT_PARTS = {
@@ -261,6 +263,8 @@ SYNAPSES = [
     _s("sphere-java", "hepmc3", "Sphere's Java HepMC3 held to the C++", {"java": ":hepmc validate"}),
     _s("sphere-java", "minuit2", "Sphere's Java Minuit2 held to the C++", {"java": ":minuit2 validate"}),
     _s("sphere-java", "clhep", "Sphere's Java CLHEP held to the C++", {"java": ":clhep validate"}),
+    _s("sphere-java", "golem95", "Sphere's Java Golem95 held to the Fortran, each answer with its correct digits",
+       {"java": ":golem validate, :golem check", "fortran": "use form_factor_4p (linked by Sphere)"}),
     _s("mlink", "root", "every language, either side of WSL, reaches the neurons of a Python", {
         "cpp": "sphere_mlink.hpp", "python": "sphere_mlink", "julia": "SphereMLink.jl", "java": "MlLink", "fortran": "sphere_mlink.f90"}),
 ]
@@ -1279,7 +1283,20 @@ def _probe_sphere():
         stamp = time.strftime("%Y-%m-%d", time.localtime(os.path.getmtime(os.path.join(root, "Sphere.jar"))))
         out.append(_provider("sphere-java", "Sphere.jar of " + stamp, root, os.path.join(root, "Sphere.jar"), langs=["java"],
                              extra={"modules": {"fastjet": ":fjet", "fjcontrib": ":fjco", "hepmc3": ":hepmc", "clhep": ":clhep",
-                                                "minuit2": ":minuit2", "minuit": ":minuit", "root": ":rootlab"}}))
+                                                "minuit2": ":minuit2", "minuit": ":minuit", "root": ":rootlab",
+                                                "golem95": ":golem"}}))
+        # Golem95: Sphere's Java port is always there; the Fortran library is, once Sphere has built it for a compiler
+        out.append(_provider("golem95", "1.3.4 (Sphere's Java port)", root, os.path.join(root, "Sphere.jar"), langs=["java"],
+                             extra={"command": ":golem", "oneloop": "3.6.1"}))
+        build = os.path.join(root, "config", "bridge", "build")
+        for d in (sorted(os.listdir(build)) if os.path.isdir(build) else []):
+            lib_a = os.path.join(build, d, "lib", "libgolem95.a")
+            inc = os.path.join(build, d, "include", "golem95")
+            if d.startswith("golem95-") and os.path.isfile(lib_a) and os.path.isfile(os.path.join(inc, "matrice_s.mod")):
+                out.append(_provider("golem95", "1.3.4", os.path.join(build, d), lib_a, inc=[inc],
+                                     libdir=[os.path.dirname(lib_a)], libs=["golem95"], langs=["fortran"],
+                                     extra={"built_by": "sphere", "command": ":golem native"}))
+                break
     if os.path.isfile(os.path.join(lib, "sphere_graph.hpp")):
         out.append(_provider("sphere-nn", "Sphere", lib, os.path.join(lib, "sphere_graph.hpp"), inc=[lib],
                              langs=["cpp", "python", "java"], module="sphere_graph", py=[lib], headers=["sphere_graph.hpp"]))
@@ -3127,8 +3144,10 @@ public class SnnJavaCheck {
             if (i > 0) ARGS.put(a.substring(0, i), a.substring(i + 1));
         }
         System.out.println("SNN java ok Java " + System.getProperty("java.version") + " ran Sphere's translations");
-        final String[] ids = {"sphere-java>fastjet", "sphere-java>hepmc3", "sphere-java>clhep", "sphere-java>minuit2", "sphere-nn<>java"};
-        final Check[] checks = {SnnJavaCheck::fastjet, SnnJavaCheck::hepmc, SnnJavaCheck::clhep, SnnJavaCheck::minuit2, SnnJavaCheck::graph};
+        final String[] ids = {"sphere-java>fastjet", "sphere-java>hepmc3", "sphere-java>clhep", "sphere-java>minuit2", "sphere-nn<>java",
+                              "sphere-java>golem95"};
+        final Check[] checks = {SnnJavaCheck::fastjet, SnnJavaCheck::hepmc, SnnJavaCheck::clhep, SnnJavaCheck::minuit2, SnnJavaCheck::graph,
+                                SnnJavaCheck::golem95};
         for (int k = 0; k < checks.length; k++) {
             try {
                 checks[k].run();
@@ -3179,6 +3198,11 @@ public class SnnJavaCheck {
         say("sphere-java>hepmc3", same, "Sphere's Java HepMC3 read C++ Pythia's file: " + events + " events, " + finals
             + " final particles, sum E " + sumE + (same ? ", pyhepmc's bit for bit" : ", pyhepmc read " + ARGS.get("hepmc_n") + " / "
             + ARGS.get("hepmc_nfinal") + " / " + ARGS.get("hepmc_sumE")));
+    }
+
+    static void golem95() {
+        // real integrals held to their closed forms, and Golem95's box to OneLOop's; throws on a wrong answer
+        say("sphere-java>golem95", true, "Sphere's Java Golem95: " + com.sphere.core.golem95.Golem95Probe.check());
     }
 
     static void clhep() {
@@ -3668,7 +3692,8 @@ def _check_graph_cpp(c, out_dir, cache, report, add, cxx, log):
 
 
 def _check_java(c, out_dir, cache, report, add, progress, log):
-    """Sphere's Java translations held to the other neurons: FastJet, HepMC3, CLHEP, Minuit2 and the graphs."""
+    """Sphere's Java translations held to the other neurons: FastJet, HepMC3, CLHEP, Minuit2, the graphs, and Golem95
+    (to the closed forms of its integrals and to OneLOop)."""
     jv = next(iter(c["neurons"].get("java", {}).get("providers", [])), None)
     root = sphere_root()
     jar = os.path.join(root, "Sphere.jar") if root else None

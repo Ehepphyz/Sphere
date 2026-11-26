@@ -41,7 +41,8 @@ import java.util.stream.Stream;
 
 /**
  * The engines that run inside Sphere's own JVM: FastJet, the fjcontrib
- * contribs, HepMC3, Minuit2 and CLHEP, translated to Java.
+ * contribs, HepMC3, Minuit2 and CLHEP, translated to Java from C++, and
+ * Golem95 with OneLOop, translated from Fortran.
  *
  * <p>They have no executable to find and no process to start, so what finds
  * Python, g++ or ROOT cannot see them. This is how the rest of Sphere does:
@@ -213,6 +214,46 @@ public enum InProcessEngine {
         public String modeExamples() {
             return "'eval eplus*1.5*tesla*2*m*c_light', 'vector 3*GeV 4*GeV 0 13*GeV --boost 0 0 0.5', 'random gauss 0 1 --hist'";
         }
+    },
+
+    GOLEM95("golem", "Golem95") {
+        @Override
+        public String version() {
+            return com.sphere.core.golem95.Golem95.VERSION;
+        }
+
+        @Override
+        public String description() {
+            return "Golem95 " + com.sphere.core.golem95.Golem95.VERSION + " and OneLOop "
+                + com.sphere.core.golem95.Golem95.ONELOOP_VERSION + " (Java port "
+                + com.sphere.core.golem95.Golem95.JAVA_PORT_VERSION + ", one-loop integrals, in process)";
+        }
+
+        @Override
+        protected String check() {
+            return com.sphere.core.golem95.Golem95Probe.check();
+        }
+
+        @Override
+        public Native findNative() {
+            final com.sphere.core.golem95.GolemNative.Library l = com.sphere.core.golem95.GolemNative.find();
+            return l == null ? null : new Native(l.prefix(), l.version(), l.origin() + "; library " + l.archive());
+        }
+
+        @Override
+        public String nativeHint() {
+            return "none found (GOLEM95_DIR unset, no golem95.pc); ':golem native build' compiles the sources Sphere carries";
+        }
+
+        @Override
+        public String nativeLanguage() {
+            return "Fortran";
+        }
+
+        @Override
+        public String modeExamples() {
+            return "'box s=200 t=-123', 'ff a43 1 2 3', 'check b42', 'scan a40 s 50 500'";
+        }
     };
 
     /** What a probe found, and how long it took. */
@@ -260,6 +301,11 @@ public enum InProcessEngine {
         return "no installation found (fastjet-config not on the PATH, FASTJET unset)";
     }
 
+    /** The language of the original the Java was translated from, and of the installation diag looks for. */
+    public String nativeLanguage() {
+        return "C++";
+    }
+
     /** A few commands to type once in the engine's mode. */
     public String modeExamples() {
         return this == FASTJET ? "'read <file>', 'jets 20', 'def ak4 antikt:0.4'" : "'obs tau21', 'groom sd 0 0.1', 'flavor'";
@@ -290,6 +336,7 @@ public enum InProcessEngine {
             case "hepmc3", "hepmc2", "events" -> HEPMC3;
             case "minuit", "minimizer", "migrad" -> MINUIT2;
             case "evaluator", "genfun", "genericfunctions", "randomobjects" -> CLHEP;
+            case "golem95", "oneloop", "avh_olo", "loops", "loop", "formfactors" -> GOLEM95;
             default -> null;
         };
     }

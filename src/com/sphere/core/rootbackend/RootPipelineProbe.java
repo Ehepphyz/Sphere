@@ -77,20 +77,28 @@ public final class RootPipelineProbe {
 
     /* ------------------------------------------------------------------ */
 
+    /**
+     * What one watched call recorded, or why nothing could be: an empty list
+     * from a program that did not build is not the same as a body that names
+     * nothing with SPHERE_WATCH, and the two used to read alike.
+     */
+    public record Watching(List<Watched> values, String problem) { }
+
     /** Calls the pipeline once and reads back every value it named. */
-    public static List<Watched> watch(RootUserCompiler compiler,
-                                      RootPipelineManifest manifest,
-                                      Path source, double[] arguments) {
+    public static Watching watch(RootUserCompiler compiler,
+                                 RootPipelineManifest manifest,
+                                 Path source, double[] arguments) {
         List<Watched> found = new ArrayList<>();
         List<String> call = new ArrayList<>();
         call.add("watch");
         for (double one : arguments) {
             call.add(Double.toString(one));
         }
-        final String answer = run(compiler, manifest, source, call);
-        if (answer == null) {
-            return found;
+        final Ran ran = run(compiler, manifest, source, call);
+        if (ran.output() == null) {
+            return new Watching(found, ran.problem());
         }
+        final String answer = ran.output();
         for (String line : answer.split("\\R")) {
             final int at = line.lastIndexOf('=');
             if (at <= 0) {
@@ -103,19 +111,60 @@ public final class RootPipelineProbe {
                 // A line that is not a value is not worth reporting as one.
             }
         }
-        return found;
+        return new Watching(found, null);
     }
 
     /** Sweeps every input across a range and counts what came back wrong. */
     public static Health health(RootUserCompiler compiler, RootPipelineManifest manifest,
                                 Path source, int points, double low, double high) {
-        final String answer = run(compiler, manifest, source,
+        return readHealth(run(compiler, manifest, source,
             List.of("probe", "-1", Double.toString(low), Double.toString(high),
-                    Integer.toString(points), "1"));
-        if (answer == null) {
-            return new Health(0, 0, 0, 0, 0, 0, false,
-                "The pipeline could not be built for inspection.");
+                    Integer.toString(points), "1")));
+    }
+
+    /**
+     * Sweeps each input over a range of its own and counts what came back wrong.
+     *
+     * One [low, high] for every input asks an angle about 100 radians and an
+     * efficiency about 80, and the NaN that comes back is then blamed on the
+     * pipeline, while what goes wrong where the values really are is missed.
+     */
+    public static Health health(RootUserCompiler compiler, RootPipelineManifest manifest,
+                                Path source, int points, double[][] ranges) {
+        final List<String> call = new ArrayList<>(List.of("ranges", Integer.toString(points)));
+        for (double[] one : ranges) {
+            call.add(Double.toString(one[0]));
+            call.add(Double.toString(one[1]));
         }
+        return readHealth(run(compiler, manifest, source, call));
+    }
+
+    /** Where each input is swept when no range is given: where its name says it lives. */
+    public static double[][] rangesByName(RootPipelineManifest manifest) {
+        final double[][] out = new double[manifest.inputs.size()][];
+        for (int i = 0; i < out.length; i++) {
+            final RootPipelineManifest.Input input = manifest.inputs.get(i);
+            out[i] = "bool".equals(input.type()) ? new double[]{0, 1} : RootFormula.range(input.name());
+        }
+        return out;
+    }
+
+    /** pt in [0, 1000], eta in [-5, 5], ... for saying what a sweep covered. */
+    public static String describeRanges(RootPipelineManifest manifest, double[][] ranges) {
+        final List<String> parts = new ArrayList<>();
+        for (int i = 0; i < ranges.length && i < manifest.inputs.size(); i++) {
+            parts.add(manifest.inputs.get(i).name() + " in [" + RootFormula.shortNumber(ranges[i][0])
+                + ", " + RootFormula.shortNumber(ranges[i][1]) + "]");
+        }
+        return String.join(", ", parts);
+    }
+
+    /** What the program said about a sweep, as a Health. */
+    private static Health readHealth(Ran ran) {
+        if (ran.output() == null) {
+            return new Health(0, 0, 0, 0, 0, 0, false, ran.problem());
+        }
+        final String answer = ran.output();
         long tried = 0, nan = 0, inf = 0;
         double min = 0, max = 0, mean = 0;
         for (String line : answer.split("\\R")) {
@@ -154,14 +203,14 @@ public final class RootPipelineProbe {
     public static Scan scan(RootUserCompiler compiler, RootPipelineManifest manifest,
                             Path source, int which, double low, double high,
                             int points, double held) {
-        final String answer = run(compiler, manifest, source,
+        final Ran ran = run(compiler, manifest, source,
             List.of("probe", Integer.toString(which), Double.toString(low),
                     Double.toString(high), Integer.toString(points),
                     Double.toString(held)));
-        if (answer == null) {
-            return new Scan(List.of(), List.of(), false,
-                "The pipeline could not be built for inspection.");
+        if (ran.output() == null) {
+            return new Scan(List.of(), List.of(), false, ran.problem());
         }
+        final String answer = ran.output();
         List<Point> curve = new ArrayList<>();
         for (String line : answer.split("\\R")) {
             final String[] pair = line.trim().split("\\s+");
@@ -265,11 +314,41 @@ public final class RootPipelineProbe {
 
     /* ------------------------------------------------------------------ */
 
+    /** What running the inspection program gave: what it printed, or why it could not. */
+    private record Ran(String output, String problem) { }
+
+    private static final java.util.regex.Pattern MISSING_HEADER =
+        java.util.regex.Pattern.compile("([\\w./]+\\.h(?:xx|pp)?): No such file");
+
+    /** Why the inspection program did not build, in a line the user can act on. */
+    private static String whyNotBuilt(RootUserCompiler.Build built, RootUserCompiler compiler) {
+        String first = null;
+        for (String line : built.lines()) {
+            if (line.contains("error")) {
+                first = line.replaceFirst("^.*?(fatal error|error):\\s*", "");
+                break;
+            }
+        }
+        if (first == null && !built.lines().isEmpty()) {
+            first = built.lines().get(0);
+        }
+        final StringBuilder out = new StringBuilder("It could not be built for inspection");
+        out.append(first == null ? "." : ": " + first);
+        final java.util.regex.Matcher header = MISSING_HEADER.matcher(first == null ? "" : first);
+        if (header.find() && compiler.rootFlags().isEmpty()) {
+            // The case of a machine with no ROOT, or with its engine off.
+            out.append("\n").append(header.group(1)).append(" is a ROOT header, and none was found (")
+               .append(compiler.flagSource()).append("): start the ROOT engine, or set ROOT_DIR in settings.conf.")
+               .append(" A pipeline that needs no ROOT header, like one from a formula, is inspected without it.");
+        }
+        return out.toString();
+    }
+
     /** Builds the inspection program if it has to, then runs it. */
-    private static String run(RootUserCompiler compiler, RootPipelineManifest manifest,
-                              Path source, List<String> arguments) {
+    private static Ran run(RootUserCompiler compiler, RootPipelineManifest manifest,
+                           Path source, List<String> arguments) {
         if (!RootPipelineTemplates.canBeTimed(manifest)) {
-            return null;
+            return new Ran(null, "Only a transform or a filter taking numbers can be inspected.");
         }
         Path workspace = null;
         try {
@@ -283,7 +362,7 @@ public final class RootPipelineProbe {
             RootUserCompiler.Build built =
                 compiler.buildProgram(program, binary, manifest.flags());
             if (!built.succeeded()) {
-                return null;
+                return new Ran(null, whyNotBuilt(built, compiler));
             }
 
             List<String> command = new ArrayList<>();
@@ -304,17 +383,18 @@ public final class RootPipelineProbe {
             }
             if (!process.waitFor(RUN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return null;
+                return new Ran(null, "It ran for more than " + RUN_TIMEOUT_SECONDS
+                    + " s and was stopped: a loop that never ends?");
             }
             // A pipeline that stopped part way still said something before it
             // did, and that is usually the most interesting part.
-            return said.toString();
+            return new Ran(said.toString(), null);
 
         } catch (IOException cannotRun) {
-            return null;
+            return new Ran(null, "The inspection program could not be run: " + cannotRun.getMessage());
         } catch (InterruptedException stopped) {
             Thread.currentThread().interrupt();
-            return null;
+            return new Ran(null, "Stopped.");
         } finally {
             remove(workspace);
         }

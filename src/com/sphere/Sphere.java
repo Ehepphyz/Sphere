@@ -110,6 +110,14 @@ public class Sphere extends JFrame {
     /** Sphere's Java reader of LHAPDF sets. */
     public static final String LHAPDF_JAVA_PORT_VERSION = "2.3.1.0";
 
+    // ---- Golem95 and OneLOop, ported to Java -------------------------------------------
+    /** The Golem95 release translated (one-loop tensor integrals, form factors). */
+    public static final String GOLEM95_VERSION = "1.3.4";
+    /** The OneLOop release Golem95 1.3.4 carries and the port translates with it (scalar integrals). */
+    public static final String ONELOOP_VERSION = "3.6.1";
+    /** Sphere's Java port of Golem95 and OneLOop, by its Fortran translator: checked against gfortran 16 on 300 random kinematics. */
+    public static final String GOLEM95_JAVA_PORT_VERSION = "1.0.0";
+
     // ---- ROOT files, read and written by Sphere without ROOT ----------------------
     /** The ROOT sources (root-master) Sphere's ROOT reader and writer follow. */
     public static final String ROOT_SOURCES_VERSION = "6.41/01";

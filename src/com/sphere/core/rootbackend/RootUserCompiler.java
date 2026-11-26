@@ -337,11 +337,18 @@ public final class RootUserCompiler {
         command.add("-shared");
         if (!windows) command.add("-fPIC");
         command.add("-std=c++20");
-        command.addAll(root);
-        if (extraFlags != null) command.addAll(usableLinks(extraFlags, root));
+        // The source goes before the libraries. A linker that keeps only what
+        // is needed (--as-needed, the default on Debian and Ubuntu) reads in
+        // order and leaves out a -l met before anything uses it: the library
+        // was then built with no ROOT library behind it, loaded, and died on
+        // its first TH1D or TTreeReader unless the engine happened to have
+        // loaded that part of ROOT already. Compiler options apply wherever
+        // they stand, so only the libraries' place changes.
         command.add("-o");
         command.add(output.toAbsolutePath().toString());
         command.add(source.toAbsolutePath().toString());
+        command.addAll(root);
+        if (extraFlags != null) command.addAll(usableLinks(extraFlags, root));
         return run(command, source, output);
     }
 
@@ -408,11 +415,12 @@ public final class RootUserCompiler {
         List<String> command = new ArrayList<>();
         command.add(compiler);
         command.add("-std=c++20");
-        command.addAll(root);
-        if (extraFlags != null) command.addAll(usableLinks(extraFlags, root));
+        // Source first, libraries after, for the reason given in build().
         command.add("-o");
         command.add(output.toAbsolutePath().toString());
         command.add(source.toAbsolutePath().toString());
+        command.addAll(root);
+        if (extraFlags != null) command.addAll(usableLinks(extraFlags, root));
         return run(command, source, output);
     }
 

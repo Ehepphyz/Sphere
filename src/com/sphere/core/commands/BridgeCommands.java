@@ -190,7 +190,7 @@ public final class BridgeCommands {
         for (InProcessEngine engine : InProcessEngine.values()) {
             final InProcessEngine.Native cpp = engine.findNative();
             AppLogger.raw(f("  %-8s %s", engine.key(), engine.description()
-                + (cpp == null ? "" : "; C++ too, at " + cpp.prefix())));
+                + (cpp == null ? "" : "; " + engine.nativeLanguage() + " too, at " + cpp.prefix())));
         }
         final Map<String, String> frameworks = com.sphere.core.ml.MlLink.detect();
         AppLogger.raw(f("  %-8s %s", "ml link", frameworks.isEmpty() ? "nothing probed yet (':ml link status')"

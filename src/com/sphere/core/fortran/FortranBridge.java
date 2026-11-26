@@ -2,6 +2,8 @@ package com.sphere.core.fortran;
 
 import com.sphere.core.bridge.Bridge;
 import com.sphere.core.bridge.SpxExport;
+import com.sphere.core.golem95.Golem95;
+import com.sphere.core.golem95.GolemNative;
 import com.sphere.core.rootbackend.RootPdfCatalog;
 import com.sphere.core.rootbackend.RootPdfGrid;
 import com.sphere.core.rootbackend.RootPdfSet;
@@ -12,6 +14,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -29,6 +32,11 @@ import java.util.regex.Pattern;
  * and every set the program names in a literal is exported for it beforehand,
  * from the same grids Sphere's own commands read. The program is not changed
  * and does not know.
+ *
+ * A program that uses Golem95's modules (matrice_s, form_factor_4p ...) is
+ * given Golem95 the same way: an installation of the machine if there is one,
+ * else the library Sphere builds once per compiler from the Golem95 and OneLOop
+ * sources it carries.
  */
 final class FortranBridge {
 
@@ -61,35 +69,86 @@ final class FortranBridge {
         return USES.matcher(text).find();
     }
 
-    /** Only the module folder, for a syntax check; nothing is exported. */
+    /** A program that uses Golem95's modules (matrice_s, form_factor_4p, ...). */
+    static boolean usesGolem(String text) {
+        return GolemNative.USES.matcher(text).find();
+    }
+
+    /** Only the module folders, for a syntax check; nothing is exported, and Golem95 is not built for it. */
     static List<String> includeFlags(File source, String compiler) {
-        if (!uses(read(source))) return List.of();
-        try {
-            return List.of("-I" + Bridge.fortranObjects(compiler));
-        } catch (IOException unavailable) {
-            return List.of();
+        final String text = read(source);
+        final List<String> flags = new ArrayList<>();
+        if (uses(text)) {
+            try {
+                flags.add("-I" + Bridge.fortranObjects(compiler));
+            } catch (IOException unavailable) {
+                // the check goes on without it
+            }
         }
+        if (usesGolem(text)) {
+            final GolemNative.Library golem = GolemNative.built(compiler);
+            final GolemNative.Library found = golem != null ? golem : GolemNative.find();
+            if (found != null) flags.addAll(found.compileFlags());
+        }
+        return flags;
     }
 
     /**
      * The flags that link the bridge in, after exporting the sets the program
-     * names; nothing when the program does not use it.
+     * names; and Golem95's modules when the program uses them. Nothing when it
+     * uses neither.
      */
     static List<String> flagsFor(File source, String compiler) {
         final String text = read(source);
-        if (!uses(text)) return List.of();
+        final List<String> flags = new ArrayList<>();
+        if (uses(text)) {
+            try {
+                flags.addAll(Bridge.fortranFlags(compiler));
+                final Set<String> names = new LinkedHashSet<>();
+                final Matcher m = SET.matcher(text);
+                while (m.find()) names.add(bare(m.group(1)));
+                for (String name : names) export(name);
+                AppLogger.info("LHAPDF's Fortran interface and sphere_spx linked from Sphere's bridge"
+                    + (names.isEmpty() ? "." : "; set(s) exported: " + String.join(", ", names) + "."));
+            } catch (IOException unavailable) {
+                AppLogger.error(unavailable.getMessage());
+            }
+        }
+        if (usesGolem(text)) {
+            final GolemNative.Library golem = golem(compiler);
+            if (golem != null) {
+                flags.addAll(golem.compileFlags());
+                AppLogger.info("Golem95 " + Golem95.VERSION + " linked (" + golem.archive() + ").");
+            }
+        }
+        return flags;
+    }
+
+    /** What goes after the program's source on the compiler's line: the Golem95 library, when it is used. */
+    static List<String> librariesFor(File source, String compiler) {
+        if (!usesGolem(read(source))) return List.of();
+        final GolemNative.Library golem = golem(compiler);
+        return golem == null ? List.of() : golem.linkFlags();
+    }
+
+    /**
+     * The Golem95 a program is linked against: one installed (GOLEM95_DIR, pkg-config), else the one Sphere
+     * builds once for this compiler from the sources it carries.
+     */
+    private static GolemNative.Library golem(String compiler) {
+        final GolemNative.Library found = GolemNative.find();
+        if (found != null && !found.origin().startsWith("built by Sphere")) return found;
         try {
-            final List<String> flags = Bridge.fortranFlags(compiler);
-            final Set<String> names = new LinkedHashSet<>();
-            final Matcher m = SET.matcher(text);
-            while (m.find()) names.add(bare(m.group(1)));
-            for (String name : names) export(name);
-            AppLogger.info("LHAPDF's Fortran interface and sphere_spx linked from Sphere's bridge"
-                + (names.isEmpty() ? "." : "; set(s) exported: " + String.join(", ", names) + "."));
-            return flags;
-        } catch (IOException unavailable) {
-            AppLogger.error(unavailable.getMessage());
-            return List.of();
+            GolemNative.Library built = GolemNative.built(compiler);
+            if (built == null) {
+                AppLogger.info("The program uses Golem95: building Golem95 " + Golem95.VERSION + " and OneLOop "
+                    + Golem95.ONELOOP_VERSION + " for " + compiler + " from the sources Sphere carries (once; a few minutes).");
+                built = GolemNative.build(compiler, AppLogger::info);
+            }
+            return built;
+        } catch (IOException failed) {
+            AppLogger.error(failed.getMessage());
+            return null;
         }
     }
 

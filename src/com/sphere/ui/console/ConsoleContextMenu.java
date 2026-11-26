@@ -94,6 +94,7 @@ public final class ConsoleContextMenu {
     private final JMenuItem citeLhapdf    = ConsoleMenuFactory.item("Citation LHAPDF");
     private final JMenuItem citeMinuit2   = ConsoleMenuFactory.item("Citation Minuit2");
     private final JMenuItem citeClhep     = ConsoleMenuFactory.item("Citation CLHEP");
+    private final JMenuItem citeGolem95   = ConsoleMenuFactory.item("Citation Golem95");
     private final JMenuItem citeGeant4    = ConsoleMenuFactory.item("Citation Geant4");
 
     // :py settings, offered only when settings.conf declares a Python.
@@ -164,6 +165,7 @@ public final class ConsoleContextMenu {
         citationsMenu.add(citeLhapdf);
         citationsMenu.add(citeMinuit2);
         citationsMenu.add(citeClhep);
+        citationsMenu.add(citeGolem95);
         citationsMenu.add(citeGeant4);
     }
 
@@ -285,6 +287,8 @@ public final class ConsoleContextMenu {
             CitationDialog.show(popup.getInvoker(), "Citation LHAPDF", LhapdfCitation.text()));
         citeClhep.addActionListener(e ->
             CitationDialog.show(popup.getInvoker(), "Citation CLHEP", com.sphere.core.clhep.ClhepCitations.text()));
+        citeGolem95.addActionListener(e ->
+            CitationDialog.show(popup.getInvoker(), "Citation Golem95", com.sphere.core.golem95.Golem95Citations.text()));
         citeGeant4.addActionListener(e ->
             CitationDialog.show(popup.getInvoker(), "Citation Geant4", com.sphere.core.geant4.Geant4Citations.text()));
         // The release comes from root-config, which is a process: not on the EDT.

@@ -41,12 +41,17 @@ public final class RootPipelineTemplates {
         return header(manifest) + body(manifest, recipe) + tail(manifest);
     }
 
-    /** Everything below the user's code, which the form owns again. */
+    /**
+     * Everything below the user's code, which the form owns again: a
+     * monitored pipeline's entry point and report, then the timing, the
+     * inspector and the probe.
+     */
     public static String tail(RootPipelineManifest manifest) {
-        if (!canBeTimed(manifest)) {
+        final String monitor = RootPipelineExtras.tail(manifest);
+        if (!canBeTimed(manifest) && monitor.isEmpty()) {
             return "";
         }
-        return "\n" + TAIL_MARK + "\n" + benchFunction(manifest)
+        return "\n" + TAIL_MARK + "\n" + monitor + benchFunction(manifest)
              + watchFunction(manifest) + probeFunction(manifest);
     }
 
@@ -69,10 +74,11 @@ public final class RootPipelineTemplates {
         } else {
             out.append("// NOT declared thread safe: :root mt on will say so before using it.\n");
         }
+        out.append(RootPipelineExtras.usage(manifest));
         out.append('\n');
 
         out.append("#include <string>\n");
-        if (canBeTimed(manifest)) {
+        if (canBeTimed(manifest) || RootPipelineExtras.monitored(manifest)) {
             // The timing needs a clock, and the health check needs to be able to
             // ask whether a number is one.
             out.append("#include <chrono>\n");
@@ -103,6 +109,7 @@ public final class RootPipelineTemplates {
         if (canBeTimed(manifest)) {
             out.append(watchBlock(manifest));
         }
+        out.append(RootPipelineExtras.header(manifest));
 
         out.append(BODY_MARK).append('\n');
         return out.toString();
@@ -173,7 +180,7 @@ public final class RootPipelineTemplates {
         out.append(") {\n");
         out.append("  ").append(space).append("::count = 0;\n");
         out.append("  ").append(space).append("::watching = true;\n");
-        out.append("  const double answer = (double) (").append(manifest.name).append('(');
+        out.append("  const double answer = (double) (").append(RootPipelineExtras.callee(manifest)).append('(');
         for (int i = 0; i < manifest.inputs.size(); i++) {
             if (i > 0) {
                 out.append(", ");
@@ -220,7 +227,9 @@ public final class RootPipelineTemplates {
         out.append("  double argument[").append(Math.max(1, n)).append("];\n");
         out.append("  if (which < 0) {\n");
         out.append("    // Health: every input swept together, pseudo-randomly.\n");
-        out.append("    unsigned long seed = 88172645463325252UL;\n");
+        // 64 bits on every platform: unsigned long is 32 bits on Windows, where
+        // (seed >> 11) / 2^53 then never leaves 1e-10 and the sweep tests one point.
+        out.append("    unsigned long long seed = 88172645463325252ULL;\n");
         out.append("    long bad = 0, huge = 0;\n");
         out.append("    double smallest = 0.0, largest = 0.0, total = 0.0;\n");
         out.append("    bool first = true;\n");
@@ -230,7 +239,7 @@ public final class RootPipelineTemplates {
         out.append("        const double r = (double) (seed >> 11) * (1.0 / 9007199254740992.0);\n");
         out.append("        argument[i] = low + r * (high - low);\n");
         out.append("      }\n");
-        out.append("      const double v = (double) (").append(manifest.name).append('(');
+        out.append("      const double v = (double) (").append(RootPipelineExtras.callee(manifest)).append('(');
         for (int i = 0; i < n; i++) {
             if (i > 0) {
                 out.append(", ");
@@ -267,7 +276,7 @@ public final class RootPipelineTemplates {
         out.append("    for (int i = 0; i < ").append(n).append("; ++i) {\n");
         out.append("      argument[i] = (i == which) ? x : held;\n");
         out.append("    }\n");
-        out.append("    const double v = (double) (").append(manifest.name).append('(');
+        out.append("    const double v = (double) (").append(RootPipelineExtras.callee(manifest)).append('(');
         for (int i = 0; i < n; i++) {
             if (i > 0) {
                 out.append(", ");
@@ -330,7 +339,9 @@ public final class RootPipelineTemplates {
         out.append("// Not called by anything else, and harmless when unused.\n");
         out.append("extern \"C\" double ").append(benchName(manifest)).append("(long rounds) {\n");
         out.append("  if (rounds < 1) {\n    return 0.0;\n  }\n");
-        out.append("  unsigned long seed = 88172645463325252UL;\n");
+        // 64 bits on every platform, as in the probe above: a 32-bit seed would
+        // time every call at inputs of about 1e-9 instead of across the range.
+        out.append("  unsigned long long seed = 88172645463325252ULL;\n");
         out.append("  volatile double sink = 0.0;\n");
         out.append("  const std::chrono::steady_clock::time_point started =\n");
         out.append("      std::chrono::steady_clock::now();\n");
@@ -339,7 +350,7 @@ public final class RootPipelineTemplates {
         out.append("    seed ^= seed >> 7;\n");
         out.append("    seed ^= seed << 17;\n");
         out.append("    const double r = (double) (seed >> 11) * (1.0 / 9007199254740992.0);\n");
-        out.append("    sink = sink + (double) (").append(manifest.name).append('(');
+        out.append("    sink = sink + (double) (").append(RootPipelineExtras.callee(manifest)).append('(');
         for (int i = 0; i < manifest.inputs.size(); i++) {
             if (i > 0) {
                 out.append(", ");
@@ -407,7 +418,7 @@ public final class RootPipelineTemplates {
            .append(". Safe to delete.\n");
         out.append("#include \"")
            .append(source.toAbsolutePath().toString().replace("\\", "/")).append("\"\n");
-        out.append("#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n\n");
+        out.append("#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#include <cmath>\n\n");
         out.append("int main(int argc, char **argv) {\n");
         out.append("  if (argc < 2) {\n    return 1;\n  }\n");
         out.append("  if (strcmp(argv[1], \"watch\") == 0) {\n");
@@ -420,12 +431,67 @@ public final class RootPipelineTemplates {
             out.append("atof(argv[").append(2 + i).append("])");
         }
         out.append("));\n    return 0;\n  }\n");
+        if (n > 0) {
+            // Each input over a range of its own, the entry point called
+            // directly: this mode lives in the program, not in the library's
+            // tail, so a source written by an earlier Sphere has it too.
+            out.append("  if (strcmp(argv[1], \"ranges\") == 0) {\n");
+            out.append("    if (argc < ").append(3 + 2 * n).append(") {\n      return 4;\n    }\n");
+            out.append("    const int points = atoi(argv[2]) < 1 ? 1 : atoi(argv[2]);\n");
+            out.append("    double lo[").append(n).append("], hi[").append(n).append("], a[").append(n).append("];\n");
+            out.append("    for (int i = 0; i < ").append(n).append("; ++i) {\n");
+            out.append("      lo[i] = atof(argv[3 + 2 * i]);\n");
+            out.append("      hi[i] = atof(argv[4 + 2 * i]);\n");
+            out.append("    }\n");
+            out.append("    unsigned long long seed = 88172645463325252ULL;\n");
+            out.append("    long bad = 0, huge = 0;\n");
+            out.append("    double smallest = 0.0, largest = 0.0, total = 0.0;\n");
+            out.append("    bool first = true;\n");
+            out.append("    for (int step = 0; step < points; ++step) {\n");
+            out.append("      for (int i = 0; i < ").append(n).append("; ++i) {\n");
+            out.append("        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;\n");
+            out.append("        const double r = (double) (seed >> 11) * (1.0 / 9007199254740992.0);\n");
+            out.append("        a[i] = lo[i] + r * (hi[i] - lo[i]);\n");
+            out.append("      }\n");
+            out.append("      const double v = (double) (").append(RootPipelineExtras.callee(manifest)).append('(');
+            for (int i = 0; i < n; i++) {
+                if (i > 0) {
+                    out.append(", ");
+                }
+                out.append(castTo(manifest.inputs.get(i).type(), "a[" + i + "]"));
+            }
+            out.append("));\n");
+            out.append("      if (std::isnan(v)) {\n        ++bad;\n        continue;\n      }\n");
+            out.append("      if (std::isinf(v)) {\n        ++huge;\n        continue;\n      }\n");
+            out.append("      if (first) {\n        smallest = v;\n        largest = v;\n        first = false;\n");
+            out.append("      } else {\n        if (v < smallest) { smallest = v; }\n");
+            out.append("        if (v > largest) { largest = v; }\n      }\n");
+            out.append("      total += v;\n");
+            out.append("    }\n");
+            out.append("    const long good = (long) points - bad - huge;\n");
+            out.append("    printf(\"tried=%d\\nnan=%ld\\ninf=%ld\\nmin=%.17g\\nmax=%.17g\\nmean=%.17g\\n\",\n");
+            out.append("           points, bad, huge, smallest, largest, good > 0 ? total / (double) good : 0.0);\n");
+            out.append("    return 0;\n");
+            out.append("  }\n");
+        }
         out.append("  if (argc < 6) {\n    return 3;\n  }\n");
         out.append("  printf(\"%s\", ").append(probeName(manifest))
            .append("(atoi(argv[2]), atof(argv[3]), atof(argv[4]),\n")
            .append("                     atoi(argv[5]), argc > 6 ? atof(argv[6]) : 1.0));\n");
         out.append("  return 0;\n}\n");
         return out.toString();
+    }
+
+    /** A double handed to an input of the form's type. */
+    private static String castTo(String type, String value) {
+        return switch (type == null ? "" : type.trim()) {
+            case "float" -> "(float) (" + value + ")";
+            case "int" -> "(int) (" + value + ")";
+            case "long" -> "(long) (" + value + ")";
+            case "unsigned int" -> "(unsigned int) (" + value + ")";
+            case "bool" -> "(" + value + " > 0.5)";
+            default -> value;
+        };
     }
 
     /** The starting body, which the user then rewrites. */
@@ -435,13 +501,18 @@ public final class RootPipelineTemplates {
         if (ready != null && manifest.kind != RootPipelineManifest.Kind.LIBRARY) {
             // The recipe brought the kind, the inputs and the modules with it,
             // so the signature the form now shows is the one it was written for.
-            return "\n" + manifest.signature() + " {\n" + ready + "\n}\n";
+            // What the body needs above it -- helpers from a macro, the code
+            // around a copied entry point -- goes first, in the user's half,
+            // where a later change to the form keeps it.
+            final String prelude = RootPipelineRecipes.preludeFor(recipe, manifest);
+            return "\n" + (prelude == null ? "" : prelude + "\n\n")
+                 + manifest.writtenSignature() + " {\n" + ready + "\n}\n";
         }
         final StringBuilder out = new StringBuilder(512);
         out.append('\n');
         switch (manifest.kind) {
             case TRANSFORM -> {
-                out.append(manifest.signature()).append(" {\n");
+                out.append(manifest.writtenSignature()).append(" {\n");
                 out.append("  // Return the value this entry should carry.\n");
                 out.append("  // :root rdf define df ").append(manifest.name).append(' ')
                    .append(callExample(manifest)).append('\n');
@@ -449,7 +520,7 @@ public final class RootPipelineTemplates {
                 out.append("}\n");
             }
             case FILTER -> {
-                out.append(manifest.signature()).append(" {\n");
+                out.append(manifest.writtenSignature()).append(" {\n");
                 out.append("  // Return true for the entries that should be kept.\n");
                 out.append("  // :root rdf filter df ").append(callExample(manifest)).append('\n');
                 out.append("  return ").append(firstInputOrZero(manifest)).append(" > 0;\n");
@@ -493,11 +564,45 @@ public final class RootPipelineTemplates {
         out.append("// is simply called by name.\n\n");
         out.append("void ").append(manifest.name).append("_test() {\n");
         switch (manifest.kind) {
-            case TRANSFORM, FILTER ->
+            case TRANSFORM, FILTER -> {
                 out.append("  std::cout << ").append(manifest.name).append('(')
                    .append(sampleArguments(manifest)).append(") << std::endl;\n");
+                // What the extras add, called the way an analysis would.
+                if (RootPipelineExtras.perObject(manifest)) {
+                    out.append("  // Per object: two objects, one answer each.\n");
+                    out.append("  std::cout << ").append(manifest.name).append('(');
+                    for (int i = 0; i < manifest.inputs.size(); i++) {
+                        out.append(i > 0 ? ", " : "").append("ROOT::RVec<double>{1.0, 2.0}");
+                    }
+                    out.append(") << std::endl;\n");
+                }
+                if (RootPipelineExtras.sigma(manifest)) {
+                    out.append("  // Its uncertainty, every input known to 10%.\n");
+                    out.append("  std::cout << ").append(RootPipelineExtras.sigmaName(manifest)).append('(');
+                    int count = manifest.inputs.size();
+                    for (var v : RootPipelineExtras.varied(manifest)) {
+                        count += v.given() ? 0 : 1;
+                    }
+                    for (int i = 0; i < count; i++) {
+                        out.append(i > 0 ? ", " : "").append(i < manifest.inputs.size() ? "1.0" : "0.1");
+                    }
+                    out.append(") << std::endl;\n");
+                }
+                if (RootPipelineExtras.monitored(manifest)) {
+                    out.append("  // What the monitor saw of the calls above.\n");
+                    out.append("  std::cout << ").append(RootPipelineExtras.reportName(manifest))
+                       .append("() << std::endl;\n");
+                }
+            }
             case HISTOGRAM -> {
-                out.append("  TH1D *h = ").append(manifest.name).append("(nullptr);\n");
+                // The tree comes first, then every other input the form lists.
+                out.append("  TH1D *h = ").append(manifest.name).append("(nullptr")
+                   .append(manifest.inputs.isEmpty() ? "" : ", " + sampleArguments(manifest)).append(");\n");
+                out.append("  if (h == nullptr) {\n");
+                out.append("    std::cout << \"").append(manifest.name)
+                   .append(" gave no histogram for an empty tree\" << std::endl;\n");
+                out.append("    return;\n");
+                out.append("  }\n");
                 out.append("  std::cout << h->GetName() << \"  \" << h->GetEntries() << std::endl;\n");
             }
             default ->
@@ -518,7 +623,12 @@ public final class RootPipelineTemplates {
         if (existing == null || !existing.contains(BODY_MARK)) {
             return source(manifest);
         }
-        final int from = existing.indexOf(BODY_MARK) + BODY_MARK.length();
+        // From the line after the mark: the header ends on the mark's own line
+        // break, and keeping that break as well added a blank line above the
+        // user's code at every save.
+        final int mark = existing.indexOf(BODY_MARK) + BODY_MARK.length();
+        final int lineEnd = existing.indexOf('\n', mark);
+        final int from = lineEnd < 0 ? existing.length() : lineEnd + 1;
         final int to = existing.indexOf(TAIL_MARK, from);
         String kept = to < 0 ? existing.substring(from)
                              : existing.substring(from, to);
@@ -527,13 +637,16 @@ public final class RootPipelineTemplates {
         // calls the entry point, and not the declaration, and the source would
         // stop compiling. It is replaced only while it still reads as the form
         // wrote it, so a declaration the user rewrote by hand is left alone.
+        // The monitor renames it too: on, the user's function becomes the inner
+        // one the entry point at the end of the file calls; off, it is the
+        // entry point again.
         final RootPipelineManifest before = RootPipelineManifest.fromText(existing);
         if (before != null && before.kind != RootPipelineManifest.Kind.LIBRARY
                 && manifest.kind != RootPipelineManifest.Kind.LIBRARY) {
-            final String was = before.signature() + " {";
+            final String was = before.writtenSignature() + " {";
             final int at = kept.indexOf(was);
             if (at >= 0) {
-                kept = kept.substring(0, at) + manifest.signature() + " {"
+                kept = kept.substring(0, at) + manifest.writtenSignature() + " {"
                      + kept.substring(at + was.length());
             }
         }

@@ -263,14 +263,36 @@ final class Viewport extends JComponent {
         toolGrab = false;
         if (t != null) {
             t.activate();
-            setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
-        } else {
-            setCursor(Cursor.getDefaultCursor());
         }
+        pointer(mouseX, mouseY);
         toolListener.accept(t);
         updateStatus();
         requestFocusInWindow();
         repaint();
+    }
+
+    /**
+     * The pointer says what a click does where it rests: a hand over what a click works (the graphics toolbar, Physics
+     * Live's card, the navigation cube, a dimension written on the model), arrows over a handle of the move tool, the
+     * cross where the tool at work draws, the arrow elsewhere. A tool used to put the cross over the whole view, the
+     * toolbar and the card included: nothing told a click that turns an option on from one that draws.
+     */
+    private void pointer(int x, int y) {
+        final boolean over = x >= 0 && y >= 0 && x < getWidth() && y < getHeight();
+        final boolean draws = tool != null && !(tool instanceof Tools.MoveTool);
+        final int kind;
+        if (over && (gAt(x, y) >= 0 || live != null && live.hit(x, y) || onCube(x, y))) {
+            kind = Cursor.HAND_CURSOR;
+        } else if (over && tool instanceof Tools.MoveTool mt && hitGizmo(x, y, mt.rotate) >= 0) {
+            kind = Cursor.MOVE_CURSOR;
+        } else if (over && !draws && dimAt(x, y) >= 0) {
+            kind = Cursor.HAND_CURSOR; // a double click changes it; while a tool draws, a click there draws
+        } else {
+            kind = tool != null ? Cursor.CROSSHAIR_CURSOR : Cursor.DEFAULT_CURSOR;
+        }
+        if (getCursor().getType() != kind) {
+            setCursor(Cursor.getPredefinedCursor(kind));
+        }
     }
 
     void updateStatus() {
@@ -2770,6 +2792,12 @@ final class Viewport extends JComponent {
 
         @Override
         public void mouseReleased(MouseEvent e) {
+            released(e);
+            // what the release changed (a tool ended, the card folded, an option turned on) shows in the pointer at once
+            pointer(e.getX(), e.getY());
+        }
+
+        private void released(MouseEvent e) {
             if (livePressed) {
                 livePressed = false;
                 dragging = false;
@@ -2878,7 +2906,13 @@ final class Viewport extends JComponent {
                     tool.moved(snap, e);
                 }
             }
+            pointer(e.getX(), e.getY());
             repaint();
+        }
+
+        @Override
+        public void mouseEntered(MouseEvent e) {
+            pointer(e.getX(), e.getY());
         }
 
         @Override

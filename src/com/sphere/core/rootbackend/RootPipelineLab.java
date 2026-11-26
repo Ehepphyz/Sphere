@@ -698,8 +698,41 @@ public final class RootPipelineLab {
                         "The input '" + input.name() + "' is never read: a forgotten argument, or one too many.", false));
                 }
             }
+            missingModules(out, body, code, manifest);
         }
         return dedupe(out);
+    }
+
+    /**
+     * A part of ROOT the code reaches for while its module is not ticked.
+     *
+     * The module is what writes the #include, so the build would stop on a
+     * name the user can see plainly in the code. It matters more now that a
+     * formula leaves TMath out when it does not use it: the TMath::Landau
+     * typed into it afterward needs the box ticked.
+     */
+    private static void missingModules(List<Finding> out, Body body, String code, RootPipelineManifest manifest) {
+        final java.util.Set<RootPipelineModules> have = new java.util.HashSet<>(manifest.modules);
+        // What the template adds on its own, whatever is ticked.
+        if (manifest.inputs.stream().anyMatch(input -> input.type() != null && input.type().contains("RVec"))) {
+            have.add(RootPipelineModules.VECTORS);
+        }
+        if (manifest.kind == RootPipelineManifest.Kind.HISTOGRAM) {
+            have.add(RootPipelineModules.HIST);
+            have.add(RootPipelineModules.TREE);
+        }
+        for (RootPipelineModules needed : RootPipelineStarts.modulesUsedBy(code)) {
+            if (have.contains(needed)) {
+                continue;
+            }
+            // Included by hand in the body counts as included.
+            final boolean byHand = needed.headers().stream().anyMatch(header -> body.text().contains(header));
+            if (!byHand) {
+                out.add(new Finding(body.firstLine(), Severity.ERROR, "module-missing",
+                    "The code uses " + needed.label + " but the " + needed.token + " module is not ticked:"
+                    + " its #include is missing, so the build would stop there.", false));
+            }
+        }
     }
 
     /** The body without the entry point's own declaration, where every input appears. */
@@ -864,79 +897,52 @@ public final class RootPipelineLab {
     /* A pipeline from a formula                                           */
     /* ================================================================== */
 
-    private static final Set<String> KNOWN = Set.of(
-        "sqrt", "exp", "log", "log10", "log2", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-        "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "abs", "fabs", "min", "max", "floor", "ceil",
-        "round", "erf", "erfc", "tgamma", "lgamma", "hypot", "cbrt", "fmod", "remainder", "copysign",
-        "std", "TMath", "pi", "Pi", "M_PI", "true", "false");
-
-    /** What a formula became. */
-    public record FromFormula(RootPipelineManifest manifest, String source, List<String> notes) { }
+    /**
+     * What a formula became. problem, when it is not null, is why the formula
+     * could not be read -- with a caret under the place -- and nothing should
+     * be written from it.
+     */
+    public record FromFormula(RootPipelineManifest manifest, String source, List<String> notes,
+                              String problem) {
+        public FromFormula(RootPipelineManifest manifest, String source, List<String> notes) {
+            this(manifest, source, notes, null);
+        }
+    }
 
     /**
      * A transform written from a one-line formula.
      *
-     * The inputs are the names the formula uses that are not functions or
-     * constants, in the order they first appear; x^2 becomes a product rather
-     * than C++'s exclusive or; the math functions are std::'s. The result is a
-     * pipeline like any other: it can be edited, built, timed and audited.
+     * The formula is read by RootFormula, the forge's own reader: a real
+     * parser, so x^2 is a power whatever its base, 1/2 is 0.5, 0 < x < 1 is
+     * both comparisons, and a mistake is caught here, with its place, rather
+     * than by the compiler three steps later. The result is a pipeline like
+     * any other: it can be edited, built, timed and audited. It stays a
+     * transform, as this command always made: a formula that compares gives
+     * 1 or 0, and the notes say how to make it a filter instead.
      */
     public static FromFormula fromFormula(String name, String formula) {
-        List<String> notes = new ArrayList<>();
-        String expr = formula.trim();
-        // ^ is exclusive or in C++, which is never what a formula meant.
-        final Pattern caret = Pattern.compile(
-            "([A-Za-z_][\\w.]*|\\d+(?:\\.\\d*)?|\\([^()]*\\))\\s*\\^\\s*([A-Za-z_][\\w.]*|\\d+(?:\\.\\d*)?|\\([^()]*\\))");
-        for (int guard = 0; guard < 20 && expr.contains("^"); guard++) {
-            final Matcher m = caret.matcher(expr);
-            if (!m.find()) {
-                break;
-            }
-            final String base = m.group(1);
-            final String exponent = m.group(2);
-            final String rep = exponent.equals("2") ? "(" + base + " * " + base + ")"
-                : exponent.equals("3") ? "(" + base + " * " + base + " * " + base + ")"
-                : "std::pow(" + base + ", " + exponent + ")";
-            expr = expr.substring(0, m.start()) + rep + expr.substring(m.end());
-        }
-        if (expr.contains("^")) {
-            notes.add("A ^ was left as written: put its operands in parentheses.");
-        }
-        expr = expr.replaceAll("(?<![\\w:.])pi(?![\\w(])", "3.141592653589793");
-        // std:: for the bare math functions, so the double overloads are chosen.
-        expr = expr.replaceAll("(?<![\\w:.])(sqrt|exp|log10|log2|log|pow|sin|cos|tan|asin|acos|atan2|atan|sinh|cosh|tanh|"
-            + "asinh|acosh|atanh|abs|fabs|floor|ceil|round|erfc|erf|tgamma|lgamma|hypot|cbrt|fmod|remainder|copysign|min|max)\\s*\\(",
-            "std::$1(");
-
-        List<String> inputs = new ArrayList<>();
-        final Matcher id = Pattern.compile("(?<![\\w.:])([A-Za-z_]\\w*)(?![\\w(])(?!\\s*::)").matcher(expr);
-        while (id.find()) {
-            final String word = id.group(1);
-            if (!KNOWN.contains(word) && !inputs.contains(word)) {
-                inputs.add(word);
-            }
-        }
-        RootPipelineManifest m = new RootPipelineManifest();
+        final RootPipelineStarts.Start start = RootPipelineStarts.fromFormula(formula);
+        final RootPipelineManifest m = new RootPipelineManifest();
         m.name = name;
         m.kind = RootPipelineManifest.Kind.TRANSFORM;
         m.description = "From the formula " + formula.trim().replace(" :: ", " ");
-        for (String input : inputs) {
-            m.inputs.add(new RootPipelineManifest.Input(input, "double"));
+        if (!start.ok()) {
+            return new FromFormula(m, "", List.of(), start.error());
         }
-        if (m.inputs.isEmpty()) {
-            m.inputs.add(new RootPipelineManifest.Input("x", "double"));
-            notes.add("The formula names no variable, so the pipeline takes one input x it does not use.");
+        RootPipelineRecipes.applyTo(start.recipe(), m);
+        final boolean compares = m.kind == RootPipelineManifest.Kind.FILTER;
+        m.kind = RootPipelineManifest.Kind.TRANSFORM;
+        final List<String> notes = new ArrayList<>();
+        for (String note : start.notes()) {
+            if (!note.equals(RootPipelineStarts.COMPARES)) {
+                notes.add(note);
+            }
         }
-        m.modules.add(RootPipelineModules.MATH);
-        if (formula.contains("TMath")) {
-            notes.add("TMath functions are available: the math module is included.");
+        if (compares) {
+            notes.add("It compares: as a transform it gives 1 or 0. "
+                + ":root forge " + name + " from = ... makes it a filter.");
         }
-        final String text = RootPipelineTemplates.header(m)
-            + "\n" + m.signature() + " {\n"
-            + "  // Written from: " + formula.trim() + "\n"
-            + "  return " + expr + ";\n"
-            + "}\n" + RootPipelineTemplates.tail(m);
-        return new FromFormula(m, text, notes);
+        return new FromFormula(m, RootPipelineTemplates.source(m, start.recipe()), notes, null);
     }
 
     /* ================================================================== */

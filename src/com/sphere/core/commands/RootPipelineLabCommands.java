@@ -614,6 +614,11 @@ public final class RootPipelineLabCommands {
             return;
         }
         final RootPipelineLab.FromFormula made = RootPipelineLab.fromFormula(name, expr.replaceFirst("\\s+--force$", ""));
+        if (made.problem() != null) {
+            // Nothing is written: a source that cannot compile helps no one.
+            RootEngineCommands.printProblem(made.problem());
+            return;
+        }
         final String why = made.manifest().validate(null);
         if (why != null) {
             AppLogger.error(why);

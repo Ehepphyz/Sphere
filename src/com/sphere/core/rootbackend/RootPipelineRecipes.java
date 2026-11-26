@@ -22,6 +22,11 @@ public final class RootPipelineRecipes {
     /** What a recipe is about, so a long list still reads as a catalog. */
     public enum Family {
         START("start"),
+        // The three below are never in the catalog: they are written on the
+        // spot by RootPipelineStarts, from a formula, a pipeline or a macro.
+        FORMULA("from a formula"),
+        COPY("copy of a pipeline"),
+        MACRO("from a macro"),
         KINEMATICS("kinematics"),
         SELECTION("selection"),
         STATISTICS("statistics"),
@@ -34,12 +39,39 @@ public final class RootPipelineRecipes {
         Family(String label) {
             this.label = label;
         }
+
+        /** Written on the spot from the user's own code, rather than from the catalog. */
+        public boolean written() {
+            return this == FORMULA || this == COPY || this == MACRO;
+        }
     }
 
-    /** One ready-made pipeline: everything the form needs, and the body. */
+    /**
+     * Where a recipe written from the user's own code puts the pipeline's name.
+     *
+     * The catalog's bodies say NAME, which is safe because they are ours. A
+     * body copied from a pipeline or a macro is the user's, and NAME may well
+     * be in it (FILENAME, kNAME); this cannot be, so nothing else is renamed.
+     */
+    public static final String SELF = "\u0001SELF\u0001";
+
+    /**
+     * One ready-made pipeline: everything the form needs, and the body.
+     *
+     * The prelude, when there is one, is code that goes above the entry point
+     * in the user's half of the file: the helpers, constants and includes a
+     * function brought from a macro needs, or what surrounded a copied entry.
+     */
     public record Recipe(Family family, String title, String about, Kind kind,
                          List<Input> inputs, List<RootPipelineModules> modules,
-                         String body) {
+                         String body, String prelude) {
+
+        /** A recipe that needs nothing above its entry point, as the catalog's do. */
+        public Recipe(Family family, String title, String about, Kind kind,
+                      List<Input> inputs, List<RootPipelineModules> modules, String body) {
+            this(family, title, about, kind, inputs, modules, body, null);
+        }
+
         @Override
         public String toString() {
             return title;
@@ -498,11 +530,13 @@ public final class RootPipelineRecipes {
             List.of(in("flavor", "int"), in("x", "double"), in("q", "double")),
             mods(RootPipelineModules.MATH, RootPipelineModules.PDF),
             """
-              // Point this at the set folder the analysis uses. It is read once
-              // and kept: reading a grid per entry would dominate the run.
+              // The set the analysis uses, by the name a paper quotes: it is
+              // looked for in LHAPDF_DATA_PATH (or LHAPATH, or the usual LHAPDF
+              // folders), and a folder path works too. It is read once and
+              // kept: reading a grid per entry would dominate the run.
               // flavor follows the PDG numbering: 1 down, 2 up, 21 gluon.
               static sphere::Pdf set =
-                sphere::Pdf::openSet("/path/to/NNPDF31_nnlo_as_0118");
+                sphere::Catalog::open("NNPDF31_nnlo_as_0118");
               if (x <= 0.0 || x >= 1.0 || q <= 0.0) {
                 return 0.0;
               }
@@ -520,7 +554,7 @@ public final class RootPipelineRecipes {
               // mass, which is what decides whether a search is worth doing
               // before any matrix element is written. Both energies in GeV.
               static sphere::Pdf set =
-                sphere::Pdf::openSet("/path/to/NNPDF31_nnlo_as_0118");
+                sphere::Catalog::open("NNPDF31_nnlo_as_0118");
               if (mass <= 0.0 || collider <= 0.0 || mass >= collider) {
                 return 0.0;
               }
@@ -535,7 +569,7 @@ public final class RootPipelineRecipes {
             mods(RootPipelineModules.MATH, RootPipelineModules.PDF),
             """
               static sphere::Pdf set =
-                sphere::Pdf::openSet("/path/to/NNPDF31_nnlo_as_0118");
+                sphere::Catalog::open("NNPDF31_nnlo_as_0118");
               if (q <= 0.0 || x1 <= 0.0 || x1 >= 1.0 || x2 <= 0.0 || x2 >= 1.0) {
                 return 0.0;
               }
@@ -554,7 +588,7 @@ public final class RootPipelineRecipes {
               // else has been damaged, most often by a download that stopped
               // part way, and nothing else about it announces that.
               static sphere::Pdf set =
-                sphere::Pdf::openSet("/path/to/NNPDF31_nnlo_as_0118");
+                sphere::Catalog::open("NNPDF31_nnlo_as_0118");
               if (q <= 0.0) {
                 return 0.0;
               }
@@ -1111,12 +1145,25 @@ public final class RootPipelineRecipes {
         if (recipe == null || recipe.body() == null) {
             return null;
         }
-        final String name = manifest == null || manifest.name.isBlank()
-            ? "pipeline" : manifest.name;
+        final String name = nameFor(manifest);
+        final String token = recipe.family().written() ? SELF : "NAME";
         final List<String> lines = new ArrayList<>();
         for (String line : recipe.body().stripTrailing().split("\n")) {
-            lines.add(line.replace("NAME", name));
+            lines.add(line.replace(token, name));
         }
         return String.join("\n", lines);
+    }
+
+    /** The recipe's prelude with the pipeline's name in it, or null when it has none. */
+    public static String preludeFor(Recipe recipe, RootPipelineManifest manifest) {
+        if (recipe == null || recipe.prelude() == null || recipe.prelude().isBlank()) {
+            return null;
+        }
+        final String token = recipe.family().written() ? SELF : "NAME";
+        return recipe.prelude().stripTrailing().replace(token, nameFor(manifest));
+    }
+
+    private static String nameFor(RootPipelineManifest manifest) {
+        return manifest == null || manifest.name.isBlank() ? "pipeline" : manifest.name;
     }
 }

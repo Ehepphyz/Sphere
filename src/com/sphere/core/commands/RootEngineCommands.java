@@ -522,14 +522,209 @@ public final class RootEngineCommands {
     /** Loading a library can take far longer than a round trip to the engine. */
     private static final long LOAD_TIMEOUT_MS = 20_000L;
 
-    /** Opens the window where a pipeline is written, built and loaded. */
+    private static final String FORGE_USAGE = ":root forge [<name>] [from <recipe words | = formula"
+        + " | err = formula | d/dx = formula | copy <pipeline> | file.C[:function]>] [--build [--force]]";
+
+    /**
+     * Opens the forge, the window where a pipeline is written, built and loaded.
+     *
+     *   :root forge                           the builder
+     *   :root forge mt                        mt, or a new mt with a recipe suggested
+     *   :root forge mt from transverse        a new mt from the catalog, searched
+     *   :root forge mt from = sqrt(2*a*b)     from a formula
+     *   :root forge mt_err from err = sqrt(2*a*b) its uncertainty, by linear propagation
+     *   :root forge g from d/da = sqrt(2*a*b)  its derivative in a
+     *   :root forge v2 from copy mt           from a pipeline already written
+     *   :root forge f from old.C:calc         from one function of a macro
+     *
+     * With --build, the window is skipped: the source is written, built and
+     * loaded at once, the way :root pipeline formula does for a formula.
+     */
+    public static void rootForge(String i, CommandExecutionContext c) {
+        forge(Handlers.args(i, ":root forge"), c);
+    }
+
+    /** The old name, kept so that habits and saved scripts still work. */
     public static void rootPersonalPipeline(String i, CommandExecutionContext c) {
+        forge(Handlers.args(i, ":root personal pipeline"), c);
+    }
+
+    private static void forge(String rest, CommandExecutionContext c) {
         final String project = activeProject(c);
-        final String name = Handlers.args(i, ":root personal pipeline").trim();
+        String text = rest == null ? "" : rest.trim();
+        boolean build = false;
+        boolean force = false;
+        while (true) {
+            final java.util.regex.Matcher flag = java.util.regex.Pattern
+                .compile("^(.*?)\\s*--(build|force)\\s*$").matcher(text);
+            if (!flag.matches()) {
+                break;
+            }
+            if (flag.group(2).equals("build")) {
+                build = true;
+            } else {
+                force = true;
+            }
+            text = flag.group(1).trim();
+        }
+        String name = text;
+        String from = null;
+        final java.util.regex.Matcher m = java.util.regex.Pattern
+            .compile("^(?:(\\S+)\\s+)?from\\s+(.+)$").matcher(text);
+        if (m.matches()) {
+            name = m.group(1) == null ? "" : m.group(1);
+            from = m.group(2);
+        }
+        if (!name.isEmpty() && !name.matches("[A-Za-z_]\\w*")) {
+            AppLogger.error("A pipeline name is a C++ identifier: " + name + " is not one.");
+            Handlers.usage(FORGE_USAGE);
+            return;
+        }
+        if (build && from == null) {
+            AppLogger.error("--build needs something to build from.");
+            Handlers.usage(FORGE_USAGE);
+            return;
+        }
+
+        if (from != null) {
+            final var start = com.sphere.core.rootbackend.RootPipelineStarts.resolve(from, project);
+            if (!start.ok()) {
+                printProblem(start.error());
+                return;
+            }
+            if (build) {
+                forgeAndBuild(name.isEmpty() ? start.suggestedName() : name, start, force, c);
+                return;
+            }
+            com.sphere.core.rootbackend.RootPipelineWindow.show(
+                Handlers.backend(c), project, name.isEmpty() ? null : name, start);
+            AppLogger.result("The forge is open on a new pipeline from "
+                + start.recipe().title() + ".");
+            for (String note : start.notes()) {
+                AppLogger.raw("  " + note);
+            }
+            return;
+        }
+
         com.sphere.core.rootbackend.RootPipelineWindow.show(
             Handlers.backend(c), project, name.isEmpty() ? null : name);
-        AppLogger.result("The pipeline builder is open."
-            + (name.isEmpty() ? "" : " Showing " + name + "."));
+        AppLogger.result("The forge is open." + (name.isEmpty() ? "" : " Showing " + name + "."));
+        // A new name that clearly points to a recipe is worth a word.
+        if (!name.isEmpty() && pipelineSource(name, project) == null) {
+            final var hint = com.sphere.core.rootbackend.RootPipelineStarts.suggest(name);
+            if (hint != null) {
+                AppLogger.raw("  " + name + " looks like \"" + hint.title() + "\": "
+                    + ":root forge " + name + " from " + hint.title().toLowerCase(java.util.Locale.ROOT)
+                    + "   (or click the suggestion in the window)");
+            }
+        }
+    }
+
+    /**
+     * A problem as the forge explains it: the reason on the error line, then
+     * the formula and its caret as raw lines, indented alike so they align.
+     */
+    static void printProblem(String problem) {
+        final String[] lines = (problem == null ? "" : problem).split("\n");
+        AppLogger.error(lines[0]);
+        for (int k = 1; k < lines.length; k++) {
+            AppLogger.raw(lines[k]);
+        }
+    }
+
+    /**
+     * Writes, builds and loads a pipeline from a start, without the window.
+     *
+     * The source is exactly what the window would have saved: the same
+     * generator, the same recipe, the start's own build options. What is on
+     * disk already is kept in the history before it is replaced.
+     */
+    private static void forgeAndBuild(String name,
+                                      com.sphere.core.rootbackend.RootPipelineStarts.Start start,
+                                      boolean force, CommandExecutionContext c) {
+        if (name == null || name.isBlank()) {
+            AppLogger.error("--build needs a name:  :root forge <name> from ...");
+            return;
+        }
+        final String project = activeProject(c);
+        final var m = new com.sphere.core.rootbackend.RootPipelineManifest();
+        m.name = name;
+        final var options = start.options();
+        if (options != null) {
+            m.takeBuildOptions(options);
+            m.global = options.global || project == null || project.isBlank();
+            if (options.description != null && !options.description.isBlank()) {
+                m.description = options.description;
+            }
+        }
+        com.sphere.core.rootbackend.RootPipelineRecipes.applyTo(start.recipe(), m);
+        final String why = m.validate(null);
+        if (why != null) {
+            AppLogger.error(why);
+            return;
+        }
+        // A project whose folder is gone has no layer: the global one takes it.
+        final java.nio.file.Path projectLayer =
+            com.sphere.core.rootbackend.RootUserPipeline.projectRoot(project);
+        final java.nio.file.Path layer = m.global || projectLayer == null
+            ? com.sphere.core.rootbackend.RootUserPipeline.globalRoot() : projectLayer;
+        m.global = projectLayer == null || m.global;
+        com.sphere.core.rootbackend.RootUserPipeline.ensureLayout(layer);
+        final java.nio.file.Path file = m.sourceIn(layer);
+        final java.nio.file.Path existing = pipelineSource(name, project);
+        if (!force && (java.nio.file.Files.exists(file) || existing != null)) {
+            AppLogger.error(name + " already exists. Add --force to replace it (the old one goes to the history).");
+            return;
+        }
+        final String source = com.sphere.core.rootbackend.RootPipelineTemplates.source(m, start.recipe());
+        try {
+            com.sphere.core.rootbackend.RootPipelineHistory.keep(file);
+            java.nio.file.Files.writeString(file, source, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException failure) {
+            AppLogger.error("Could not write " + file + ": " + failure.getMessage());
+            return;
+        }
+        AppLogger.success("Written " + file.getFileName() + " from " + start.recipe().title()
+            + ":  " + m.signature());
+        for (String note : start.notes()) {
+            AppLogger.raw("  " + note);
+        }
+        for (var finding : com.sphere.core.rootbackend.RootPipelineLab.lint(source, m)) {
+            AppLogger.warn("  " + finding);
+        }
+        // A pipeline the engine holds already keeps its old build: the load
+        // after the build says so (RootUserPipeline.loadInto), with the way out.
+        Handlers.runBuilds(new java.util.ArrayList<>(java.util.List.of(file)), project, c);
+        final StringBuilder call = new StringBuilder(":root pipeline run ").append(name);
+        if (m.kind == com.sphere.core.rootbackend.RootPipelineManifest.Kind.HISTOGRAM) {
+            call.append(" <tree>");
+        }
+        for (var input : m.inputs) {
+            call.append(" <").append(input.name()).append('>');
+        }
+        AppLogger.raw("  Once loaded:  " + call + (m.showInHelp ? "   or  :root " + name + " ..." : ""));
+    }
+
+    /** The catalog, or what in it answers a few words, best first. */
+    public static void rootForgeRecipes(String i, CommandExecutionContext c) {
+        final String query = Handlers.args(i, ":root forge recipes").trim();
+        final var hits = com.sphere.core.rootbackend.RootPipelineStarts.search(query, 0);
+        if (hits.isEmpty()) {
+            AppLogger.result("Nothing in the catalog answers \"" + query + "\".");
+            return;
+        }
+        AppLogger.raw(String.format("  %-48s %-18s %s", "recipe", "family", "inputs"));
+        for (var hit : hits) {
+            final var r = hit.recipe();
+            final java.util.List<String> inputs = new java.util.ArrayList<>();
+            for (var one : r.inputs()) {
+                inputs.add(one.name());
+            }
+            AppLogger.raw(String.format("  %-48s %-18s %s", r.title(), r.family().label,
+                String.join(", ", inputs)));
+        }
+        AppLogger.raw("  :root forge <name> from <recipe words>   also:  from = <formula>,"
+            + "  from copy <pipeline>,  from file.C[:function]");
     }
 
     /**
@@ -573,15 +768,20 @@ public final class RootEngineCommands {
         }
 
         if (live.isEmpty() && waiting == 0) {
-            AppLogger.result("No pipeline yet. :root personal pipeline opens the builder.");
+            AppLogger.result("No pipeline yet. :root forge opens the builder.");
         }
     }
 
     /** Opens the builder on a new pipeline, with the name already in the form. */
     public static void rootPipelineNew(String i, CommandExecutionContext c) {
-        final String name = Handlers.head(Handlers.args(i, ":root pipeline new"));
+        final String rest = Handlers.args(i, ":root pipeline new").trim();
+        final String name = Handlers.head(rest);
         if (name.isEmpty()) {
-            Handlers.usage(":root pipeline new <name>");
+            Handlers.usage(":root pipeline new <name> [from ...] [--build]   (the same starts as :root forge)");
+            return;
+        }
+        if (rest.matches("\\S+\\s+from\\s+.+")) {
+            forge(rest, c);
             return;
         }
         com.sphere.core.rootbackend.RootPipelineWindow.show(
@@ -627,25 +827,38 @@ public final class RootEngineCommands {
             AppLogger.error(name + " has not been built yet. :root pipeline build " + name);
             return;
         }
-        final String answer = b.executeClingAwait("gSystem->Load(\""
-            + com.sphere.core.rootbackend.RootUserPipeline.forCling(library) + "\")",
-            Handlers.TIMEOUT_MS);
-        if (answer == null || answer.startsWith("ERROR")) {
-            AppLogger.error("The engine refused " + library.getFileName()
-                + (answer == null ? "." : ": " + answer));
+        final var outcome = com.sphere.core.rootbackend.RootUserPipeline.loadOne(
+            b, source.getParent() == null ? null : source.getParent().getParent(), library);
+        if (!outcome.ok()) {
+            AppLogger.error("The engine refused " + library.getFileName() + ": " + outcome.problem());
             return;
         }
-        var loaded = com.sphere.core.rootbackend.RootUserPipeline.refresh(
-            b, source.getParent() == null ? null : source.getParent().getParent(), library);
+        if (outcome.stale()) {
+            AppLogger.warn(name + " was rebuilt after the engine loaded it: the engine still runs that first build. "
+                + com.sphere.core.rootbackend.RootUserPipeline.RESTART);
+        }
+        if (outcome.shadowedBy() != null) {
+            AppLogger.warn("Calls to " + name + " by name still reach the one the engine read first ("
+                + outcome.shadowedBy() + "). " + com.sphere.core.rootbackend.RootUserPipeline.RESTART);
+        }
+        var loaded = outcome.pipeline();
         if (loaded == null || loaded.isSilent()) {
             AppLogger.warn(library.getFileName()
                 + " is loaded but says nothing about itself. Rebuild it from the builder.");
             return;
         }
-        AppLogger.success(loaded.name() + " is loaded:  " + loaded.summary());
+        AppLogger.success(loaded.name() + (outcome.code() == 1 ? " was loaded already:  " : " is loaded:  ")
+            + loaded.summary());
     }
 
-    /** Takes a pipeline back out of the engine. */
+    /**
+     * Takes a pipeline out of Sphere: its command and its line in the list.
+     *
+     * The library itself is left in the engine. gSystem->Unload was tried
+     * against ROOT 6.41: once RDataFrame had called into the library it
+     * crashed inside cling, and otherwise it took back every declaration and
+     * variable made since the library was loaded, the user's own included.
+     */
     public static void rootPipelineDrop(String i, CommandExecutionContext c) {
         final String name = Handlers.head(Handlers.args(i, ":root pipeline drop"));
         if (name.isEmpty()) {
@@ -657,18 +870,14 @@ public final class RootEngineCommands {
             AppLogger.error("No pipeline named " + name + " is loaded.");
             return;
         }
-        final com.sphere.core.rootbackend.RootBackend b = Handlers.backend(c);
-        if (b != null && b.isAvailable()) {
-            b.executeClingAwait("gSystem->Unload(\""
-                + com.sphere.core.rootbackend.RootUserPipeline.forCling(gone.library())
-                + "\")", Handlers.TIMEOUT_MS);
-        }
         com.sphere.core.rootbackend.RootUserPipeline.forget(name);
         final String published = ":root " + gone.name();
         if (PUBLISHED.remove(published)) {
             CommandDefinitions.unregister(published);
         }
-        AppLogger.success(gone.name() + " is no longer loaded.");
+        AppLogger.success(gone.name() + " is out of Sphere's list and commands.");
+        AppLogger.raw("  Its library stays in the engine: unloading one can crash ROOT, or take back what was"
+            + " declared since. Stop and start the ROOT backend (console menu, ROOT) to free it.");
     }
 
     /**
@@ -817,8 +1026,79 @@ public final class RootEngineCommands {
         AppLogger.raw("  per entry   " + (manifest.threadSafe
             ? "keeps no state, so :root mt on may run it on several at once"
             : "keeps state, so it runs on one entry at a time"));
+        if (com.sphere.core.rootbackend.RootPipelineExtras.perObject(manifest)) {
+            AppLogger.raw("  per object  also takes collections (ROOT::RVec, std::vector), one answer per object");
+        }
+        if (com.sphere.core.rootbackend.RootPipelineExtras.sigma(manifest)) {
+            AppLogger.raw("  uncertainty " + com.sphere.core.rootbackend.RootPipelineExtras.sigmaCall(manifest));
+        }
+        if (com.sphere.core.rootbackend.RootPipelineExtras.monitored(manifest)) {
+            AppLogger.raw("  monitored   :root pipeline report " + manifest.name);
+        }
         AppLogger.raw("  source      " + (source == null ? "not on disk" : source.toString()));
         AppLogger.raw("  loaded      " + (one == null ? "no" : one.library().toString()));
+    }
+
+    /**
+     * What a monitored pipeline saw in the engine: its calls, the inputs and
+     * answers that were not numbers with the first of each, where each input
+     * lived, what a call cost, and the cutflow of its SPHERE_CUT(...). With no
+     * name, every monitored pipeline loaded; "reset" after a name starts its
+     * score again.
+     */
+    public static void rootPipelineReport(String i, CommandExecutionContext c) {
+        final String[] w = Handlers.words(Handlers.args(i, ":root pipeline report"));
+        final java.util.List<com.sphere.core.rootbackend.RootUserPipeline.Pipeline> chosen =
+            new java.util.ArrayList<>();
+        if (w.length == 0) {
+            for (var one : com.sphere.core.rootbackend.RootUserPipeline.pipelines()) {
+                if (com.sphere.core.rootbackend.RootPipelineExtras.monitored(one.manifest())) {
+                    chosen.add(one);
+                }
+            }
+            if (chosen.isEmpty()) {
+                AppLogger.result("No loaded pipeline is monitored. Tick monitor in :root forge, build and load it,"
+                    + " run it, then ask again.");
+                return;
+            }
+        } else {
+            var one = com.sphere.core.rootbackend.RootUserPipeline.pipeline(w[0]);
+            if (one == null) {
+                AppLogger.error("No pipeline named " + w[0] + " is loaded. :root pipeline load " + w[0]);
+                return;
+            }
+            if (!com.sphere.core.rootbackend.RootPipelineExtras.monitored(one.manifest())) {
+                AppLogger.error(one.name() + " is not monitored: tick monitor in :root forge, then build and load"
+                    + " it again.");
+                return;
+            }
+            chosen.add(one);
+        }
+        final boolean reset = w.length > 1 && w[1].equalsIgnoreCase("reset");
+        for (var one : chosen) {
+            final var manifest = one.manifest();
+            final String asked = (reset
+                ? com.sphere.core.rootbackend.RootPipelineExtras.resetName(manifest)
+                : com.sphere.core.rootbackend.RootPipelineExtras.reportName(manifest)) + "()";
+            final String answer = Handlers.clingAnswer(c, asked);
+            if (answer == null) {
+                return;
+            }
+            if (answer.startsWith("ERROR")) {
+                // Ticked and rebuilt, but the engine still runs the library it
+                // loaded before: that one has no report to give.
+                AppLogger.error(one.name() + " has no report in the engine: the library it runs was built without"
+                    + " the monitor. Stop and start the ROOT backend (console menu, ROOT) to load the new build.");
+                continue;
+            }
+            if (reset) {
+                AppLogger.success(one.name() + ": the score starts again from zero.");
+                continue;
+            }
+            for (String line : answer.strip().split("\\R")) {
+                AppLogger.raw("  " + line);
+            }
+        }
     }
 
     /* ------------------------------------------------------------------ */
@@ -845,7 +1125,7 @@ public final class RootEngineCommands {
             }
         }
         if (found == 0) {
-            AppLogger.result("No chain yet. The Chain tab of :root personal pipeline builds one.");
+            AppLogger.result("No chain yet. The Chain tab of :root forge builds one.");
         }
     }
 
@@ -1001,8 +1281,13 @@ public final class RootEngineCommands {
         for (int n = 0; n < arguments.length; n++) {
             arguments[n] = n + 1 < w.length ? asDouble(w[n + 1]) : 1.0;
         }
-        var values = com.sphere.core.rootbackend.RootPipelineProbe.watch(
+        var watching = com.sphere.core.rootbackend.RootPipelineProbe.watch(
             compilerFor(c), ready.manifest, ready.source, arguments);
+        if (watching.problem() != null) {
+            printProblem(watching.problem());
+            return;
+        }
+        var values = watching.values();
         if (values.isEmpty()) {
             AppLogger.result("Nothing was recorded. Name a value with SPHERE_WATCH(x) "
                 + "inside the body, then look again.");
@@ -1024,12 +1309,29 @@ public final class RootEngineCommands {
         if (ready == null) {
             return;
         }
-        final double low = w.length > 1 ? asDouble(w[1]) : 0.0;
-        final double high = w.length > 2 ? asDouble(w[2]) : 100.0;
-        AppLogger.info("Sweeping " + ready.manifest.name
-            + " over [" + low + ", " + high + "]...");
-        var found = com.sphere.core.rootbackend.RootPipelineProbe.health(
-            compilerFor(c), ready.manifest, ready.source, 20000, low, high);
+        final com.sphere.core.rootbackend.RootPipelineProbe.Health found;
+        if (w.length > 1) {
+            final double low = asDouble(w[1]);
+            final double high = w.length > 2 ? asDouble(w[2]) : 100.0;
+            AppLogger.info("Sweeping " + ready.manifest.name
+                + ", every input over [" + low + ", " + high + "]...");
+            found = com.sphere.core.rootbackend.RootPipelineProbe.health(
+                compilerFor(c), ready.manifest, ready.source, 20000, low, high);
+        } else {
+            // No range given: each input where its name says it lives.
+            final double[][] ranges =
+                com.sphere.core.rootbackend.RootPipelineProbe.rangesByName(ready.manifest);
+            AppLogger.info("Sweeping " + ready.manifest.name + " where its inputs live:  "
+                + com.sphere.core.rootbackend.RootPipelineProbe.describeRanges(ready.manifest, ranges)
+                + "   (:root pipeline check " + ready.manifest.name + " <low> <high> sweeps them all alike)");
+            found = com.sphere.core.rootbackend.RootPipelineProbe.health(
+                compilerFor(c), ready.manifest, ready.source, 20000, ranges);
+        }
+        if (!found.succeeded()) {
+            // Not "some calls failed": nothing was called at all.
+            printProblem(found.message());
+            return;
+        }
         AppLogger.raw("      " + found.summary());
         if (found.isClean()) {
             AppLogger.success("Every call answered a number.");
@@ -1058,12 +1360,20 @@ public final class RootEngineCommands {
                 }
             }
         }
-        final double low = w.length > 2 ? asDouble(w[2]) : 0.0;
-        final double high = w.length > 3 ? asDouble(w[3]) : 100.0;
+        // Without a range, the walked input goes where its name says it lives.
+        final double[] lives = which < ready.manifest.inputs.size()
+            ? com.sphere.core.rootbackend.RootFormula.range(ready.manifest.inputs.get(which).name())
+            : new double[]{0.0, 100.0};
+        final double low = w.length > 2 ? asDouble(w[2]) : lives[0];
+        final double high = w.length > 3 ? asDouble(w[3]) : lives[1];
         final double held = w.length > 4 ? asDouble(w[4]) : 1.0;
 
         var found = com.sphere.core.rootbackend.RootPipelineProbe.scan(
             compilerFor(c), ready.manifest, ready.source, which, low, high, 41, held);
+        if (!found.succeeded()) {
+            printProblem(found.message());
+            return;
+        }
         final String name = which < ready.manifest.inputs.size()
             ? ready.manifest.inputs.get(which).name() : "input";
         AppLogger.raw("  " + name + " from " + low + " to " + high

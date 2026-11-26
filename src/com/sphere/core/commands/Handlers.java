@@ -153,6 +153,7 @@ public class Handlers {
             case "fastjet", "jets" -> "fjet";
             case "hepmc3", "hepmc2", "hepevt", "lhef", "events" -> "hepmc";
             case "evaluator", "genfun", "genericfunctions", "randomobjects" -> "clhep";
+            case "golem95", "oneloop", "avh_olo", "loops", "loop", "formfactors", "form-factors" -> "golem";
             case "fortran" -> "fort";
             case "javascript" -> "js";
             case "c++", "cxx" -> "cpp";
@@ -2413,8 +2414,13 @@ public class Handlers {
                 java.util.List<com.sphere.core.rootbackend.RootUserCompiler.Build> done =
                     new java.util.ArrayList<>();
                 for (java.nio.file.Path source : queue) {
+                    // The pipeline's own options, as the builder's Build uses
+                    // them: without them a library built from here had no -O3,
+                    // no -fopenmp and none of the -l its modules need.
+                    final com.sphere.core.rootbackend.RootPipelineManifest manifest =
+                        com.sphere.core.rootbackend.RootPipelineManifest.fromSource(source);
                     com.sphere.core.rootbackend.RootUserCompiler.Build built =
-                        compiler.build(source, null);
+                        compiler.build(source, manifest == null ? null : manifest.flags());
                     done.add(built);
                     publish((built.succeeded() ? "[+] " : "[!] ") + source.getFileName()
                             + (built.succeeded()
@@ -2449,9 +2455,18 @@ public class Handlers {
                 AppLogger.raw("  " + good + " built" + (bad > 0 ? ", " + bad + " failed" : "") + ".");
 
                 if (good > 0) {
-                    com.sphere.core.rootbackend.RootBackend engine = backend(c);
-                    if (engine != null && engine.isAvailable()) {
+                    final Object live = c != null && c.ctx != null && c.ctx.router != null
+                        ? c.ctx.router.getRootBackend() : null;
+                    if (live instanceof com.sphere.core.rootbackend.RootBackend engine && engine.isAvailable()) {
                         com.sphere.core.rootbackend.RootUserPipeline.loadInto(engine, project);
+                    } else {
+                        // Said rather than left out: "Once loaded" would otherwise
+                        // be waited for, for a load that never comes.
+                        AppLogger.warn("Built, not loaded: the ROOT engine is not running"
+                            + (new com.sphere.utils.SettingsManager().isDeclaredEmpty("ROOT_DIR")
+                               ? " (ROOT_DIR is empty in settings.conf, which turns it off)." : ".")
+                            + " The builder's Inspect tab and :root pipeline check work without it"
+                            + " for a pipeline that needs no ROOT header.");
                     }
                 }
             }

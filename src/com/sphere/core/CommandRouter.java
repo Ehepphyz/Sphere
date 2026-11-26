@@ -128,7 +128,7 @@ public class CommandRouter {
         "ROOT",                      // ROOTSYS, ROOT_INCLUDE_PATH, ROOTIGNOREPREFIX
         "G4", "GEANT4",
         "LHAPDF", "PYTHIA8", "HERWIG", "THEPEG", "MG5", "MADGRAPH",
-        "FASTJET", "FJCONTRIB", "HEPMC", "GSL", "XROOTD", "CLHEP",
+        "FASTJET", "FJCONTRIB", "HEPMC", "GSL", "XROOTD", "CLHEP", "GOLEM95",
         "SPHERE_"
     );
 

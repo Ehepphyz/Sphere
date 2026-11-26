@@ -59,8 +59,9 @@ final class EngineCommands {
         else if (e == InProcessEngine.HEPMC3) HepMCCommands.diagRows();
         else if (e == InProcessEngine.MINUIT2) Minuit2Commands.diagRows();
         else if (e == InProcessEngine.CLHEP) ClhepCommands.diagRows();
+        else if (e == InProcessEngine.GOLEM95) GolemCommands.diagRows();
         final InProcessEngine.Native cpp = e.findNative();
-        row("C++", cpp == null ? e.nativeHint()
+        row(e.nativeLanguage(), cpp == null ? e.nativeHint()
             : cpp.prefix() + (cpp.version() == null ? "" : ", version " + cpp.version()) + "; " + cpp.detail());
         row("mode", ":" + e.key() + " mode, then " + e.modeExamples() + " ...; 'exit' leaves");
         if (p.ok()) AppLogger.success(e.label() + " is ready.");

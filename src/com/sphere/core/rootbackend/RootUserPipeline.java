@@ -207,7 +207,23 @@ public final class RootUserPipeline {
             return new Outcome(0, 0, 0, problems);
         }
 
-        for (Path root : layers(activeProject)) {
+        final List<Path> roots = layers(activeProject);
+        // The project overrides the global layer by name, which only holds if
+        // the global library is never loaded: ROOT 6.41 takes a library by its
+        // file name, so with the global libmt.so in, the project's libmt.so is
+        // answered "already loaded" and never read, and every call by name
+        // reaches the global one.
+        final java.util.Set<String> overridden = new java.util.HashSet<>();
+        for (int k = 1; k < roots.size(); k++) {
+            for (Path library : libraries(roots.get(k))) {
+                overridden.add(pipelineName(library));
+            }
+        }
+        final List<String> staleNames = new ArrayList<>();
+        final List<String> shadowed = new ArrayList<>();
+
+        for (int r = 0; r < roots.size(); r++) {
+            final Path root = roots.get(r);
             ensureLayout(root);
             Path includes = root.resolve(INCLUDES_DIR);
             if (!Files.isDirectory(includes)) continue;
@@ -216,16 +232,26 @@ public final class RootUserPipeline {
             ask(backend, "gROOT->ProcessLine(\".I " + forCling(includes) + "\")");
 
             for (Path library : libraries(root)) {
-                String answer = ask(backend,
-                        "gSystem->Load(\"" + forCling(library) + "\")");
-                int code = parseCode(answer);
-                switch (code) {
-                    case 0 -> { loaded++; remember(backend, root, library); }
-                    case 1 -> { already++; remember(backend, root, library); }
+                final String name = pipelineName(library);
+                if (r < roots.size() - 1 && overridden.contains(name)) {
+                    continue;
+                }
+                final Loaded one = loadOne(backend, root, library);
+                if (one.ok() && one.shadowedBy() != null) {
+                    shadowed.add(name + " (" + one.shadowedBy() + ")");
+                }
+                switch (one.code()) {
+                    case 0 -> loaded++;
+                    case 1 -> {
+                        already++;
+                        if (one.stale()) {
+                            staleNames.add(name);
+                        }
+                    }
                     default -> {
                         failed++;
-                        problems.add(library.getFileName() + "  (" + describe(code, answer) + ")");
-                        AppLogger.warn("Could not load " + library + ": " + describe(code, answer));
+                        problems.add(library.getFileName() + "  (" + one.problem() + ")");
+                        AppLogger.warn("Could not load " + library + ": " + one.problem());
                     }
                 }
             }
@@ -240,7 +266,146 @@ public final class RootUserPipeline {
             AppLogger.warn("ROOT pipeline: none of the " + failed
                 + " libraries in includes/ could be loaded.");
         }
+        if (!staleNames.isEmpty()) {
+            AppLogger.warn("Rebuilt after the engine loaded them, still running their old build: "
+                + String.join(", ", staleNames) + ". " + RESTART);
+        }
+        if (!shadowed.isEmpty()) {
+            AppLogger.warn("Calls by name still reach the library of the same name the engine read first: "
+                + String.join(", ", shadowed) + ". " + RESTART);
+        }
         return new Outcome(loaded, already, failed, problems);
+    }
+
+    /** How a library the engine holds is replaced, the one way that is safe. */
+    public static final String RESTART =
+        "A loaded library cannot be swapped: stop and start the ROOT backend"
+        + " (console menu, ROOT) to run the new one.";
+
+    /* ------------------------------------------------------------------ */
+    /* Which build the engine runs                                         */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * When each library on disk was built, as the engine first loaded it.
+     *
+     * gSystem->Load reads a library once: asked again, it answers "already
+     * loaded" and the old build keeps running, whatever was rebuilt since.
+     * Unloading is no way out. With ROOT 6.41, gSystem->Unload crashed inside
+     * cling once RDataFrame had called into the library, and otherwise took
+     * back every declaration and variable made since the library came in.
+     * So a rebuild is only noticed and said, and a restart of the engine is
+     * what runs it.
+     */
+    private static final java.util.Map<Path, Read> LOADED_BUILD =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The build the engine read, and when it read it relative to the others. */
+    private record Read(long builtAt, long order) { }
+
+    private static final java.util.concurrent.atomic.AtomicLong ORDER =
+        new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * The engine those builds were read by. Stopping and starting the ROOT
+     * backend makes a new one, with nothing loaded: what the old one held
+     * says nothing about it.
+     */
+    private static RootBackend readBy;
+
+    private static synchronized void engineIs(RootBackend backend) {
+        if (backend != null && backend != readBy) {
+            LOADED_BUILD.clear();
+            readBy = backend;
+        }
+    }
+
+    private static Path key(Path library) {
+        return library.toAbsolutePath().normalize();
+    }
+
+    private static long builtAt(Path library) {
+        try {
+            return Files.getLastModifiedTime(library).toMillis();
+        } catch (IOException | RuntimeException gone) {
+            return Long.MIN_VALUE;
+        }
+    }
+
+    /** Remembers which build of a library the engine has just read. */
+    static void noteLoaded(Path library) {
+        LOADED_BUILD.put(key(library), new Read(builtAt(library), ORDER.incrementAndGet()));
+    }
+
+    /** True when the library on disk was built after the engine read it: the engine runs an older build. */
+    public static boolean stale(Path library) {
+        final Read then = LOADED_BUILD.get(key(library));
+        return then != null && builtAt(library) > then.builtAt();
+    }
+
+    /**
+     * Another library of the same pipeline name that the engine read earlier.
+     * It keeps the name whatever comes after it: ROOT takes the second for the
+     * same library (same file name) and does not read it, and were it read,
+     * both would export the same symbol and the first would answer the calls.
+     */
+    static Path earlierNamesake(Path library) {
+        final String name = pipelineName(library);
+        final Path self = key(library);
+        final Read mine = LOADED_BUILD.get(self);
+        for (java.util.Map.Entry<Path, Read> other : LOADED_BUILD.entrySet()) {
+            if (!other.getKey().equals(self) && pipelineName(other.getKey()).equals(name)
+                    && (mine == null || other.getValue().order() < mine.order())) {
+                return other.getKey();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * What loading one library came to.
+     *
+     * @param stale      the engine kept an older build of this very file
+     * @param shadowedBy another library of the same name read earlier, which
+     *                   keeps answering calls by name; null when there is none
+     */
+    public record Loaded(int code, String answer, Pipeline pipeline, boolean stale, Path shadowedBy) {
+        /** Loaded now, or there already. */
+        public boolean ok() {
+            return code == 0 || code == 1;
+        }
+
+        /** Why it did not load, in words. */
+        public String problem() {
+            return describe(code, answer);
+        }
+    }
+
+    /**
+     * Loads one library and makes it a pipeline: gSystem->Load, its manifest
+     * read back, its entry point declared. Whoever loads -- the startup pass,
+     * the builder's Load, :root pipeline load -- goes through here, so each
+     * says the same thing about a build the engine did not take.
+     */
+    public static Loaded loadOne(RootBackend backend, Path layer, Path library) {
+        engineIs(backend);
+        final Path earlier = earlierNamesake(library);
+        final String answer = ask(backend, "gSystem->Load(\"" + forCling(library) + "\")");
+        final int code = parseCode(answer);
+        if (code == 0) {
+            noteLoaded(library);
+        } else if (code == 1 && earlier == null && !LOADED_BUILD.containsKey(key(library))) {
+            // Loaded by someone else first (a macro, an earlier Sphere): the
+            // build on disk is the best guess of what the engine holds. With a
+            // namesake read before, "already loaded" means that one, not this.
+            noteLoaded(library);
+        }
+        if (code != 0 && code != 1) {
+            return new Loaded(code, answer, null, false, null);
+        }
+        remember(backend, layer, library);
+        return new Loaded(code, answer, pipeline(pipelineName(library)),
+            code == 1 && stale(library), earlier);
     }
 
     private static String ask(RootBackend backend, String expression) {
@@ -305,12 +470,18 @@ public final class RootUserPipeline {
         if (name.isEmpty()) return;
 
         Path source = sourceBeside(library);
-        RootPipelineManifest manifest = RootPipelineManifest.fromSource(source);
+        // A build the engine did not take: what runs is the old one, which
+        // the library in memory describes, not the source that changed since.
+        RootPipelineManifest manifest = stale(library) ? null : RootPipelineManifest.fromSource(source);
         if (manifest == null) {
             manifest = askLibrary(backend, library, name);
         }
+        if (manifest == null) {
+            manifest = RootPipelineManifest.fromSource(source);
+        }
         Pipeline one = new Pipeline(name, manifest, library, source, layer);
         REGISTRY.put(name, one);
+        declare(backend, one);
 
         final java.util.function.Consumer<Pipeline> hook = announce;
         if (hook != null) {
@@ -320,6 +491,167 @@ public final class RootUserPipeline {
                 AppLogger.warn("Could not publish " + name + ": " + refused.getMessage());
             }
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Making a loaded library callable by name                            */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Tells the interpreter what a loaded library defines.
+     *
+     * gSystem->Load maps the library and stops there. Cling compiles every
+     * line it is given and refuses a name it has never seen declared, before
+     * the library is even looked at: without this step mt(40, 25, 1.2) at the
+     * prompt, a published :root mt, :root pipeline tf and an RDataFrame
+     * Define("v", "mt(pt, met, dphi)") all end on "use of undeclared
+     * identifier", although the library is loaded and its symbol is in it.
+     *
+     * A source edited since the build may no longer say what the library
+     * holds, so the library's own manifest is the one declared then.
+     */
+    private static void declare(RootBackend backend, Pipeline one) {
+        RootPipelineManifest compiled = one.manifest();
+        if (one.source() != null && RootUserCompiler.needsBuilding(one.source()) && !stale(one.library())) {
+            final RootPipelineManifest own = askLibrary(backend, one.library(), one.name());
+            if (own != null) {
+                compiled = own;
+            }
+        }
+        String text = null;
+        if (one.source() != null && (compiled == null || compiled.kind == RootPipelineManifest.Kind.LIBRARY)) {
+            // A library that comes with its own header says what it offers
+            // there, default values and all; declaring its functions a second
+            // time could clash with that header when a macro includes it.
+            // Only a header that does not compile on its own falls back.
+            final Path header = headerBeside(one.source());
+            if (header != null && !refused(ask(backend, declareExpression(includeOf(header))))) {
+                return;
+            }
+            try {
+                text = Files.readString(one.source());
+            } catch (IOException | RuntimeException unreadable) {
+                text = null;
+            }
+        }
+        final List<String> blocks = declarations(compiled, text);
+        for (int k = 0; k < blocks.size(); k++) {
+            final String answer = ask(backend, declareExpression(blocks.get(k)));
+            if (!refused(answer) || compiled == null || compiled.kind == RootPipelineManifest.Kind.LIBRARY) {
+                continue;
+            }
+            if (k == 0) {
+                AppLogger.warn(one.name() + " is loaded, but the interpreter refused " + compiled.signature()
+                    + ": it cannot be called by name until the engine restarts"
+                    + " (a loaded pipeline whose signature changed keeps the old one).");
+            } else {
+                // The entry point is there; one of the extras is not.
+                AppLogger.warn(one.name() + " is loaded, but the interpreter refused one of its extras"
+                    + " (per object, uncertainty or report): " + firstLine(answer));
+            }
+        }
+    }
+
+    /**
+     * What has to be declared before a library can be called by name, one
+     * block per declaration so that one refused cannot take the others with it.
+     *
+     * The entry point is the manifest's signature, the very line the form
+     * writes into the source, so it names the symbol the library exports. A
+     * plain library has no entry point: its source is read for the functions
+     * it defines, each declared as written.
+     *
+     * @param source the library's source text, read only for a plain library; may be null
+     */
+    public static List<String> declarations(RootPipelineManifest manifest, String source) {
+        final List<String> out = new ArrayList<>();
+        if (manifest != null && manifest.kind != RootPipelineManifest.Kind.LIBRARY) {
+            final String entry = manifest.signature() + ";";
+            out.add((manifest.kind == RootPipelineManifest.Kind.HISTOGRAM
+                     ? "#include <TTree.h>\n#include <TH1.h>\n" : "") + headersFor(entry) + entry);
+            // After the entry point, which the per-object and uncertainty
+            // templates call and must find declared.
+            out.addAll(RootPipelineExtras.declarations(manifest));
+            return out;
+        }
+        if (source == null) {
+            return out;
+        }
+        for (String one : RootPipelineStarts.callableDeclarations(source)) {
+            out.add(headersFor(one) + one);
+        }
+        return out;
+    }
+
+    /**
+     * The headers a declaration's types need, and only those: ROOT's and the
+     * standard library's, which the interpreter always finds. A ROOT class
+     * (TH1D, TLorentzVector...) needs none, ROOT loads it when it is named;
+     * the library's own includes are not repeated, since one the interpreter
+     * cannot find (LHAPDF, a header beside a macro) would refuse them all.
+     */
+    private static String headersFor(String declaration) {
+        final StringBuilder out = new StringBuilder();
+        if (declaration.contains("RVec")) {
+            out.append("#include <ROOT/RVec.hxx>\n");
+        }
+        if (declaration.matches("(?s).*\\b(?:PtEtaPhiMVector|PtEtaPhiEVector|PxPyPzEVector|PxPyPzMVector|XYZTVector)\\b.*")) {
+            out.append("#include <Math/Vector4D.h>\n");
+        }
+        if (declaration.matches("(?s).*\\b(?:XYZVector|XYZPoint)\\b.*")) {
+            out.append("#include <Math/Vector3D.h>\n");
+        }
+        if (declaration.matches("(?s).*\\bstring(?:_view)?\\b.*")) {
+            out.append("#include <string>\n#include <string_view>\n");
+        }
+        if (declaration.contains("vector<")) {
+            out.append("#include <vector>\n");
+        }
+        if (declaration.contains("array<")) {
+            out.append("#include <array>\n");
+        }
+        if (declaration.contains("pair<")) {
+            out.append("#include <utility>\n");
+        }
+        return out.toString();
+    }
+
+    /** The block that declares a library through its own header. */
+    public static String includeOf(Path header) {
+        return "#include \"" + forCling(header) + "\"";
+    }
+
+    /** mylib.h, .hh, .hpp or .hxx beside mylib.cpp, or null. */
+    public static Path headerBeside(Path source) {
+        if (source == null || source.getParent() == null) {
+            return null;
+        }
+        final String file = source.getFileName().toString();
+        final int dot = file.lastIndexOf('.');
+        final String stem = dot > 0 ? file.substring(0, dot) : file;
+        for (String extension : new String[]{".h", ".hh", ".hpp", ".hxx"}) {
+            final Path candidate = source.getParent().resolve(stem + extension);
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /** A declaration as the expression the engine evaluates. */
+    public static String declareExpression(String block) {
+        return "gInterpreter->Declare(\"" + block.replace("\\", "\\\\").replace("\"", "\\\"")
+            .replace("\n", "\\n") + "\")";
+    }
+
+    /** True when the engine answered that a Declare failed; unknown answers are not counted. */
+    private static boolean refused(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return false;
+        }
+        final String[] lines = answer.strip().split("\\R");
+        final String last = lines[lines.length - 1].strip();
+        return last.startsWith("ERROR") || last.matches("(?i)(?:\\(bool\\)\\s*)?(?:false|0)");
     }
 
     /**
@@ -374,12 +706,6 @@ public final class RootUserPipeline {
             REGISTRY.remove(gone.name());
         }
         return gone;
-    }
-
-    /** Re-reads one library that has just been built or rebuilt. */
-    public static Pipeline refresh(RootBackend backend, Path layer, Path library) {
-        remember(backend, layer, library);
-        return pipeline(pipelineName(library));
     }
 
     /**
